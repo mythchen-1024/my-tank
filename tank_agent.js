@@ -134,12 +134,18 @@ function onIdle(me, enemy, game) {
     }
   }
   if (isStuckOscillating()) {
-    STUCK_BREAK_DIR = findBreakDirection(myPos, game, enemyPos, enemyTank, enemyBullet);
-    if (STUCK_BREAK_DIR) {
-      STUCK_BREAK_FRAMES = 3; STUCK_OSCILLATE_COUNT = 0; STUCK_HISTORY = [];
-      if (me.tank.direction === STUCK_BREAK_DIR) { me.go(); }
-      else { turnToward(me, STUCK_BREAK_DIR); }
-      return;
+    // 如果当前在星线上或有明显吃星机会，不触发卡死打破（让评分系统自然处理）
+    if (game.star && clearShotDirection(myPos, game.star, game)) {
+      STUCK_OSCILLATE_COUNT = 0;
+      STUCK_HISTORY = [];
+    } else {
+      STUCK_BREAK_DIR = findBreakDirection(myPos, game, enemyPos, enemyTank, enemyBullet);
+      if (STUCK_BREAK_DIR) {
+        STUCK_BREAK_FRAMES = 3; STUCK_OSCILLATE_COUNT = 0; STUCK_HISTORY = [];
+        if (me.tank.direction === STUCK_BREAK_DIR) { me.go(); }
+        else { turnToward(me, STUCK_BREAK_DIR); }
+        return;
+      }
     }
   }
 
@@ -172,6 +178,15 @@ function onIdle(me, enemy, game) {
     holdScore += 18;
   }
   candidates.push({ type: "hold", score: holdScore });
+
+  // --- 2.5 后方敌人调头威慑：占星线时敌人从后方逼近，优先调转炮口 ---
+  if (enemyPos && game.star && clearShotDirection(myPos, game.star, game)) {
+    var rearDir = clearShotDirection(myPos, enemyPos, game);
+    if (rearDir && rearDir !== me.tank.direction && !bulletThreatens(enemyBullet, myPos, game)) {
+      // 敌人能打到我但我没面对他 → 调头威慑
+      candidates.push({ type: "turn", dir: rearDir, score: 28 });
+    }
+  }
 
   // --- 3. 开火候选 ---
   if (enemyPos && gunReady(me)) {
@@ -208,12 +223,11 @@ function onIdle(me, enemy, game) {
     if (best.type === "move") {
       if (me.tank.direction === best.dir) { me.go(); }
       else { turnToward(me, best.dir); }
-    } else if (best.type === "fire") {
+    } else if (best.type === "fire" || best.type === "dig") {
       if (me.tank.direction === best.dir) { me.fire(); }
       else { turnToward(me, best.dir); }
-    } else if (best.type === "dig") {
-      if (me.tank.direction === best.dir) { me.fire(); }
-      else { turnToward(me, best.dir); }
+    } else if (best.type === "turn") {
+      turnToward(me, best.dir);
     } else if (best.type === "teleport") {
       if (me.tank.direction === best.dir) { me.teleport(best.pos[0], best.pos[1]); }
       else { turnToward(me, best.dir); }
