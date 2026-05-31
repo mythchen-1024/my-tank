@@ -129,6 +129,7 @@ function onIdle(me, enemy, game) {
   // 跨帧状态：检测敌方是否曾躲过我方刺杀子弹，本局据此禁用刺杀
   const state = getMatchState(game);
   recordAssassinOutcome(state, enemy, enemyTank, game);
+  trackEnemy(state, enemyTank, game);
 
   // 1. 异常状态拦截：如果处于眩晕或冰冻状态，无法操作，直接返回
   if (me.status && (me.status.stunned || me.status.frozen)) return;
@@ -198,10 +199,8 @@ function onIdle(me, enemy, game) {
   }
 
   // 10. 战术走位：基于 BFS 寻路（优先星星 -> 射击轨道 -> 靠近敌人 -> 地图中心）
-  // [fix] https://agentank.ai/api/matches/mat_JKcxMFuxEJEI519UG/agent.json 这一局对方是隐身，如果对方是隐身的时候 我们在战术走位chooseStep时要小心不要离他太近
-  // [fix] https://agentank.ai/api/matches/mat_BznPx6Ce1Pp2cGJp8/agent.json 这一局同理，对方是超载，我们的战术走位也不能离太近
-  // [fix] https://agentank.ai/api/matches/mat_8WDFMd9GpPyGb9s1O/agent.json 战术走位时要考虑后面几步能否躲过去地方的子弹速度
-  const step = chooseStep(me, enemy, game, enemyPos);
+  // 安全站位：对过载/隐身敌人保持更大间距，且只走"走过去后仍能躲开敌方子弹"的格子
+  const step = chooseStep(me, enemy, game, enemyPos, state);
   if (step) {
     moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
     return;
@@ -254,14 +253,25 @@ let MATCH_STATE = null;
  * 获取本局持久状态。靠帧数倒退判断新对局并重置。
  * - assassinBanned: 本局是否已禁用传送刺杀（敌方展示过躲刺杀子弹的反应）
  * - pendingAssassin: 最近一次传送刺杀的跟踪信息 { dir, targetPos, frame }
+ * - lastEnemyPos / lastEnemySeenFrame: 敌人最后一次可见的位置与帧（隐身后据此避让）
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null };
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999 };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
+}
+
+/**
+ * 更新敌人最后可见位置：可见则刷新；不可见(隐身/草丛)则保留旧值供避让。
+ */
+function trackEnemy(state, enemyTank, game) {
+  if (enemyTank && enemyTank.position) {
+    state.lastEnemyPos = enemyTank.position.slice();
+    state.lastEnemySeenFrame = (game && game.frames) || 0;
+  }
 }
 
 // ================= 辅助函数 =================
@@ -607,27 +617,78 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist) {
 }
 
 /**
- * 战术走位决策引擎
+ * 战术走位决策引擎。
+ * 安全站位核心：根据敌方威胁动态决定与敌人的"最小安全间距"，避免走进会被秒的近身死区；
+ * 隐身敌人按最后已知位置避让；逼近敌人时停在能开火又留有躲弹余地的距离。
  */
-function chooseStep(me, enemy, game, enemyPos) {
+function chooseStep(me, enemy, game, enemyPos, state) {
   const myPos = me.tank.position;
-  
+  const standoff = safeStandoffDistance(enemy);
+
   // 1. 如果有星星，决定是否要去追星星
   if (game.star) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
     if (shouldChaseStar(myPos, enemyPos, game, starPath)) return starPath.step;
   }
 
-  // 2. 如果看到敌人，尝试走位找射击轨道，或者靠近敌人
+  // 2. 看得见敌人：走位找射击轨道(但不进死区)，否则保持安全间距，不再无脑贴近
   if (enemyPos) {
-    const laneStep = nextStepToFiringLane(myPos, enemyPos, game);
-    if (laneStep) return laneStep;
-    return nextStepNearEnemy(myPos, enemyPos, game);
+    const laneStep = nextStepToFiringLane(myPos, enemyPos, game, standoff);
+    if (laneStep && !stepEntersKillZone(myPos, laneStep, enemyPos, game, enemy, standoff)) return laneStep;
+    // 维持安全站位：太近则后撤到 standoff 环，太远才靠近
+    return nextStepToStandoff(myPos, enemyPos, game, standoff, enemy);
   }
 
-  // 3. 都没有的话，往地图中心走
+  // 3. 看不见敌人(隐身/草丛)：若最近见过，避开其最后已知位置周边的危险区
+  if (state && state.lastEnemyPos && (game.frames || 0) - state.lastEnemySeenFrame <= 8) {
+    const avoidStep = nextStepAvoiding(myPos, state.lastEnemyPos, game, standoff + 1);
+    if (avoidStep) return avoidStep;
+  }
+
+  // 4. 都没有的话，往地图中心走
   const center = nearestOpenToCenter(game);
   return center ? nextStepToward(myPos, center, game, null) : null;
+}
+
+/**
+ * 与敌人的最小安全间距：过载敌人双弹难躲，需拉到 6 格外；隐身/普通敌人 5 格；
+ * 5 格是子弹约 3 帧到达的距离，配合横移刚好够躲。
+ */
+function safeStandoffDistance(enemy) {
+  if (enemy && enemy.status && enemy.status.overloaded) return 6;
+  if (enemy && enemy.skill && enemy.skill.type === "cloak") return 5;
+  return 4;
+}
+
+/**
+ * 判断走到 next 后是否进入"会被秒的死区"：与敌人太近(<=2)，或处于敌方炮线且无横向脱离空间。
+ */
+function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
+  const d = manhattan(next, enemyPos);
+  if (d <= 2) return true; // 贴脸必死区（子弹1帧即到）
+  // 过载敌人：进入其 standoff 内且与之同线(可被直接命中)且无横向脱离 -> 死区
+  const overloaded = enemy && enemy.status && enemy.status.overloaded;
+  if (overloaded && d < standoff) {
+    if (enemyPos[0] === next[0] || enemyPos[1] === next[1]) {
+      if (!hasLateralEscapeAt(next, enemyPos, game)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * next 是否有垂直于"敌->next 连线"的可走脱离格（用于评估走过去后还能不能躲弹）。
+ */
+function hasLateralEscapeAt(next, enemyPos, game) {
+  const horizontal = enemyPos[1] === next[1]; // 同行 -> 子弹水平来 -> 需上下脱离
+  const dirs = horizontal
+    ? [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }]
+    : [{ dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
+  for (let i = 0; i < dirs.length; i++) {
+    const q = [next[0] + dirs[i].dx, next[1] + dirs[i].dy];
+    if (isPassable(game, q, enemyPos)) return true;
+  }
+  return false;
 }
 
 /**
@@ -637,31 +698,68 @@ function shouldChaseStar(myPos, enemyPos, game, starPath) {
   if (!game.star || !starPath || starPath.dist < 0) return false;
   if (!enemyPos) return true; // 看不到敌人必追星星
   if (manhattan(myPos, game.star) <= 5) return true; // 星星很近就去吃
-  
+
   const enemyDist = pathDistance(enemyPos, game.star, game, myPos);
   // 如果比敌人更近（或者差不多），就去抢
   return enemyDist < 0 || starPath.dist <= enemyDist + 2;
 }
 
 /**
- * BFS 寻找能打到敌人的射击轨道的下一步走位
+ * BFS 寻找能打到敌人的射击轨道的下一步走位（不进入比 standoff 更近的死区）
  */
-function nextStepToFiringLane(myPos, enemyPos, game) {
+function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
+  const minD = Math.max(3, standoff - 1); // 轨道点不能比安全站位近太多
   return nextStepToGoal(myPos, game, enemyPos, function (p) {
     if (samePos(p, myPos)) return false;
     const d = manhattan(p, enemyPos);
-    return d >= 2 && d <= 9 && !!clearShotDirection(p, enemyPos, game);
+    return d >= minD && d <= 9 && !!clearShotDirection(p, enemyPos, game);
   });
 }
 
 /**
- * BFS 寻找靠近敌人的下一步走位
+ * 维持安全站位：当前离敌人比 standoff 近则后撤，远则靠近到 standoff 环附近。
  */
-function nextStepNearEnemy(myPos, enemyPos, game) {
+function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
+  const curD = manhattan(myPos, enemyPos);
+  // 已在安全环带内(standoff..standoff+2)，原地附近找能瞄到敌人的格，不主动贴近
+  if (curD >= standoff && curD <= standoff + 2) {
+    return nextStepToFiringLane(myPos, enemyPos, game, standoff);
+  }
+  if (curD < standoff) {
+    // 太近 -> 朝远离敌人的可走方向后撤一步
+    return stepAwayFromEnemy(myPos, enemyPos, game);
+  }
+  // 太远 -> 逼近到 standoff 环
   return nextStepToGoal(myPos, game, enemyPos, function (p) {
     const d = manhattan(p, enemyPos);
-    return d >= 2 && d <= 4;
+    return d >= standoff && d <= standoff + 1;
   });
+}
+
+/**
+ * 选一个远离敌人、且不撞进敌方炮线的相邻后撤格。
+ */
+function stepAwayFromEnemy(myPos, enemyPos, game) {
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    const score = manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/**
+ * 朝远离某危险点(如隐身敌人最后位置)的方向走一步，保持至少 minDist 间距。
+ */
+function nextStepAvoiding(myPos, dangerPos, game, minDist) {
+  if (manhattan(myPos, dangerPos) >= minDist + 2) return null; // 已经够远，不必特意避让
+  return stepAwayFromEnemy(myPos, dangerPos, game);
 }
 
 /**
