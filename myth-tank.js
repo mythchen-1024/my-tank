@@ -197,6 +197,14 @@ function onIdle(me, enemy, game) {
     return;
   }
 
+  // 6.6 草丛攻防：敌藏同线草丛(看不见)时朝那条线预射打草惊蛇/防伏击；我在草丛且与敌同线则主动伏击开火。
+  const bushShot = findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state);
+  if (bushShot) {
+    if (bushShot.fire) me.fire();
+    else turnToward(me, bushShot.dir);
+    return;
+  }
+
   // 9. 传送抢星：寻找星星附近最安全的格子进行传送抢分
   // 隐身守星陷阱：敌有隐身且此刻隐身、其最后位置正卡住星星射线时，冲过去抢星=送死，改为侧向守位等待
   if (!inCloakStarTrap(me, enemy, enemyTank, game, state)) {
@@ -1319,6 +1327,42 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   } else {
     const dir = dx < 0 ? "left" : "right";
     if (me.tank.direction !== dir) return { dir: dir };
+  }
+  return null;
+}
+
+/**
+ * 草丛/隐身攻防（mat_1dAV / mat_0BKrG 复盘：走进隐身敌人的同行近距被冒出的子弹秒杀）。
+ * 返回 { fire:true } 本帧开火 / { dir } 先转向对准 / null 不触发。炮管就绪、非过载、无实弹来袭时才考虑。
+ *
+ *  A) 防伏击预射：敌人此刻不可见（藏草丛 或 用 cloak 技能隐身），其最后已知位置与我同行/同列、
+ *     距离<=3、视线清晰 -> 朝那条线预先开一炮（打草惊蛇/压制），对准了就开火，没对准先转。
+ *     注：草丛蹲坑与 cloak 隐身本质相同（enemy.tank=null 看不见也看不见其子弹），统一处理。
+ *  B) 草丛伏击：我正处在草丛中(隐身)、敌人可见、与我同行/同列、距离<=3 -> 主动开火（我占信息优势）。
+ */
+function findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state) {
+  if (!canShoot(me, enemy)) return null;
+  if (enemy && enemy.status && enemy.status.overloaded) return null; // 过载太险，交躲避
+  const myPos = me.tank.position;
+  if (anyBulletThreatens(enemyBullets || [], myPos, game)) return null;
+
+  // B) 草丛伏击：我在草丛、敌可见同线近距 -> 开火
+  const iAmInBush = me.status && me.status.cloaked || tileAt(game, myPos) === "o";
+  if (iAmInBush && enemyTank && enemyPos && manhattan(myPos, enemyPos) <= 3) {
+    const dir = clearShotDirection(myPos, enemyPos, game);
+    if (dir) return me.tank.direction === dir ? { fire: true } : { dir: dir };
+  }
+
+  // A) 防伏击预射：敌不可见(草丛或cloak隐身)、最后位置与我同线、近距、视线清晰 -> 朝该线预射
+  if (!enemyTank && state && state.lastEnemyPos) {
+    const ePos = state.lastEnemyPos;
+    const enemyHidden = tileAt(game, ePos) === "o" || (enemy && enemy.skill && enemy.skill.type === "cloak");
+    if (enemyHidden &&
+        ((game.frames || 0) - state.lastEnemySeenFrame) <= 6 &&  // 信息还新鲜
+        manhattan(myPos, ePos) <= 3) {                           // 近距才值得预射
+      const dir = clearShotDirection(myPos, ePos, game);         // 同行/同列且无遮挡
+      if (dir) return me.tank.direction === dir ? { fire: true } : { dir: dir };
+    }
   }
   return null;
 }
