@@ -310,7 +310,7 @@ let MATCH_STATE = null;
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, stuckFrames: 0 };
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, stuckFrames: 0, patrolTarget: null };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
@@ -781,9 +781,71 @@ function chooseStep(me, enemy, game, enemyPos, state) {
     if (avoidStep) return avoidStep;
   }
 
-  // 4. 都没有的话，往地图中心走
+  // 4. 无星无敌(或隐身)：用"虚拟目标"持续巡逻，绝不原地空转被压制（见 mat_EAL9/mat_DXFuNn8）。
+  const vt = virtualPatrolTarget(me, game, state);
+  if (vt) {
+    const step = nextStepToward(myPos, vt, game, null);
+    if (step) return step;
+  }
+  // 兜底：往地图中心走
   const center = nearestOpenToCenter(game);
   return center ? nextStepToward(myPos, center, game, null) : null;
+}
+
+/**
+ * 虚拟巡逻目标：无真星星时给坦克一个移动目标，避免原地空转挨打。
+ * 目标"粘性"：一旦选定就持续走向它直到到达(或失效/逼近危险)，再换下一个，避免每帧重选导致来回横跳。
+ * 选点：四象限中心的开阔格里，离我足够远(保证移动)、且远离隐身敌人最后已知位置。
+ */
+function virtualPatrolTarget(me, game, state) {
+  const myPos = me.tank.position;
+  const danger = state && state.lastEnemyPos && ((game.frames || 0) - state.lastEnemySeenFrame <= 12)
+    ? state.lastEnemyPos : null;
+
+  // 已有粘性目标且仍有效(未到达、可通行、不贴危险点) -> 继续用，保持稳定航向
+  if (state && state.patrolTarget) {
+    const t = state.patrolTarget;
+    const reached = manhattan(myPos, t) <= 1;
+    const nearDanger = danger && manhattan(t, danger) <= 2;
+    if (!reached && isPassable(game, t, null) && !nearDanger) return t;
+    state.patrolTarget = null; // 失效，重选
+  }
+
+  const w = game.map.length, h = game.map[0].length;
+  const ax = [Math.floor(w / 4), Math.floor(w * 3 / 4)];
+  const ay = [Math.floor(h / 4), Math.floor(h * 3 / 4)];
+  const anchors = [];
+  for (let i = 0; i < ax.length; i++) for (let j = 0; j < ay.length; j++) {
+    const o = nearestOpenTo(game, [ax[i], ay[j]]);
+    if (o) anchors.push(o);
+  }
+  if (anchors.length === 0) return null;
+  let best = null, bestScore = -9999;
+  for (let i = 0; i < anchors.length; i++) {
+    const p = anchors[i];
+    const distMe = manhattan(p, myPos);
+    if (distMe < 4) continue; // 太近的不作为目标(到了就停=空转)
+    const dangerScore = danger ? manhattan(p, danger) * 2 : 0;
+    const score = dangerScore + distMe + distanceFromEdges(p, game);
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  if (best && state) state.patrolTarget = best; // 记住，保持航向
+  return best;
+}
+
+/**
+ * 找最接近目标坐标 target 的可通行开阔格(空地/草丛)。
+ */
+function nearestOpenTo(game, target) {
+  let best = null, bestD = 9999;
+  for (let x = 0; x < game.map.length; x++) {
+    for (let y = 0; y < game.map[x].length; y++) {
+      if (!isPassable(game, [x, y], null)) continue;
+      const d = Math.abs(x - target[0]) + Math.abs(y - target[1]);
+      if (d < bestD) { bestD = d; best = [x, y]; }
+    }
+  }
+  return best;
 }
 
 /**
