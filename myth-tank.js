@@ -130,6 +130,7 @@ function onIdle(me, enemy, game) {
   const state = getMatchState(game);
   recordAssassinOutcome(state, enemy, enemyTank, game);
   trackEnemy(state, enemyTank, game);
+  trackStuck(state, myPos);
 
   // 1. 异常状态拦截：如果处于眩晕或冰冻状态，无法操作，直接返回
   if (me.status && (me.status.stunned || me.status.frozen)) return;
@@ -231,6 +232,11 @@ function onIdle(me, enemy, game) {
   // 安全站位：对过载/隐身敌人保持更大间距，且只走"走过去后仍能躲开敌方子弹"的格子
   const step = chooseStep(me, enemy, game, enemyPos, state);
   if (step) {
+    // 防靠墙空转：已连续多帧原地未动时，强制打破死循环——朝向可直接走就走，否则确定性转向一个可通行安全方向
+    if (state.stuckFrames >= 2) {
+      breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+      return;
+    }
     moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
     return;
   }
@@ -287,10 +293,23 @@ let MATCH_STATE = null;
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999 };
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, stuckFrames: 0 };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
+}
+
+/**
+ * 跟踪"原地未移动"帧数：本帧位置与上帧相同则累加，移动了则清零。
+ * 用于识别靠墙/拉锯时反复转向却走不出去的死循环（见 mat_Enkd 转 7 帧被打死）。
+ */
+function trackStuck(state, myPos) {
+  if (state.lastMyPos && samePos(state.lastMyPos, myPos)) {
+    state.stuckFrames = (state.stuckFrames || 0) + 1;
+  } else {
+    state.stuckFrames = 0;
+  }
+  state.lastMyPos = myPos.slice();
 }
 
 /**
@@ -710,10 +729,15 @@ function chooseStep(me, enemy, game, enemyPos, state) {
   const myPos = me.tank.position;
   const standoff = safeStandoffDistance(enemy);
 
-  // 1. 如果有星星，决定是否要去追星星
+  // 1. 如果有星星，决定是否要去追星星（但追星的下一步不能撞进敌人近距死区/过载炮线）
   if (game.star) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
-    if (shouldChaseStar(myPos, enemyPos, game, starPath)) return starPath.step;
+    if (shouldChaseStar(myPos, enemyPos, game, starPath) && starPath.step) {
+      if (!enemyPos || !stepEntersKillZone(myPos, starPath.step, enemyPos, game, enemy, standoff)) {
+        return starPath.step;
+      }
+      // 追星会撞进死区：放弃这一步，转入安全站位逻辑（下方）重新决策
+    }
   }
 
   // 2. 看得见敌人：走位找射击轨道(但不进死区)，否则保持安全间距，不再无脑贴近
@@ -746,13 +770,18 @@ function safeStandoffDistance(enemy) {
 }
 
 /**
- * 判断走到 next 后是否进入"会被秒的死区"：与敌人太近(<=2)，或处于敌方炮线且无横向脱离空间。
+ * 判断走到 next 后是否进入"会被秒的死区"。
+ * 子弹 2 格/帧 + 我转向 1 帧：3 格内只要需要转向就躲不掉，故普通敌人 d<=3 即死区。
+ * 过载敌人一帧双弹更难躲：d<=4、或在其同行/同列 standoff 内且无横向脱离，都算死区。
  */
 function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
   const d = manhattan(next, enemyPos);
-  if (d <= 2) return true; // 贴脸必死区（子弹1帧即到）
-  // 过载敌人：进入其 standoff 内且与之同线(可被直接命中)且无横向脱离 -> 死区
   const overloaded = enemy && enemy.status && enemy.status.overloaded;
+  // 普通敌人：贴近 3 格内即死区（转向就被追上）
+  if (d <= 3) return true;
+  // 过载敌人：4 格内一律死区
+  if (overloaded && d <= 4) return true;
+  // 过载敌人：进入 standoff 内且与之同行/同列(可被直接命中)且无横向脱离 -> 死区
   if (overloaded && d < standoff) {
     if (enemyPos[0] === next[0] || enemyPos[1] === next[1]) {
       if (!hasLateralEscapeAt(next, enemyPos, game)) return true;
@@ -1352,6 +1381,35 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
   } else {
     turnToward(me, dir);
   }
+}
+
+/**
+ * 打破"靠墙原地空转"死循环（见 mat_Enkd 转 7 帧被打死）。
+ * 已连续多帧没移动，说明走位目标一直要求转向却走不出去。此处确定性地：
+ *  - 优先：当前朝向格可走且安全 -> 立刻 go（一帧就移动，彻底脱离）；
+ *  - 否则：按固定方向顺序挑第一个"可走且安全"的方向转过去（下一帧即可 go）；
+ *  - 都不安全：挑第一个可走方向转过去（至少打破原地空转）。
+ * "安全"= 可通行、不在敌方炮线、不在子弹弹道。
+ */
+function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets) {
+  const myPos = me.tank.position;
+  const bullets = enemyBullets || [];
+  const safe = (p) => isPassable(game, p, enemyPos) && !enemyAimsAt(p, enemyTank, game) && !anyBulletThreatens(bullets, p, game);
+
+  // 当前朝向可直接走且安全 -> 立刻前进
+  const ahead = nextInDirection(myPos, me.tank.direction);
+  if (safe(ahead)) { me.go(); return; }
+
+  // 否则按固定顺序找第一个可走且安全的方向转过去（确定性，避免再次左右横跳）
+  let fallback = null;
+  for (let i = 0; i < DIRS.length; i++) {
+    const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (fallback === null) fallback = DIRS[i].name; // 记一个纯可通行方向兜底
+    if (safe(p)) { turnToward(me, DIRS[i].name); return; }
+  }
+  if (fallback) { turnToward(me, fallback); return; }
+  me.turn("right"); // 四面皆墙，原地转
 }
 
 /**
