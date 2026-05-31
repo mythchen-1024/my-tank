@@ -134,6 +134,10 @@ function onIdle(me, enemy, game) {
   if (me.status && (me.status.stunned || me.status.frozen)) return;
 
   // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
+
+  // [fix] 1. 敌方是传送技能时，也不要进行暗杀findAssassinationPlan
+  // [fix] 2.传送抢星星findStarTeleport时也要考虑敌方能在当前帧或未来几帧立即开火然后我躲避不了的情况
+  // [fix] 3.moveToward需要优化一下，如果地方子弹正在射向我，我周围有墙，要找最快脱离的方向，不要一直转向->有墙->转回来->有子弹转向->有墙，这种循环，这块要考虑未来几帧的情况
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
   if (dodge) {
     moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
@@ -148,6 +152,7 @@ function onIdle(me, enemy, game) {
   }
 
   // 4. 防范敌方瞄准：如果敌方正瞄准自己且本帧能开火，提前移动躲避（防开火/预发射/守星预瞄）
+  // https://agentank.ai/api/matches/mat_DuPt4ff7Ivt9Hy6Rf/agent.json 这一场很有意思，对方也是传送，比我会吃星星，我的防范敌方瞄准算法是否过于保守
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
@@ -197,6 +202,8 @@ function onIdle(me, enemy, game) {
   }
 
   // 10. 战术走位：基于 BFS 寻路（优先星星 -> 射击轨道 -> 靠近敌人 -> 地图中心）
+  // [fix] https://agentank.ai/api/matches/mat_JKcxMFuxEJEI519UG/agent.json 这一局对方是隐身，如果对方是隐身的时候 我们在战术走位chooseStep时要小心不要离他太近
+  // [fix] https://agentank.ai/api/matches/mat_BznPx6Ce1Pp2cGJp8/agent.json 这一局同理，对方是超载，我们的战术走位也不能离太近
   const step = chooseStep(me, enemy, game, enemyPos);
   if (step) {
     moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
