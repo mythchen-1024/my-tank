@@ -135,7 +135,6 @@ function onIdle(me, enemy, game) {
   if (me.status && (me.status.stunned || me.status.frozen)) return;
 
   // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
-  // [fix] https://agentank.ai/api/matches/mat_Eu3s4262xd85O4xLb/agent.json 看看这局为什么左右摇摆不躲子弹
   // [fix] https://agentank.ai/api/matches/mat_5MrzLhgYMBoEdLg8J/agent.json 双弹躲避优化
   // [fix] https://agentank.ai/api/matches/mat_DtH4f96hqDwHEvqzt/agent.json 敌方来子弹时且我和敌方在一条线且方向是对射状态，如果还来的及躲避子弹，则射一发再走
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
@@ -152,9 +151,8 @@ function onIdle(me, enemy, game) {
   }
 
   // 4. 防范敌方瞄准：如果敌方正瞄准自己且本帧能开火，提前移动躲避（防开火/预发射/守星预瞄）
-  // [fix] https://agentank.ai/api/matches/mat_1HvgbgQ1xi4IsUl8a/agent.json findAimDodge方法，两边在星星处僵持，敌方隐身时我步入敌方陷阱，
-  // 此时解决方案是，如果双方都在守星，且敌方有隐身技能时，我继续等待只守星不在敌方消失时去吃星，而是根据地方离星星的位置预判开火，或等待星星消失时我立即开火
-  // [fix] https://agentank.ai/api/matches/mat_0fCb1vDBhc80Fw1a7/agent.json 隐身
+  // [fix] https://agentank.ai/api/matches/mat_1HvgbgQ1xi4IsUl8a/agent.json findAimDodge方法，两边在星星处僵持，敌方隐身时我步入敌方陷阱，此时解决方案是，如果双方都在守星，且敌方有隐身技能时，我继续等待只守星不在敌方消失时去吃星，而是根据地方离星星的位置预判开火，或等待星星消失时我立即开火
+  // [fix] https://agentank.ai/api/matches/mat_0fCb1vDBhc80Fw1a7/agent.json 隐身防范
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
