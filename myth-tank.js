@@ -153,11 +153,15 @@ function onIdle(me, enemy, game) {
     return;
   }
 
+  // 3.5 绝境横移：被子弹威胁、又躲不掉也传送不了时，至少朝垂直方向挣一步脱离弹道，
+  //     绝不顺着子弹方向逃（顺向必被 2 格/帧的子弹追上，见 mat_DXZ）。
+  const desperate = findDesperateDodge(me, enemyBullets, game, enemyPos, enemyTank);
+  if (desperate) {
+    moveToward(me, game, desperate, enemyPos, enemyTank, enemyBullets);
+    return;
+  }
+
   // 4. 防范敌方瞄准：如果敌方正瞄准自己且本帧能开火，提前移动躲避（防开火/预发射/守星预瞄）
-  // [fix] https://agentank.ai/api/matches/mat_1HvgbgQ1xi4IsUl8a/agent.json findAimDodge方法，两边在星星处僵持，敌方隐身时我步入敌方陷阱，此时解决方案是，如果双方都在守星，且敌方有隐身技能时，我继续等待只守星不在敌方消失时去吃星，而是根据地方离星星的位置预判开火，或等待星星消失时我立即开火
-  // [fix] https://agentank.ai/api/matches/mat_0fCb1vDBhc80Fw1a7/agent.json 隐身防范
-  // [fix] https://agentank.ai/api/matches/mat_JBAwZ7mqVrYDrdh4l/agent.json 这一局预防的太过了，不敢抢星
-  // [fix] https://agentank.ai/api/matches/mat_40pyL8y51pF1yusst/agent.json 这一局开始抢星挺好的，最后为何不主动攻击逼走别人还准备躲了还转头又回来了
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
@@ -934,7 +938,13 @@ function nearestOpenToCenter(game) {
  * 寻找躲避子弹的安全邻近格子。
  * 适配：过载双弹（同时威胁多条弹道）、按子弹真实速度(2格/帧)判断能否在命中前移开、
  * 优先选当前朝向就能直接前进的方向（避免反复转向空耗帧而原地被击中）。
- * 若无法在子弹到达前移开（来不及躲），返回 null，交由紧急传送处理。
+ *
+ * 时序模型（关键修复 mat_2cHX/mat_DXZ）：子弹 incomingFrames 帧后命中我当前格。
+ *  - 朝向即脱离方向(needFrames=1)：本帧 go 立刻离格，只要 incomingFrames>=1 即安全。
+ *  - 需先转向(needFrames=2)：本帧转向仍留在原格，下一帧才离开，故要求 incomingFrames>=3 才真正脱险
+ *    （incomingFrames==2 时转向那帧子弹正好到达，会被命中——这正是过去"摇摆送死"的根因）。
+ *  - 绝不选"顺着子弹飞行方向"的脱离格（顺向逃会被 2 格/帧的子弹追上，mat_DXZ 屁股后中弹）。
+ * 若无来得及的脱离格，返回 null，交由紧急传送处理。
  */
 function findBulletDodge(me, enemy, game, enemyPos) {
   const myPos = me.tank.position;
@@ -948,6 +958,12 @@ function findBulletDodge(me, enemy, game, enemyPos) {
   const incomingFrames = minBulletFramesTo(bullets, myPos, game);
   if (incomingFrames < 0) return null;
 
+  // 威胁我的那些子弹的飞行方向集合（用于排除"顺向逃"的死路方向）
+  const threatDirs = {};
+  for (let i = 0; i < bullets.length; i++) {
+    if (bulletThreatens(bullets[i], myPos, game)) threatDirs[bullets[i].direction] = true;
+  }
+
   // 四个相邻格都作为候选（移开任意弹道即可），逐一评估安全与可达性
   let best = null;
   let bestScore = -9999;
@@ -959,14 +975,20 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     if (anyBulletThreatens(bullets, p, game)) continue;
     // 落点不能正好撞进敌人能立刻开火的炮口
     if (enemyAimsAt(p, enemy && enemy.tank, game)) continue;
+    // 不能顺着来袭子弹方向走（同向只会被追上，且这一步本就还在弹道行/列上）
+    if (threatDirs[d.name]) continue;
 
-    // 时间校验：当前朝向一致只需 1 帧(go)；否则要先转向(1帧)再走，需 2 帧。
-    // 必须在子弹命中前完成移动（留 1 帧余量）。
-    const needFrames = d.name === me.tank.direction ? 1 : 2;
-    if (incomingFrames < needFrames) continue;
+    // 时序校验：朝向即脱离方向本帧 go 离格(needFrames=1, incoming>=1即可)；
+    // 需转向则本帧不动、下帧才走，要求 incoming>=3 才不会在转向帧被命中。
+    const needTurn = d.name !== me.tank.direction;
+    if (needTurn) {
+      if (incomingFrames < 3) continue;
+    } else {
+      if (incomingFrames < 1) continue;
+    }
 
     // 打分：当前朝向就能走 > 远离边缘 > 靠近星星。确保确定性、抑制抖动。
-    const facing = d.name === me.tank.direction ? 100 : 0;
+    const facing = needTurn ? 0 : 100;
     const score = facing + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
     if (score > bestScore) {
       bestScore = score;
@@ -975,6 +997,49 @@ function findBulletDodge(me, enemy, game, enemyPos) {
   }
   return best;
 }
+
+/**
+ * 绝境横移：被子弹威胁、findBulletDodge 与传送都救不了时的兜底。
+ * 在垂直于来袭子弹方向的两个相邻格里挑一个可走、且本身不在弹道上的，朝它移动（哪怕需转向）。
+ * 目的：绝不顺着子弹方向直线逃（必被 2 格/帧子弹追上），横向挣一步仍有活命机会。
+ */
+function findDesperateDodge(me, enemyBullets, game, enemyPos, enemyTank) {
+  const myPos = me.tank.position;
+  const bullets = enemyBullets || [];
+  if (!anyBulletThreatens(bullets, myPos, game)) return null;
+
+  // 收集威胁子弹的飞行方向（顺/逆向都不选，只走垂直方向）
+  const blockedAxis = {};
+  for (let i = 0; i < bullets.length; i++) {
+    if (!bulletThreatens(bullets[i], myPos, game)) continue;
+    const dir = bullets[i].direction;
+    if (dir === "up" || dir === "down") blockedAxis.vertical = true;
+    else blockedAxis.horizontal = true;
+  }
+
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    // 子弹竖直来 -> 只走水平(left/right)；水平来 -> 只走竖直(up/down)
+    const isVerticalMove = d.name === "up" || d.name === "down";
+    if (blockedAxis.vertical && isVerticalMove) continue;
+    if (blockedAxis.horizontal && !isVerticalMove) continue;
+
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(bullets, p, game)) continue; // 脱离格不能也在弹道上
+    // 偏好当前朝向(本帧即走)、其次远离边缘
+    const facing = d.name === me.tank.direction ? 100 : 0;
+    const score = facing + distanceFromEdges(p, game);
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
 
 /**
  * 对射"先射后走"判定：在子弹来袭、findBulletDodge 已确认本帧有躲位的前提下，
