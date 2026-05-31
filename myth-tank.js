@@ -172,7 +172,7 @@ function onIdle(me, enemy, game) {
   }
 
   // 9. 传送抢星：寻找星星附近最安全的格子进行传送抢分
-  const starTeleport = findStarTeleport(me, enemyTank, enemyBullets, game);
+  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
   if (starTeleport) {
     me.teleport(starTeleport[0], starTeleport[1]);
     return;
@@ -204,6 +204,7 @@ function onIdle(me, enemy, game) {
   // 10. 战术走位：基于 BFS 寻路（优先星星 -> 射击轨道 -> 靠近敌人 -> 地图中心）
   // [fix] https://agentank.ai/api/matches/mat_JKcxMFuxEJEI519UG/agent.json 这一局对方是隐身，如果对方是隐身的时候 我们在战术走位chooseStep时要小心不要离他太近
   // [fix] https://agentank.ai/api/matches/mat_BznPx6Ce1Pp2cGJp8/agent.json 这一局同理，对方是超载，我们的战术走位也不能离太近
+  // [fix] https://agentank.ai/api/matches/mat_8WDFMd9GpPyGb9s1O/agent.json 战术走位时要考虑后面几步能否躲过去地方的子弹速度
   const step = chooseStep(me, enemy, game, enemyPos);
   if (step) {
     moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
@@ -293,6 +294,13 @@ function teleportReady(me) {
 }
 
 /**
+ * 敌方是否拥有传送技能（结构同 me.skill，完全公开）。用于禁用对传送敌人的刺杀。
+ */
+function enemyHasTeleport(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "teleport");
+}
+
+/**
  * 寻找最佳传送刺杀方案（严格门槛）。
  * 返回 { pos: [x, y], dir: "方向" }
  *
@@ -305,6 +313,8 @@ function findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state) 
   if (!enemyTank || !teleportReady(me) || !canShoot(me, enemy)) return null;
   // 敌人隐身或有护盾则不刺杀
   if (enemy.status && (enemy.status.cloaked || enemy.status.shielded)) return null;
+  // 敌方是传送技能：它能瞬移脱离我的刺杀弹道（甚至反传送到我背后），刺杀收益太低 -> 放弃
+  if (enemyHasTeleport(enemy)) return null;
   // 本局敌方已展示过躲刺杀子弹的反应 -> 全局禁用刺杀
   if (state && state.assassinBanned) return null;
 
@@ -466,7 +476,7 @@ function findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game) {
 /**
  * 寻找抢夺星星的传送点
  */
-function findStarTeleport(me, enemyTank, enemyBullets, game) {
+function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   if (!teleportReady(me) || !game.star) return null;
   const enemyPos = enemyTank ? enemyTank.position : null;
   const walkDist = pathDistance(me.tank.position, game.star, game, enemyPos);
@@ -482,11 +492,51 @@ function findStarTeleport(me, enemyTank, enemyBullets, game) {
     }
   }
 
-  // 优先直接传送到星星上
-  if (isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0)) return game.star;
+  // 优先直接传送到星星上（但要排除"落地即被敌方开火打死、又躲不掉"的死亡陷阱）
+  if (isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0) &&
+      !starLandingDeadly(game.star, me, enemyTank, enemy, game)) {
+    return game.star;
+  }
 
   // 星星上不安全则传送到星星附近最安全的点
   return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0);
+}
+
+/**
+ * 判断传送到 landing（如星星）会不会"落地即死"：敌方与落点同线、能在我躲开前开火命中。
+ *
+ * 时间线（子弹 2 格/帧）：传送占当前帧；敌方下一帧可转向对准(若未对准+1帧)并开火；
+ * 子弹命中我耗时 ceil(dist/2) 帧。我方落地后需横向脱离：若有可走且不被敌方再次瞄准的侧格，
+ * 当前朝向就是侧向只需 1 帧、否则需转向+前进 2 帧。来不及脱离即判为死亡陷阱。
+ */
+function starLandingDeadly(landing, me, enemyTank, enemy, game) {
+  if (!enemyTank || !enemyTank.position) return false;
+  if (!enemyCanFireSoon(enemy)) return false; // 敌方近期无法开火则无威胁
+
+  const enemyPos = enemyTank.position;
+  const lineDir = clearShotDirection(enemyPos, landing, game);
+  if (!lineDir) return false; // 敌方与落点不同线/被遮挡，打不到
+
+  const dist = manhattan(enemyPos, landing);
+  // 敌方反击命中我所需帧：已对准则下一帧即可开火，否则先转向 +1 帧
+  const enemyFacing = enemyTank.direction === lineDir;
+  const enemyHitFrames = Math.ceil(dist / BULLET_SPEED) + (enemyFacing ? 0 : 1);
+
+  // 我方脱离所需帧：找垂直于敌方弹道、可走且不会被敌方立刻再瞄准的侧格
+  const perp = (lineDir === "up" || lineDir === "down")
+    ? [DIRS[dirIndex("left")], DIRS[dirIndex("right")]]
+    : [DIRS[dirIndex("up")], DIRS[dirIndex("down")]];
+  let escapeFrames = 99;
+  for (let i = 0; i < perp.length; i++) {
+    const q = [landing[0] + perp[i].dx, landing[1] + perp[i].dy];
+    if (!isPassable(game, q, enemyPos)) continue;
+    if (enemyAimsAt(q, enemyTank, game)) continue; // 侧格仍在另一条炮线上则无效
+    const need = perp[i].name === me.tank.direction ? 1 : 2;
+    if (need < escapeFrames) escapeFrames = need;
+  }
+
+  // 我无法在敌弹命中前完成脱离 -> 死亡陷阱
+  return escapeFrames >= enemyHitFrames;
 }
 
 /**
