@@ -188,6 +188,15 @@ function onIdle(me, enemy, game) {
     return;
   }
 
+  // 6.5 以守为攻：敌人近距(<=3)正逼近、即将进入我的同行/同列枪线时，提前把炮口对准那条线（守株待兔）。
+  //     躲避优先（已在上方处理实弹来袭），这里只在无实弹威胁时主动备战，避免被动逃到墙角挨打。
+  const guardShot = findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  if (guardShot) {
+    if (guardShot.fire) me.fire();
+    else turnToward(me, guardShot.dir);
+    return;
+  }
+
   // 9. 传送抢星：寻找星星附近最安全的格子进行传送抢分
   // 隐身守星陷阱：敌有隐身且此刻隐身、其最后位置正卡住星星射线时，冲过去抢星=送死，改为侧向守位等待
   if (!inCloakStarTrap(me, enemy, enemyTank, game, state)) {
@@ -1235,6 +1244,12 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   // 我严格更快命中 -> 对射占优，不躲，交给后续开火分支
   if (myDuel < enemyDuel) return null;
 
+  // 以守为攻：敌人此刻并未瞄准我（炮口不朝我，无实弹在途），且我对射不慢于它(myDuel<=enemyDuel) ->
+  // 不必侧移逃避，交给开火/守线分支先手压制（敌没瞄我时侧移只是浪费先手，见 mat_AZpe 被压到墙角）。
+  const enemyAimingMe = enemyAimsAt(myPos, enemyTank, game);
+  const enemyHasBullet = enemy && enemy.bullet && enemy.bullet.position;
+  if (!enemyAimingMe && !enemyHasBullet && myDuel <= enemyDuel) return null;
+
   // 评估"侧移脱线"能否在敌方子弹到达前离开这条直线。
   // 侧移耗帧：当前朝向即侧向 -> 1 帧(直接 go 离格)；否则需先转向 -> 2 帧(转+走)。
   // 敌方最快命中我的帧 = enemyDuel（已含其转向）。
@@ -1264,6 +1279,48 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   }
   // best 为 null 表示无法及时脱线：交回开火分支去对射/换血，至少不是站着挨打
   return best;
+}
+
+/**
+ * 以守为攻：敌人近距(<=3)正逼近、即将进入我的同行/同列枪线时，提前把炮口对准那条线（守株待兔）。
+ * 返回 { fire:true } 表示本帧开火；{ dir } 表示先转向对准；null 表示不触发。
+ *
+ * 触发条件（守，所以保守）：
+ *  - 炮管就绪、敌人未开盾；
+ *  - 没有实弹正威胁我（实弹来袭由上方躲避逻辑优先处理，此处只在安全时主动备战）；
+ *  - 敌人曼哈顿距离 <= 3；
+ *  - 敌人已在我同行或同列（视线无遮挡）——这是它即将/已经能打我、我也能打它的线。
+ * 行为：在该线上且已对准 -> 开火（先手）；在该线上未对准 -> 转向对准；
+ *      尚未同线但近在 <=3 -> 朝敌人所在的更近轴向预先转炮口。
+ */
+function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+  if (!enemyTank || !enemyPos) return null;
+  if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
+  if (enemy.status && enemy.status.overloaded) return null; // 过载敌人近距太危险，交给躲避/拉距离，不站着对枪
+  if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
+  if (manhattan(me.tank.position, enemyPos) > 3) return null;
+
+  const myPos = me.tank.position;
+  // 已在同行/同列且视线清晰：能打就打/对准
+  const lineDir = clearShotDirection(myPos, enemyPos, game);
+  if (lineDir) {
+    if (me.tank.direction === lineDir) return { fire: true };
+    return { dir: lineDir };
+  }
+
+  // 尚未同线：敌人很近(<=3)，预判它将从哪条轴进入我的枪线，提前转炮口对准那个轴向。
+  const dx = enemyPos[0] - myPos[0];
+  const dy = enemyPos[1] - myPos[1];
+  // 选“垂直偏移更小”的轴：敌人更快能与我对齐的方向
+  if (Math.abs(dx) <= Math.abs(dy)) {
+    // 敌人横向几乎对齐(dx 小) -> 它会进入我的竖直线(同列)，朝它的上/下方向预瞄
+    const dir = dy < 0 ? "up" : "down";
+    if (me.tank.direction !== dir) return { dir: dir };
+  } else {
+    const dir = dx < 0 ? "left" : "right";
+    if (me.tank.direction !== dir) return { dir: dir };
+  }
+  return null;
 }
 
 /**
