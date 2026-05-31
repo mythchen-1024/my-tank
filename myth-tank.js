@@ -649,6 +649,14 @@ function starLandingDeadly(landing, me, enemyTank, enemy, game) {
   const enemyFacing = enemyTank.direction === lineDir;
   const enemyHitFrames = Math.ceil(dist / BULLET_SPEED) + (enemyFacing ? 0 : 1);
 
+  // 对射先手对比：传送后我保持朝向，需转向对准敌人(landing->enemy)再开火。
+  // 传送落点距敌<=4 还会被开火锁定2帧，先手更差。只要我不是严格快于敌人，落在其炮线上就视为危险陷阱。
+  const myDirToEnemy = clearShotDirection(landing, enemyPos, game);
+  const myTurnFrames = myDirToEnemy ? turnDistance(me.tank.direction, myDirToEnemy) : 2;
+  const fireLockPenalty = dist <= 4 ? 2 : 0; // 落点太近会 fireLocked 2 帧
+  const myHitFrames = myTurnFrames + fireLockPenalty + Math.ceil(dist / BULLET_SPEED);
+  if (myHitFrames >= enemyHitFrames) return true; // 对射不占先手 -> 别传到这条炮线上送死
+
   // 我方脱离所需帧：找垂直于敌方弹道、可走且不会被敌方立刻再瞄准的侧格
   const perp = (lineDir === "up" || lineDir === "down")
     ? [DIRS[dirIndex("left")], DIRS[dirIndex("right")]]
@@ -734,6 +742,8 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist) {
   if (anyBulletThreatens(bullets, p, game)) return false;
   // 避免落点离敌人太近（曼哈顿距离<=4会被开火锁定，且易被对射）
   if (minEnemyDist > 0 && enemyPos && manhattan(p, enemyPos) <= minEnemyDist) return false;
+  // 避免落在敌方清晰炮线上的近距(<=4)：敌人转身即可开火，我落地多半来不及脱离（闪现送死，见 mat_JYuX/mat_1BN）
+  if (enemyPos && manhattan(p, enemyPos) <= 4 && clearShotDirection(enemyPos, p, game)) return false;
   return true;
 }
 
@@ -1306,7 +1316,8 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
   if (enemy.status && enemy.status.overloaded) return null; // 过载敌人近距太危险，交给躲避/拉距离，不站着对枪
   if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
-  if (manhattan(me.tank.position, enemyPos) > 3) return null;
+  // 放宽："即将同线"也备战——距离<=4 就考虑(原<=3过严，常来不及转炮口)。
+  if (manhattan(me.tank.position, enemyPos) > 4) return null;
 
   const myPos = me.tank.position;
   // 已在同行/同列且视线清晰：能打就打/对准
@@ -1406,6 +1417,28 @@ function bulletThreatens(bullet, pos, game) {
 }
 
 /**
+ * 走位安全：走到 cell 这一帧子弹也会前进 BULLET_SPEED 格，判断 cell 是否会被子弹"扫到"。
+ * 覆盖两种：cell 当前就在弹道(bulletThreatens)，或子弹推进一帧后正好落在 cell（走过去同帧相撞）。
+ * 修复"从安全行/列走进相邻子弹路径被同帧撞死"（mat_1BN/mat_KkKOc/mat_HTmg）。
+ */
+function stepIntoBulletPath(bullets, cell, game) {
+  const list = bullets || [];
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (!b || !b.position) continue;
+    if (bulletThreatens(b, cell, game)) return true; // 已在弹道
+    // 子弹推进一帧(2格)后是否落在/扫过 cell
+    const d = DIRS[dirIndex(b.direction)];
+    if (!d) continue;
+    for (let step = 1; step <= BULLET_SPEED; step++) {
+      const bp = [b.position[0] + d.dx * step, b.position[1] + d.dy * step];
+      if (samePos(bp, cell)) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * 汇总当前所有可见的敌方子弹（过载会发 2 发，引擎可能用 enemy.bullets 数组或 enemy.bullet 单体暴露）。
  */
 function collectEnemyBullets(enemy) {
@@ -1456,8 +1489,8 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
   const myPos = me.tank.position;
   const bullets = enemyBullets || [];
 
-  // 危险校验：不通、被预瞄、会接子弹 -> 改用最快脱离逻辑（考虑未来几帧的转向/前进耗时）
-  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || anyBulletThreatens(bullets, next, game)) {
+  // 危险校验：不通、被预瞄、会接子弹(含子弹下一帧扫过该格) -> 改用最快脱离逻辑
+  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || stepIntoBulletPath(bullets, next, game)) {
     const escape = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets);
     if (escape) {
       const edir = directionBetween(myPos, escape);
@@ -1527,7 +1560,7 @@ function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets) {
     const d = DIRS[i];
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
-    if (anyBulletThreatens(bullets, p, game)) continue; // 脱离格不能仍在弹道上
+    if (stepIntoBulletPath(bullets, p, game)) continue; // 脱离格不能在弹道上，也不能被子弹下一帧扫到
     if (enemyAimsAt(p, enemyTank, game)) continue;       // 也不能撞进敌方炮线
 
     const turnFrames = d.name === me.tank.direction ? 0 : 1;
