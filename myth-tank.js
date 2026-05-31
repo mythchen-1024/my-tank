@@ -136,6 +136,8 @@ function onIdle(me, enemy, game) {
 
   // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
   // [fix] https://agentank.ai/api/matches/mat_Eu3s4262xd85O4xLb/agent.json 看看这局为什么左右摇摆不躲子弹
+  // [fix] https://agentank.ai/api/matches/mat_5MrzLhgYMBoEdLg8J/agent.json 双弹躲避优化
+  // [fix] https://agentank.ai/api/matches/mat_DtH4f96hqDwHEvqzt/agent.json 敌方来子弹时且我和敌方在一条线且方向是对射状态，如果还来的及躲避子弹，则射一发再走
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
   if (dodge) {
     moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
@@ -150,9 +152,19 @@ function onIdle(me, enemy, game) {
   }
 
   // 4. 防范敌方瞄准：如果敌方正瞄准自己且本帧能开火，提前移动躲避（防开火/预发射/守星预瞄）
+  // [fix] https://agentank.ai/api/matches/mat_1HvgbgQ1xi4IsUl8a/agent.json findAimDodge方法，两边在星星处僵持，敌方隐身时我步入敌方陷阱，
+  // 此时解决方案是，如果双方都在守星，且敌方有隐身技能时，我继续等待只守星不在敌方消失时去吃星，而是根据地方离星星的位置预判开火，或等待星星消失时我立即开火
+  // [fix] https://agentank.ai/api/matches/mat_0fCb1vDBhc80Fw1a7/agent.json 隐身
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
+    return;
+  }
+
+  // 5. 近距对射规避：敌人与我同线且距离近、能开火，若转身对射我不占先手，则侧移离线（不站着转身送死）
+  const lineDodge = findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  if (lineDodge) {
+    moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets);
     return;
   }
 
@@ -912,6 +924,18 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyCanFireSoon(enemy)) return null;
   // 抢星竞速豁免：敌人只是预瞄、没有实弹在途时，若这颗星我更可能先到，则继续抢星不空躲
   if (shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game)) return null;
+  // 对射豁免：我也能瞄到敌人、无实弹在途、且对射不慢于敌人(myDuel<=enemyDuel) -> 不在此空躲。
+  // 交给下方"近距对射规避"统一裁决：能及时侧移就侧移，来不及就开火换血，避免站着转身送死。
+  if (canShoot(me, enemy) && !(enemy && enemy.bullet && enemy.bullet.position)) {
+    const myShotDir = clearShotDirection(me.tank.position, enemyPos, game);
+    if (myShotDir) {
+      const dist = manhattan(me.tank.position, enemyPos);
+      const myDuel = turnDistance(me.tank.direction, myShotDir) + Math.ceil(dist / BULLET_SPEED);
+      const dirToMe = clearShotDirection(enemyPos, me.tank.position, game);
+      const enemyDuel = (dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1) + Math.ceil(dist / BULLET_SPEED);
+      if (myDuel <= enemyDuel) return null;
+    }
+  }
 
   const myPos = me.tank.position;
   let best = null;
@@ -968,6 +992,68 @@ function enemyCanFireSoon(enemy) {
   // 过载时即使有一发在途仍能再发；否则需场上无己弹才能开火
   if (overloaded) return true;
   return !hasBulletOut;
+}
+
+/**
+ * 近距对射规避：敌人与我同行/同列、距离近、且能开火时，权衡"转身对射"谁先命中。
+ * 若我不占先手（敌人不晚于我命中），就不要站着转身送死，改为侧移离开这条致命直线。
+ *
+ * 时间线（子弹 2 格/帧，转向占 1 帧）：
+ *  - 我命中敌人帧 = 我转向到对准方向的帧 + ceil(dist/2)
+ *  - 敌人命中我帧 = 敌转向到对准方向的帧 + ceil(dist/2)
+ *  仅当我严格更快(myDuel < enemyDuel)时才值得对射，否则侧移脱线。
+ *  侧移优先当前朝向就能直接前进的方向，避免转向耗帧再次被逼住。
+ */
+function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+  if (!enemyTank || !enemyPos) return null;
+  if (!enemyCanFireSoon(enemy)) return null; // 敌人开不了火，无近距威胁
+
+  const myPos = me.tank.position;
+  // 必须同线且视线无遮挡
+  const dirToEnemy = clearShotDirection(myPos, enemyPos, game);
+  if (!dirToEnemy) return null;
+  const dist = manhattan(myPos, enemyPos);
+  // 只处理"近距"危险区：5 格内对射几乎无容错（子弹<=3帧到）
+  if (dist > 5) return null;
+
+  // 对射先手比较（转向帧 + 子弹飞行帧）
+  const myDuel = turnDistance(me.tank.direction, dirToEnemy) + Math.ceil(dist / BULLET_SPEED);
+  const dirToMe = clearShotDirection(enemyPos, myPos, game);
+  const enemyTurn = dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1;
+  const enemyDuel = enemyTurn + Math.ceil(dist / BULLET_SPEED);
+
+  // 我严格更快命中 -> 对射占优，不躲，交给后续开火分支
+  if (myDuel < enemyDuel) return null;
+
+  // 评估"侧移脱线"能否在敌方子弹到达前离开这条直线。
+  // 侧移耗帧：当前朝向即侧向 -> 1 帧(直接 go 离格)；否则需先转向 -> 2 帧(转+走)。
+  // 敌方最快命中我的帧 = enemyDuel（已含其转向）。
+  // 只有当某个侧向脱离格"可走、不进别的弹道/炮线"，且脱离耗帧 < 敌命中帧 时，侧移才真正活命。
+  const perp = (dirToEnemy === "up" || dirToEnemy === "down")
+    ? [DIRS[dirIndex("left")], DIRS[dirIndex("right")]]
+    : [DIRS[dirIndex("up")], DIRS[dirIndex("down")]];
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < perp.length; i++) {
+    const d = perp[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(enemyBullets || [], p, game)) continue; // 别躲进现有弹道
+    if (enemyAimsAt(p, enemyTank, game)) continue;                 // 也别进另一条炮线
+    const escapeFrames = d.name === me.tank.direction ? 1 : 2;
+    // 能否在中弹前离线：朝向即侧向可本帧直接 go 离线(必活)；需先转向(2帧)则要求敌命中更晚。
+    const safe = escapeFrames === 1 || escapeFrames < enemyDuel;
+    if (!safe) continue; // 来不及离线，侧移反而白送（应转为对射/换血）
+    // 偏好当前朝向就能直接走的方向（1 帧脱离），其次远离敌人、远离边缘
+    const facing = d.name === me.tank.direction ? 100 : 0;
+    const score = facing + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  // best 为 null 表示无法及时脱线：交回开火分支去对射/换血，至少不是站着挨打
+  return best;
 }
 
 /**
