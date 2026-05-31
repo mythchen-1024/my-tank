@@ -931,32 +931,67 @@ function minBulletFramesTo(bullets, pos, game) {
 }
 
 /**
- * 寻路移动助手。如果下一步不安全，就临时寻找一个安全的邻接格子
+ * 寻路移动助手。如果下一步不安全，就改走最快脱离的安全方向（避免转向→撞墙→转回的死循环）。
  */
 function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
   const myPos = me.tank.position;
+  const bullets = enemyBullets || [];
 
-  // 危险校验：不通、被预瞄、会接子弹 -> 改走其他安全路径
-  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || anyBulletThreatens(enemyBullets || [], next, game)) {
-    const safer = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
-    if (safer && !samePos(safer, next)) {
-      moveToward(me, game, safer, enemyPos, enemyTank, enemyBullets);
+  // 危险校验：不通、被预瞄、会接子弹 -> 改用最快脱离逻辑（考虑未来几帧的转向/前进耗时）
+  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || anyBulletThreatens(bullets, next, game)) {
+    const escape = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets);
+    if (escape) {
+      const edir = directionBetween(myPos, escape);
+      // 当前朝向即脱离方向 -> 立刻前进（不浪费一帧转向）；否则转向它
+      if (edir === me.tank.direction) me.go();
+      else turnToward(me, edir);
       return;
     }
-    // 无路可退，转向
-    me.turn("right");
+    // 实在没有更优安全格：保持朝向直走（若前方可走）打破"原地转向"死循环，否则才转向
+    const ahead = nextInDirection(myPos, me.tank.direction);
+    if (isPassable(game, ahead, enemyPos)) me.go();
+    else me.turn("right");
     return;
   }
-  
+
   const dir = directionBetween(myPos, next);
   if (!dir) return;
-  
+
   // 方向一致则前进，否则转向该方向
   if (me.tank.direction === dir) {
     me.go();
   } else {
     turnToward(me, dir);
   }
+}
+
+/**
+ * 在被子弹/预瞄威胁时，选出"最快脱离"的相邻安全格。
+ * 评分核心：脱离总耗时 = 转向帧(当前朝向=0,否则1) + 前进帧(1)，越小越优；
+ * 同耗时再比远离边缘。当前朝向方向享有优先级，确保跨帧决策稳定、不横跳。
+ */
+function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets) {
+  const myPos = me.tank.position;
+  let best = null;
+  let bestCost = 99;
+  let bestTie = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(bullets, p, game)) continue; // 脱离格不能仍在弹道上
+    if (enemyAimsAt(p, enemyTank, game)) continue;       // 也不能撞进敌方炮线
+
+    const turnFrames = d.name === me.tank.direction ? 0 : 1;
+    const cost = turnFrames + 1; // +1 为前进帧
+    const tie = distanceFromEdges(p, game);
+    if (cost < bestCost || (cost === bestCost && tie > bestTie)) {
+      bestCost = cost;
+      bestTie = tie;
+      best = p;
+    }
+  }
+  return best;
 }
 
 /**
