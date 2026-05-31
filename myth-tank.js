@@ -135,10 +135,13 @@ function onIdle(me, enemy, game) {
   if (me.status && (me.status.stunned || me.status.frozen)) return;
 
   // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
-  // [fix] https://agentank.ai/api/matches/mat_5MrzLhgYMBoEdLg8J/agent.json 双弹躲避优化
-  // [fix] https://agentank.ai/api/matches/mat_DtH4f96hqDwHEvqzt/agent.json 敌方来子弹时且我和敌方在一条线且方向是对射状态，如果还来的及躲避子弹，则射一发再走
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
   if (dodge) {
+    // 对射先射后走：来袭子弹下、我与敌同线且炮口对准、开火后仍来得及躲，则先回敬一炮再躲（化被动为压制）
+    if (shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos)) {
+      me.fire();
+      return;
+    }
     moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
     return;
   }
@@ -153,6 +156,8 @@ function onIdle(me, enemy, game) {
   // 4. 防范敌方瞄准：如果敌方正瞄准自己且本帧能开火，提前移动躲避（防开火/预发射/守星预瞄）
   // [fix] https://agentank.ai/api/matches/mat_1HvgbgQ1xi4IsUl8a/agent.json findAimDodge方法，两边在星星处僵持，敌方隐身时我步入敌方陷阱，此时解决方案是，如果双方都在守星，且敌方有隐身技能时，我继续等待只守星不在敌方消失时去吃星，而是根据地方离星星的位置预判开火，或等待星星消失时我立即开火
   // [fix] https://agentank.ai/api/matches/mat_0fCb1vDBhc80Fw1a7/agent.json 隐身防范
+  // [fix] https://agentank.ai/api/matches/mat_JBAwZ7mqVrYDrdh4l/agent.json 这一局预防的太过了，不敢抢星
+  // [fix] https://agentank.ai/api/matches/mat_40pyL8y51pF1yusst/agent.json 这一局开始抢星挺好的，最后为何不主动攻击逼走别人还准备躲了还转头又回来了
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
@@ -179,10 +184,20 @@ function onIdle(me, enemy, game) {
   }
 
   // 9. 传送抢星：寻找星星附近最安全的格子进行传送抢分
-  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
-  if (starTeleport) {
-    me.teleport(starTeleport[0], starTeleport[1]);
-    return;
+  // 隐身守星陷阱：敌有隐身且此刻隐身、其最后位置正卡住星星射线时，冲过去抢星=送死，改为侧向守位等待
+  if (!inCloakStarTrap(me, enemy, enemyTank, game, state)) {
+    const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
+    if (starTeleport) {
+      me.teleport(starTeleport[0], starTeleport[1]);
+      return;
+    }
+  } else {
+    const guard = cloakStarGuardStep(me, game, state);
+    if (guard) {
+      moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets);
+      return;
+    }
+    return; // 守位已最优：原地不动等敌现身/星消失，避免步入陷阱
   }
 
   // 8. 星星争夺预瞄：如果双方都在星星附近，提前将炮口对准星星方向迎击
@@ -475,6 +490,58 @@ function findContestedStarGuard(me, enemyTank, game) {
 }
 
 /**
+ * 隐身守星陷阱判定：仅在以下全部成立时返回 true（窄条件，避免"防过头不敢抢星"）：
+ *  - 敌人拥有隐身技能，且此刻不可见(enemyTank=null，即正在隐身)；
+ *  - 最近 6 帧内见过敌人（lastEnemyPos 有效），其最后位置与星星同行/同列且视线无遮挡（能直接狙击抢星者）；
+ *  - 敌方距星星在开火射程内(<=8)；我离星星也不算远(<=6，确实在争这颗星)。
+ * 此时冲过去抢星 = 落点即被狙，应改为守位等待（见 mat_1Hvg / mat_0fCb）。
+ */
+function inCloakStarTrap(me, enemy, enemyTank, game, state) {
+  if (!game.star) return false;
+  if (enemyTank) return false;                 // 敌人可见 -> 不算隐身陷阱
+  if (!enemy || !enemy.skill || enemy.skill.type !== "cloak") return false;
+  if (!state || !state.lastEnemyPos) return false;
+  if (((game.frames || 0) - state.lastEnemySeenFrame) > 6) return false; // 太久没见，信息失效
+
+  const ePos = state.lastEnemyPos;
+  // 敌最后位置必须卡在星星的射线上（同行/同列且中间无遮挡），否则狙不到抢星者
+  if (!clearShotDirection(ePos, game.star, game)) return false;
+  if (manhattan(ePos, game.star) > 8) return false;          // 超出开火射程
+  if (manhattan(me.tank.position, game.star) > 6) return false; // 我不在争星范围就不必守
+  return true;
+}
+
+/**
+ * 隐身守星时的守位走法：移动到既不在敌方狙击线上、又尽量靠近星星(便于星消失/敌现身时抢)的相邻格。
+ * 找不到更优守位则返回 null（原地不动等待）。
+ */
+function cloakStarGuardStep(me, game, state) {
+  const myPos = me.tank.position;
+  const ePos = state.lastEnemyPos;
+  const star = game.star;
+  // 当前格已安全（不在敌狙击线）则原地守，不乱动
+  const myDirToStar = clearShotDirection(ePos, myPos, game);
+  const onSnipeLine = myDirToStar && manhattan(ePos, myPos) <= 8;
+  if (!onSnipeLine) return null;
+
+  // 我正卡在敌方狙击线上 -> 侧移到不在该线、且离星星不更远的相邻格
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, ePos)) continue;
+    const stillSniped = clearShotDirection(ePos, p, game) && manhattan(ePos, p) <= 8;
+    if (stillSniped) continue;
+    const score = -manhattan(p, star) * 2 + distanceFromEdges(p, game);
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/**
  * 寻找紧急逃生传送点。
  * 触发条件：传送就绪，且当前位置被任意敌方子弹威胁、或常规躲避来不及（隐身/过载场景由调用方先行判断）。
  * 落点要求：远离所有子弹弹道、远离敌人（避免传送后立刻被开火锁定或对射）。
@@ -483,9 +550,13 @@ function findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game) {
   if (!teleportReady(me)) return null;
   const myPos = me.tank.position;
   const threatened = anyBulletThreatens(enemyBullets, myPos, game);
-  if (!threatened) return null;
-  // 过载敌人弹道更密，逃生落点额外拉开距离
+  // 过载预警：敌人处于过载(下次开火即双弹)、已瞄准我或与我同线、且近距(<=6)时，双弹几乎躲不掉，提前传送拉开
   const overloadEnemy = enemy && enemy.status && enemy.status.overloaded;
+  const overloadAmbush = overloadEnemy && enemyTank && enemyTank.position &&
+    !!clearShotDirection(enemyTank.position, myPos, game) &&
+    manhattan(enemyTank.position, myPos) <= 6;
+  if (!threatened && !overloadAmbush) return null;
+  // 过载敌人弹道更密，逃生落点额外拉开距离
   return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, overloadEnemy ? 6 : 4);
 }
 
@@ -903,6 +974,53 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     }
   }
   return best;
+}
+
+/**
+ * 对射"先射后走"判定：在子弹来袭、findBulletDodge 已确认本帧有躲位的前提下，
+ * 若满足以下条件，则先回敬一炮再躲（下一帧子弹更近但仍可躲）：
+ *  - 炮管就绪、敌人未开盾、我与敌人同线且视线无遮挡、车头已对准敌人（开火不耗转向帧）；
+ *  - 来袭子弹至少 2 帧后才命中我当前格（开火占本帧，留下一帧躲避）；
+ *  - 开火后下一帧子弹推进 BULLET_SPEED 格，我仍能找到脱离弹道的相邻格。
+ * 化纯被动逃跑为压制对射（见 mat_DtH4：全程只躲不还手被压死）。
+ */
+function shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+  if (!enemyTank || !enemyPos) return false;
+  if (!canShoot(me, enemy)) return false; // 炮管就绪 + 敌未开盾
+  // 必须车头已对准敌人（开火不耗转向帧），否则先躲
+  const shotDir = clearShotDirection(me.tank.position, enemyPos, game);
+  if (!shotDir || shotDir !== me.tank.direction) return false;
+
+  const bullets = enemyBullets || [];
+  const incoming = minBulletFramesTo(bullets, me.tank.position, game);
+  if (incoming < 2) return false; // 来不及"开火再躲"，老实躲
+
+  // 预演：开火后下一帧，子弹各推进 BULLET_SPEED 格，检查我是否仍有脱离弹道的相邻格
+  const advanced = advanceBullets(bullets, BULLET_SPEED);
+  const myPos = me.tank.position;
+  for (let i = 0; i < DIRS.length; i++) {
+    const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(advanced, p, game)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue;
+    return true; // 开火后下一帧仍有活路 -> 值得先射一发
+  }
+  return false;
+}
+
+/**
+ * 将一组子弹沿各自方向推进 steps 格，返回推进后的子弹快照（仅用于躲避预演，不改原对象）。
+ */
+function advanceBullets(bullets, steps) {
+  const out = [];
+  for (let i = 0; i < bullets.length; i++) {
+    const b = bullets[i];
+    if (!b || !b.position) continue;
+    const d = DIRS[dirIndex(b.direction)];
+    if (!d) { out.push(b); continue; }
+    out.push({ position: [b.position[0] + d.dx * steps, b.position[1] + d.dy * steps], direction: b.direction });
+  }
+  return out;
 }
 
 /**
