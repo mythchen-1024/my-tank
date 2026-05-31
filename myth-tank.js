@@ -152,7 +152,7 @@ function onIdle(me, enemy, game) {
   }
 
   // 4. 防范敌方瞄准：如果敌方正瞄准自己且本帧能开火，提前移动躲避（防开火/预发射/守星预瞄）
-  // https://agentank.ai/api/matches/mat_DuPt4ff7Ivt9Hy6Rf/agent.json 这一场很有意思，对方也是传送，比我会吃星星，我的防范敌方瞄准算法是否过于保守
+  // [fix] https://agentank.ai/api/matches/mat_DuPt4ff7Ivt9Hy6Rf/agent.json 这一场很有意思，对方也是传送，比我会吃星星，我的防范敌方瞄准算法是否过于保守
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
@@ -805,15 +805,19 @@ function findBulletDodge(me, enemy, game, enemyPos) {
  * 防范敌方预瞄/预发射/守星：若敌人正瞄准我且本帧具备开火能力，提前移动脱离其炮线。
  *
  * 改进点：
- *  - 只在敌方"真能开火"（炮管就绪、未被开火锁定、无护盾限制无关）时才躲，避免对着不能开火的敌人空走。
+ *  - 只在敌方"真能开火"（炮管就绪、未被开火锁定）时才躲，避免对着不能开火的敌人空走。
  *  - 不再只试前方一格：四向择优选一个能脱离敌方炮线、且不撞进现有子弹弹道的格子。
  *  - 隐身敌人(enemyTank=null)交由其他逻辑处理，这里只针对可见敌人的预瞄。
+ *  - 抢星豁免：当敌人只是"预瞄"(尚无实弹在途)而我正贴近一颗我更有希望抢到的星时，
+ *    不为一次未必命中的瞄准而中断抢星——否则会反复原地转向，把星拱手让人(见 mat_DuPt4ff7Ivt9Hy6Rf)。
  */
 function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank) return null;
   if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
   // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
   if (!enemyCanFireSoon(enemy)) return null;
+  // 抢星竞速豁免：敌人只是预瞄、没有实弹在途时，若这颗星我更可能先到，则继续抢星不空躲
+  if (shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game)) return null;
 
   const myPos = me.tank.position;
   let best = null;
@@ -834,6 +838,30 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     }
   }
   return best;
+}
+
+/**
+ * 抢星是否应优先于防瞄：仅当
+ *  - 场上有星，且我离星很近（路径 <= 接近射程）；
+ *  - 敌人没有实弹在途（仅预瞄，下帧才可能开火，威胁是概率性的）；
+ *  - 我到星的路径距离不比敌人远（我更可能先吃到）。
+ * 满足时返回 true，表示宁可吃这一发概率性瞄准也要把星抢下。
+ */
+function shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game) {
+  if (!game.star) return false;
+  // 敌人已有实弹在途 -> 是真威胁，不豁免（交由子弹躲避/这里继续躲）
+  if (enemy && enemy.bullet && enemy.bullet.position) return false;
+  // 过载敌人随时能补弹，威胁高，不豁免
+  if (enemy && enemy.status && enemy.status.overloaded) return false;
+
+  const myPos = me.tank.position;
+  const enemyPos = enemyTank.position;
+  const myToStar = pathDistance(myPos, game.star, game, enemyPos);
+  if (myToStar < 0 || myToStar > 4) return false; // 星不够近就老实防瞄
+
+  const enemyToStar = pathDistance(enemyPos, game.star, game, myPos);
+  // 我不比敌人远即抢（敌人不可达也抢）
+  return enemyToStar < 0 || myToStar <= enemyToStar;
 }
 
 /**
