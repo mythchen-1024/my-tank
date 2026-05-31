@@ -134,6 +134,7 @@ function onIdle(me, enemy, game) {
   if (me.status && (me.status.stunned || me.status.frozen)) return;
 
   // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
+  // [fix] https://agentank.ai/api/matches/mat_Eu3s4262xd85O4xLb/agent.json 看看这局为什么左右摇摆不躲子弹
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
   if (dodge) {
     moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
