@@ -123,30 +123,34 @@ function onIdle(me, enemy, game) {
   // 获取敌方坦克对象和坐标（如果丢失视野则为 null）
   const enemyTank = enemy && enemy.tank ? enemy.tank : null;
   const enemyPos = enemyTank ? enemyTank.position : null;
-  // 获取敌方场上的子弹对象
-  const enemyBullet = enemy && enemy.bullet ? enemy.bullet : null;
+  // 汇总敌方所有可见子弹（过载会同时存在 2 发）
+  const enemyBullets = collectEnemyBullets(enemy);
+
+  // 跨帧状态：检测敌方是否曾躲过我方刺杀子弹，本局据此禁用刺杀
+  const state = getMatchState(game);
+  recordAssassinOutcome(state, enemy, enemyTank, game);
 
   // 1. 异常状态拦截：如果处于眩晕或冰冻状态，无法操作，直接返回
   if (me.status && (me.status.stunned || me.status.frozen)) return;
 
-  // 2. 常规子弹躲避：预判敌方子弹轨迹，寻找安全的相邻格子
+  // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
   if (dodge) {
-    moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullet);
+    moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
     return;
   }
 
   // 3. 紧急传送躲避：常规移动无法躲避子弹时，尝试全图传送逃生
-  const escapeTeleport = findEscapeTeleport(me, enemyTank, enemyBullet, game);
+  const escapeTeleport = findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game);
   if (escapeTeleport) {
     me.teleport(escapeTeleport[0], escapeTeleport[1]);
     return;
   }
 
-  // 4. 防范敌方瞄准：如果敌方正瞄准自己，提前移动躲避（防开火）
-  const aimDodge = findAimDodge(me, enemyTank, game, enemyPos);
+  // 4. 防范敌方瞄准：如果敌方正瞄准自己且本帧能开火，提前移动躲避（防开火/预发射/守星预瞄）
+  const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
-    moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullet);
+    moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
     return;
   }
 
@@ -163,7 +167,7 @@ function onIdle(me, enemy, game) {
   }
 
   // 9. 传送抢星：寻找星星附近最安全的格子进行传送抢分
-  const starTeleport = findStarTeleport(me, enemyTank, enemyBullet, game);
+  const starTeleport = findStarTeleport(me, enemyTank, enemyBullets, game);
   if (starTeleport) {
     me.teleport(starTeleport[0], starTeleport[1]);
     return;
@@ -178,11 +182,13 @@ function onIdle(me, enemy, game) {
     return;
   }
 
-  // 7. 传送刺杀：寻找敌方附近的射击盲区进行传送突袭
-  const assassination = findAssassinationPlan(me, enemy, enemyTank, enemyBullet, game);
+  // 7. 传送刺杀：寻找敌方附近的射击盲区进行传送突袭（严格模拟敌方反击，敌方反应过对刺杀则本局禁用）
+  const assassination = findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state);
   if (assassination) {
     // 传送后车头朝向不会变，所以如果当前朝向不对，先转向目标方向再传送
     if (me.tank.direction === assassination.dir) {
+      // 记录本次刺杀，下一帧据此观察敌方是否躲开
+      state.pendingAssassin = { targetPos: enemyPos.slice(), dir: assassination.dir, frame: (game && game.frames) || 0 };
       me.teleport(assassination.pos[0], assassination.pos[1]);
     } else {
       turnToward(me, assassination.dir);
@@ -193,7 +199,7 @@ function onIdle(me, enemy, game) {
   // 10. 战术走位：基于 BFS 寻路（优先星星 -> 射击轨道 -> 靠近敌人 -> 地图中心）
   const step = chooseStep(me, enemy, game, enemyPos);
   if (step) {
-    moveToward(me, game, step, enemyPos, enemyTank, enemyBullet);
+    moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
     return;
   }
 
@@ -209,9 +215,9 @@ function onIdle(me, enemy, game) {
   }
 
   // 12. 安全徘徊：如果无事可做，找一个最安全的格子走一步
-  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullet);
+  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
   if (safeStep) {
-    moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullet);
+    moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets);
     return;
   }
 
@@ -231,9 +237,28 @@ const DIRS = [
 
 // 子弹轨迹预判距离（格）
 const BULLET_LOOKAHEAD_TILES = 8;
+// 子弹速度：每帧前进 2 格（由对局 replay 逆向得出，弹道时间换算的核心参数）
+const BULLET_SPEED = 2;
 // 刺杀传送的最小与最大距离
 const ASSASSIN_MIN_RANGE = 5;
 const ASSASSIN_MAX_RANGE = 8;
+
+// ================= 跨帧状态（onIdle 每帧无状态调用，用模块级变量在帧间持久化） =================
+let MATCH_STATE = null;
+
+/**
+ * 获取本局持久状态。靠帧数倒退判断新对局并重置。
+ * - assassinBanned: 本局是否已禁用传送刺杀（敌方展示过躲刺杀子弹的反应）
+ * - pendingAssassin: 最近一次传送刺杀的跟踪信息 { dir, targetPos, frame }
+ */
+function getMatchState(game) {
+  const frame = (game && game.frames) || 0;
+  if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null };
+  }
+  MATCH_STATE.lastFrame = frame;
+  return MATCH_STATE;
+}
 
 // ================= 辅助函数 =================
 
@@ -261,14 +286,21 @@ function teleportReady(me) {
 }
 
 /**
- * 寻找最佳传送刺杀方案
+ * 寻找最佳传送刺杀方案（严格门槛）。
  * 返回 { pos: [x, y], dir: "方向" }
+ *
+ * 安全模型（子弹 2 格/帧；传送后保持朝向，第 1 帧开火，命中需 ceil(距离/2) 帧）：
+ *  - 敌人隐身/有护盾/本局已被标记会躲刺杀 -> 直接放弃。
+ *  - 落点必须满足：我方子弹能在敌方反击子弹打到我之前先命中敌人；
+ *    且即便敌人转身/横移反击，我方也来得及躲开（见 assassinIsSafe）。
  */
-function findAssassinationPlan(me, enemy, enemyTank, enemyBullet, game) {
+function findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!enemyTank || !teleportReady(me) || !canShoot(me, enemy)) return null;
   // 敌人隐身或有护盾则不刺杀
   if (enemy.status && (enemy.status.cloaked || enemy.status.shielded)) return null;
-  
+  // 本局敌方已展示过躲刺杀子弹的反应 -> 全局禁用刺杀
+  if (state && state.assassinBanned) return null;
+
   const enemyPos = enemyTank.position;
   let best = null;
   let bestScore = -9999;
@@ -279,13 +311,15 @@ function findAssassinationPlan(me, enemy, enemyTank, enemyBullet, game) {
     for (let range = ASSASSIN_MIN_RANGE; range <= ASSASSIN_MAX_RANGE; range++) {
       const p = [enemyPos[0] - dir.dx * range, enemyPos[1] - dir.dy * range];
       if (samePos(p, me.tank.position)) continue; // 排除当前位置
-      if (!isAssassinTile(p, dir.name, enemyTank, enemyBullet, game)) continue;
-      
-      // 打分模型：转向代价越小越好，距离越近越好，靠近地图中心更好
+      if (!isAssassinTile(p, dir.name, enemyTank, enemyBullets, game)) continue;
+      // 严格安全校验：模拟敌方反击，确认我方先手命中且能躲掉反击
+      if (!assassinIsSafe(p, dir, range, me, enemy, enemyTank, game)) continue;
+
+      // 打分模型：转向代价越小越好，距离越近(命中更快)越好，靠近地图中心更好
       const turns = turnDistance(me.tank.direction, dir.name);
       const centerBias = distanceFromEdges(p, game);
       const score = 100 - turns * 35 - range * 2 + centerBias;
-      
+
       if (score > bestScore) {
         bestScore = score;
         best = { pos: p, dir: dir.name };
@@ -296,13 +330,95 @@ function findAssassinationPlan(me, enemy, enemyTank, enemyBullet, game) {
 }
 
 /**
+ * 严格刺杀安全判定：在落点 p、朝 dir、与敌距离 range 的前提下，模拟敌方最快反击。
+ *
+ * 时间线（传送占当前帧，落点朝向已对准 -> 下一帧即我方开火帧记为 t=1）：
+ *  - 我方子弹命中敌人耗时：myHitFrames = ceil(range / 2)。
+ *  - 敌方反击：最坏情况敌人本就朝向我方所在直线、且炮管就绪，可与我方同帧开火，
+ *    其子弹命中我耗时 enemyHitFrames = ceil(range / 2)（同样距离）。
+ *  - 若敌人需要先转向对准（不在我方直线朝向上），反击至少晚 1 帧。
+ *
+ * 通过条件（满足其一即安全）：
+ *  A. 我方严格快于敌方反击命中（myHitFrames < enemyReplyHit）；
+ *  B. 同时命中但我方落点在"打完后能立刻横移脱离敌方弹道"——保守起见要求落点有可躲的侧向空格。
+ * 否则判为不安全（宁可不刺杀）。
+ */
+function assassinIsSafe(p, dir, range, me, enemy, enemyTank, game) {
+  const enemyPos = enemyTank.position;
+  const myHitFrames = Math.ceil(range / BULLET_SPEED);
+
+  // 敌方炮管是否就绪（场上已有敌弹则其无法立刻再开火，对我更有利）
+  const enemyGunBusy = enemy && enemy.bullet && enemy.bullet.position;
+
+  // 敌人当前是否已朝向能直接打到落点 p（即可与我同帧反击）
+  const enemyFacingMe = enemyAimsAt(p, enemyTank, game);
+  // 敌方反击命中我所需帧：能直接打则与我同距离；需转身则 +1 帧
+  let enemyReplyHit = Math.ceil(range / BULLET_SPEED) + (enemyFacingMe ? 0 : 1);
+  if (enemyGunBusy) enemyReplyHit += 1; // 敌人得等旧弹消失，再晚 1 帧
+
+  // A. 我方严格更快命中 -> 安全
+  if (myHitFrames < enemyReplyHit) return true;
+
+  // B. 同帧/稍慢：要求落点能在被命中前横向脱离敌方弹道（侧向有可走空格且不被其他弹道封锁）
+  if (myHitFrames <= enemyReplyHit) {
+    if (hasLateralEscape(p, dir, enemyTank, game)) return true;
+  }
+  return false;
+}
+
+/**
+ * 落点 p 沿射击方向 dir 的两个垂直侧向，是否存在可走且不被敌人立刻瞄准的脱离格。
+ * 用于刺杀后"开火即走"躲反击。
+ */
+function hasLateralEscape(p, dir, enemyTank, game) {
+  // 垂直于 dir 的两个方向
+  const perp = (dir.name === "up" || dir.name === "down")
+    ? [DIRS[dirIndex("left")], DIRS[dirIndex("right")]]
+    : [DIRS[dirIndex("up")], DIRS[dirIndex("down")]];
+  for (let i = 0; i < perp.length; i++) {
+    const q = [p[0] + perp[i].dx, p[1] + perp[i].dy];
+    if (!isPassable(game, q, enemyTank.position)) continue;
+    if (enemyAimsAt(q, enemyTank, game)) continue;
+    return true;
+  }
+  return false;
+}
+
+/**
  * 判断一个坐标是否适合作为刺杀传送落点
  */
-function isAssassinTile(p, dir, enemyTank, enemyBullet, game) {
-  if (!isTeleportSafe(p, enemyTank, enemyBullet, game, false)) return false; // 必须安全
+function isAssassinTile(p, dir, enemyTank, enemyBullets, game) {
+  if (!isTeleportSafe(p, enemyTank, enemyBullets, game, 0)) return false; // 必须安全（不卡墙/不接现有子弹/不被预瞄）
   if (manhattan(p, enemyTank.position) < ASSASSIN_MIN_RANGE) return false; // 必须大于最小距离避免开火锁定
   if (clearShotDirection(p, enemyTank.position, game) !== dir) return false; // 落点必须能直接射击敌人
   return true;
+}
+
+/**
+ * 记录传送刺杀的结局：若上一帧刚发起刺杀，本帧观察敌人是否已移出我方瞄准线（成功躲开）。
+ * 一旦发现敌人能反应过来躲刺杀子弹，本局后续禁用刺杀。
+ */
+function recordAssassinOutcome(state, enemy, enemyTank, game) {
+  const pending = state.pendingAssassin;
+  if (!pending) return;
+  const frame = (game && game.frames) || 0;
+  // 刺杀后给 1~3 帧观察窗口
+  const elapsed = frame - pending.frame;
+  if (elapsed < 1 || elapsed > 3) {
+    if (elapsed > 3) state.pendingAssassin = null;
+    return;
+  }
+  // 敌人仍可见且已离开原刺杀目标格 -> 视为成功躲开了我的刺杀，本局禁用刺杀
+  if (enemyTank && enemyTank.position && !samePos(enemyTank.position, pending.targetPos)) {
+    state.assassinBanned = true;
+    state.pendingAssassin = null;
+    return;
+  }
+  // 敌人隐身消失也按会反应处理（保守）
+  if (!enemyTank) {
+    state.assassinBanned = true;
+    state.pendingAssassin = null;
+  }
 }
 
 /**
@@ -326,44 +442,50 @@ function findContestedStarGuard(me, enemyTank, game) {
 }
 
 /**
- * 寻找紧急逃生传送点
+ * 寻找紧急逃生传送点。
+ * 触发条件：传送就绪，且当前位置被任意敌方子弹威胁、或常规躲避来不及（隐身/过载场景由调用方先行判断）。
+ * 落点要求：远离所有子弹弹道、远离敌人（避免传送后立刻被开火锁定或对射）。
  */
-function findEscapeTeleport(me, enemyTank, enemyBullet, game) {
-  // 传送未就绪或未受子弹威胁则不需要逃生
-  if (!teleportReady(me) || !bulletThreatens(enemyBullet, me.tank.position, game)) return null;
-  return bestTeleportTile(me.tank.position, enemyTank, enemyBullet, game, game.star, true);
+function findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game) {
+  if (!teleportReady(me)) return null;
+  const myPos = me.tank.position;
+  const threatened = anyBulletThreatens(enemyBullets, myPos, game);
+  if (!threatened) return null;
+  // 过载敌人弹道更密，逃生落点额外拉开距离
+  const overloadEnemy = enemy && enemy.status && enemy.status.overloaded;
+  return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, overloadEnemy ? 6 : 4);
 }
 
 /**
  * 寻找抢夺星星的传送点
  */
-function findStarTeleport(me, enemyTank, enemyBullet, game) {
+function findStarTeleport(me, enemyTank, enemyBullets, game) {
   if (!teleportReady(me) || !game.star) return null;
   const enemyPos = enemyTank ? enemyTank.position : null;
   const walkDist = pathDistance(me.tank.position, game.star, game, enemyPos);
-  
+
   // 如果走路过去只要5步以内，就不浪费传送了
   if (walkDist >= 0 && walkDist <= 5) return null;
-  
+
   // 丢失视野时，估算敌人老家位置，避开可能的危险区域传送
   if (!enemyTank) {
     const enemyGuess = estimateEnemyHome(me.tank.position, game);
     if (enemyGuess && manhattan(game.star, enemyGuess) <= ASSASSIN_MAX_RANGE) {
-      return bestUnknownEnemyStarTeleport(me.tank.position, enemyGuess, enemyBullet, game);
+      return bestUnknownEnemyStarTeleport(me.tank.position, enemyGuess, enemyBullets, game);
     }
   }
-  
+
   // 优先直接传送到星星上
-  if (isTeleportSafe(game.star, enemyTank, enemyBullet, game, false)) return game.star;
-  
+  if (isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0)) return game.star;
+
   // 星星上不安全则传送到星星附近最安全的点
-  return bestTeleportTile(me.tank.position, enemyTank, enemyBullet, game, game.star, false);
+  return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0);
 }
 
 /**
  * 在丢失敌人视野时，寻找安全的星星传送点
  */
-function bestUnknownEnemyStarTeleport(myPos, enemyGuess, enemyBullet, game) {
+function bestUnknownEnemyStarTeleport(myPos, enemyGuess, enemyBullets, game) {
   let best = null;
   let bestScore = -9999;
   for (let x = 0; x < game.map.length; x++) {
@@ -371,9 +493,9 @@ function bestUnknownEnemyStarTeleport(myPos, enemyGuess, enemyBullet, game) {
       const p = [x, y];
       if (samePos(p, myPos)) continue;
       if (!isPassable(game, p, null)) continue; // 不能是墙或土块
-      if (bulletThreatens(enemyBullet, p, game)) continue; // 不能在子弹轨迹上
+      if (anyBulletThreatens(enemyBullets, p, game)) continue; // 不能在子弹轨迹上
       if (manhattan(p, enemyGuess) <= ASSASSIN_MAX_RANGE) continue; // 避开敌人可能出现的地方
-      
+
       const score = -manhattan(p, game.star) * 3 + distanceFromEdges(p, game);
       if (score > bestScore) {
         bestScore = score;
@@ -386,22 +508,23 @@ function bestUnknownEnemyStarTeleport(myPos, enemyGuess, enemyBullet, game) {
 
 /**
  * 遍历全图，评估并返回最佳的通用传送落点
+ * minEnemyDist: 落点与敌人的最小曼哈顿距离门槛（防开火锁定/对射），0 表示不限制。
  */
-function bestTeleportTile(myPos, enemyTank, enemyBullet, game, target, preferDistance) {
+function bestTeleportTile(myPos, enemyTank, enemyBullets, game, target, preferDistance, minEnemyDist) {
   let best = null;
   let bestScore = -9999;
   for (let x = 0; x < game.map.length; x++) {
     for (let y = 0; y < game.map[x].length; y++) {
       const p = [x, y];
       if (samePos(p, myPos)) continue;
-      if (!isTeleportSafe(p, enemyTank, enemyBullet, game, preferDistance)) continue;
-      
+      if (!isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist || 0)) continue;
+
       const enemyPos = enemyTank ? enemyTank.position : null;
       // 偏好远离敌人打分
       const enemyScore = enemyPos ? manhattan(p, enemyPos) : 0;
       // 偏好靠近目标(如星星)打分
       const targetScore = target ? -manhattan(p, target) * 2 : 0;
-      
+
       const score = distanceFromEdges(p, game) + targetScore + (preferDistance ? enemyScore : 0);
       if (score > bestScore) {
         bestScore = score;
@@ -414,15 +537,19 @@ function bestTeleportTile(myPos, enemyTank, enemyBullet, game, target, preferDis
 
 /**
  * 判断某个坐标是否适合传送（不卡墙、不接子弹、不被瞄准）
+ * minEnemyDist: 与敌人的最小允许曼哈顿距离，0 表示不限制。
  */
-function isTeleportSafe(p, enemyTank, enemyBullet, game, preferDistance) {
+function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist) {
   const enemyPos = enemyTank ? enemyTank.position : null;
   if (!isPassable(game, p, enemyPos)) return false;
-  if (enemyBullet && samePos(p, enemyBullet.position)) return false;
+  const bullets = enemyBullets || [];
+  for (let i = 0; i < bullets.length; i++) {
+    if (bullets[i] && samePos(p, bullets[i].position)) return false;
+  }
   if (enemyAimsAt(p, enemyTank, game)) return false;
-  if (bulletThreatens(enemyBullet, p, game)) return false;
-  // 偏好拉开距离时，避免落点在敌人脸前（曼哈顿距离<=4会被开火锁定）
-  if (preferDistance && enemyPos && manhattan(p, enemyPos) <= 4) return false;
+  if (anyBulletThreatens(bullets, p, game)) return false;
+  // 避免落点离敌人太近（曼哈顿距离<=4会被开火锁定，且易被对射）
+  if (minEnemyDist > 0 && enemyPos && manhattan(p, enemyPos) <= minEnemyDist) return false;
   return true;
 }
 
@@ -572,36 +699,43 @@ function nearestOpenToCenter(game) {
 }
 
 /**
- * 寻找躲避子弹的安全邻近格子
+ * 寻找躲避子弹的安全邻近格子。
+ * 适配：过载双弹（同时威胁多条弹道）、按子弹真实速度(2格/帧)判断能否在命中前移开、
+ * 优先选当前朝向就能直接前进的方向（避免反复转向空耗帧而原地被击中）。
+ * 若无法在子弹到达前移开（来不及躲），返回 null，交由紧急传送处理。
  */
 function findBulletDodge(me, enemy, game, enemyPos) {
-  if (!enemy || !enemy.bullet) return null;
   const myPos = me.tank.position;
-  const b = enemy.bullet;
-  
-  // 如果子弹没有威胁到我，就不躲
-  if (!bulletThreatens(b, myPos, game)) return null;
+  const bullets = collectEnemyBullets(enemy);
+  if (bullets.length === 0) return null;
 
-  // 垂直子弹往左右躲，水平子弹往上下躲
-  const candidates = [];
-  if (b.direction === "left" || b.direction === "right") {
-    candidates.push([myPos[0], myPos[1] - 1], [myPos[0], myPos[1] + 1]);
-  } else {
-    candidates.push([myPos[0] - 1, myPos[1]], [myPos[0] + 1, myPos[1]]);
-  }
+  // 没有任何子弹威胁到我，就不躲
+  if (!anyBulletThreatens(bullets, myPos, game)) return null;
 
+  // 最快多少帧子弹会命中我当前格
+  const incomingFrames = minBulletFramesTo(bullets, myPos, game);
+  if (incomingFrames < 0) return null;
+
+  // 四个相邻格都作为候选（移开任意弹道即可），逐一评估安全与可达性
   let best = null;
   let bestScore = -9999;
-  
-  for (let i = 0; i < candidates.length; i++) {
-    const p = candidates[i];
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
-    if (bulletThreatens(b, p, game)) continue; // 躲避点不能也吃子弹
-    if (enemyAimsAt(p, enemy && enemy.tank, game)) continue; // 躲避点不能刚好被敌人预瞄
-    
-    const stepDir = directionBetween(myPos, p);
-    // 偏好无需转向的方向、远离边缘的方向、靠近星星的方向
-    const score = distanceFromEdges(p, game) + (stepDir === me.tank.direction ? 10 : 0) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+    // 落点必须脱离所有子弹弹道
+    if (anyBulletThreatens(bullets, p, game)) continue;
+    // 落点不能正好撞进敌人能立刻开火的炮口
+    if (enemyAimsAt(p, enemy && enemy.tank, game)) continue;
+
+    // 时间校验：当前朝向一致只需 1 帧(go)；否则要先转向(1帧)再走，需 2 帧。
+    // 必须在子弹命中前完成移动（留 1 帧余量）。
+    const needFrames = d.name === me.tank.direction ? 1 : 2;
+    if (incomingFrames < needFrames) continue;
+
+    // 打分：当前朝向就能走 > 远离边缘 > 靠近星星。确保确定性、抑制抖动。
+    const facing = d.name === me.tank.direction ? 100 : 0;
+    const score = facing + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
     if (score > bestScore) {
       bestScore = score;
       best = p;
@@ -611,52 +745,145 @@ function findBulletDodge(me, enemy, game, enemyPos) {
 }
 
 /**
- * 防范敌方预瞄：若敌人正在瞄准我，尝试横向移动避开
+ * 防范敌方预瞄/预发射/守星：若敌人正瞄准我且本帧具备开火能力，提前移动脱离其炮线。
+ *
+ * 改进点：
+ *  - 只在敌方"真能开火"（炮管就绪、未被开火锁定、无护盾限制无关）时才躲，避免对着不能开火的敌人空走。
+ *  - 不再只试前方一格：四向择优选一个能脱离敌方炮线、且不撞进现有子弹弹道的格子。
+ *  - 隐身敌人(enemyTank=null)交由其他逻辑处理，这里只针对可见敌人的预瞄。
  */
-function findAimDodge(me, enemyTank, game, enemyPos) {
+function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+  if (!enemyTank) return null;
   if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
+  // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
+  if (!enemyCanFireSoon(enemy)) return null;
+
   const myPos = me.tank.position;
-  
-  // 试探前方一格是否安全（不被继续瞄准）
-  const ahead = nextInDirection(myPos, me.tank.direction);
-  if (isPassable(game, ahead, enemyPos) && !enemyAimsAt(ahead, enemyTank, game)) return ahead;
-  
-  return null;
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue; // 必须脱离炮线
+    if (anyBulletThreatens(enemyBullets || [], p, game)) continue; // 别躲进现有弹道
+
+    // 偏好当前朝向就能直接走的格子（1 帧脱离，最快）
+    const facing = d.name === me.tank.direction ? 100 : 0;
+    const score = facing + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/**
+ * 敌人是否在接下来一两帧内具备开火能力：炮管就绪（场上无敌弹）或处于过载（可补发第二弹）。
+ */
+function enemyCanFireSoon(enemy) {
+  if (!enemy) return false;
+  const overloaded = enemy.status && enemy.status.overloaded;
+  const hasBulletOut = enemy.bullet && enemy.bullet.position;
+  // 过载时即使有一发在途仍能再发；否则需场上无己弹才能开火
+  if (overloaded) return true;
+  return !hasBulletOut;
+}
+
+/**
+ * 计算子弹沿其飞行方向到达 pos 还需经过多少格；若 pos 不在弹道上、方向不对或中间有遮挡，返回 -1。
+ */
+function bulletReachTiles(bullet, pos, game) {
+  if (!bullet || !bullet.position) return -1;
+  const bp = bullet.position;
+  // 同一列：子弹上下飞
+  if (bp[0] === pos[0]) {
+    const dy = pos[1] - bp[1];
+    if (bullet.direction === "down" && dy > 0) return clearBetween(bp, pos, game) ? dy : -1;
+    if (bullet.direction === "up" && dy < 0) return clearBetween(bp, pos, game) ? -dy : -1;
+  }
+  // 同一行：子弹左右飞
+  if (bp[1] === pos[1]) {
+    const dx = pos[0] - bp[0];
+    if (bullet.direction === "right" && dx > 0) return clearBetween(bp, pos, game) ? dx : -1;
+    if (bullet.direction === "left" && dx < 0) return clearBetween(bp, pos, game) ? -dx : -1;
+  }
+  return -1;
+}
+
+/**
+ * 子弹还要几帧才会到达 pos（子弹 2 格/帧）。不在弹道上返回 -1。
+ */
+function bulletFramesTo(bullet, pos, game) {
+  const tiles = bulletReachTiles(bullet, pos, game);
+  if (tiles < 0) return -1;
+  return Math.ceil(tiles / BULLET_SPEED);
 }
 
 /**
  * 判断指定坐标是否受到给定子弹的威胁
  */
 function bulletThreatens(bullet, pos, game) {
-  if (!bullet || !bullet.position) return false;
-  const bp = bullet.position;
-  
-  // 在同一列且子弹朝下/朝上
-  if (bp[0] === pos[0]) {
-    const dy = pos[1] - bp[1];
-    if (bullet.direction === "down" && dy > 0 && dy <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
-    if (bullet.direction === "up" && dy < 0 && -dy <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
+  const tiles = bulletReachTiles(bullet, pos, game);
+  return tiles >= 0 && tiles <= BULLET_LOOKAHEAD_TILES;
+}
+
+/**
+ * 汇总当前所有可见的敌方子弹（过载会发 2 发，引擎可能用 enemy.bullets 数组或 enemy.bullet 单体暴露）。
+ */
+function collectEnemyBullets(enemy) {
+  if (!enemy) return [];
+  const out = [];
+  if (Array.isArray(enemy.bullets)) {
+    for (let i = 0; i < enemy.bullets.length; i++) {
+      if (enemy.bullets[i] && enemy.bullets[i].position) out.push(enemy.bullets[i]);
+    }
   }
-  // 在同一行且子弹朝右/朝左
-  if (bp[1] === pos[1]) {
-    const dx = pos[0] - bp[0];
-    if (bullet.direction === "right" && dx > 0 && dx <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
-    if (bullet.direction === "left" && dx < 0 && -dx <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
+  if (enemy.bullet && enemy.bullet.position) {
+    // 避免与 bullets 数组重复
+    let dup = false;
+    for (let i = 0; i < out.length; i++) {
+      if (samePos(out[i].position, enemy.bullet.position) && out[i].direction === enemy.bullet.direction) dup = true;
+    }
+    if (!dup) out.push(enemy.bullet);
+  }
+  return out;
+}
+
+/**
+ * 任意一发子弹是否威胁到 pos
+ */
+function anyBulletThreatens(bullets, pos, game) {
+  for (let i = 0; i < bullets.length; i++) {
+    if (bulletThreatens(bullets[i], pos, game)) return true;
   }
   return false;
 }
 
 /**
+ * 这些子弹中，最快多少帧会打到 pos（取最小）。都打不到返回 -1。
+ */
+function minBulletFramesTo(bullets, pos, game) {
+  let best = -1;
+  for (let i = 0; i < bullets.length; i++) {
+    const f = bulletFramesTo(bullets[i], pos, game);
+    if (f >= 0 && (best < 0 || f < best)) best = f;
+  }
+  return best;
+}
+
+/**
  * 寻路移动助手。如果下一步不安全，就临时寻找一个安全的邻接格子
  */
-function moveToward(me, game, next, enemyPos, enemyTank, enemyBullet) {
+function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
   const myPos = me.tank.position;
-  
+
   // 危险校验：不通、被预瞄、会接子弹 -> 改走其他安全路径
-  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || bulletThreatens(enemyBullet, next, game)) {
-    const safer = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullet);
+  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || anyBulletThreatens(enemyBullets || [], next, game)) {
+    const safer = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
     if (safer && !samePos(safer, next)) {
-      moveToward(me, game, safer, enemyPos, enemyTank, enemyBullet);
+      moveToward(me, game, safer, enemyPos, enemyTank, enemyBullets);
       return;
     }
     // 无路可退，转向
@@ -769,14 +996,14 @@ function pathDistance(start, target, game, blockPos) {
 /**
  * 寻找当前位置周围最安全的一个可行走邻接格子
  */
-function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullet) {
+function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets) {
   let best = null;
   let bestScore = -9999;
   for (let i = 0; i < DIRS.length; i++) {
     const p = [pos[0] + DIRS[i].dx, pos[1] + DIRS[i].dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue;
-    if (bulletThreatens(enemyBullet, p, game)) continue;
+    if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;
