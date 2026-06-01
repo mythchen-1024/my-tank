@@ -197,10 +197,11 @@ function onIdle(me, enemy, game) {
     if (enemyHasShieldSkill(enemy) && !shieldDuelSafe) {
       // 交给后续抢星/走位，避免像 mat_EFOl 那样白送一发再被回敬击毁。
     } else {
-      // overload 流敌人 + 近距(进入其安全间距内)：开一发它冷却好就双弹回敬，对射换不过 -> 不主动对枪，
-      // 让位给下方抢星/走位拉开距离(mat_D9W 贴身缠斗被双弹秒)。已拉开到 standoff 外才正常开火压制。
-      const overloadClose = enemyIsOverloadType(enemy) && manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
-      if (!overloadClose) {
+      // 双弹时序策略：敌"此刻握着双弹"(已过载 或 过载就绪 cd<=1) + 近距(进入安全间距内) -> 怂，不主动对枪，
+      // 让位给抢星/走位拉开(mat_D9W 贴身缠斗被双弹秒)。敌过载在冷却中(手里没双弹)则照常开火回敬(mat_LVd 整局
+      // fired=0 被赶角秒)——这是"握双弹怂、没双弹刚"的核心：用 enemyDoubleLaneThreat(握弹)而非 enemyIsOverloadType(拥有技能)。
+      const doubleLaneClose = enemyDoubleLaneThreat(enemy) && manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
+      if (!doubleLaneClose) {
         // 方向一致直接开火，否则先转向敌人
         if (me.tank.direction === shotDir) {
           me.fire();
@@ -1030,7 +1031,7 @@ function chooseStep(me, enemy, game, enemyPos, state) {
   // 1. 如果有星星，决定是否要去追星星（但追星的下一步不能撞进敌人近距死区/过载炮线）
   if (game.star) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
-    if (shouldChaseStar(myPos, enemyPos, game, starPath) && starPath.step) {
+    if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy) && starPath.step) {
       if (!enemyPos || !stepEntersKillZone(myPos, starPath.step, enemyPos, game, enemy, standoff)) {
         return starPath.step;
       }
@@ -1040,15 +1041,22 @@ function chooseStep(me, enemy, game, enemyPos, state) {
 
   // 2. 看得见敌人：走位找射击轨道(但不进死区)，否则保持安全间距，不再无脑贴近
   if (enemyPos) {
-    // overload 流敌人：不找射击轨道贴近(对射换不过且会留在副弹覆盖带，mat_4YF 错位射击)，直接走安全站位拉开/离开覆盖带
+    // overload 流敌人(哪怕此刻冷却中)：不找射击轨道贴近——它会突然过载，副弹专打相邻列(mat_4YF 错位射击)，
+    // 找轨道会把我留在副弹覆盖带。改走安全站位拉开/离开覆盖带。开火压制交给 onIdle 在 standoff 处对枪("没双弹刚")。
     if (!enemyIsOverloadType(enemy)) {
       const laneStep = nextStepToFiringLane(myPos, enemyPos, game, standoff);
       if (laneStep && !stepEntersKillZone(myPos, laneStep, enemyPos, game, enemy, standoff)) return laneStep;
     }
     // 维持安全站位：太近则后撤到 standoff 环，太远才靠近
     const standoffStep = nextStepToStandoff(myPos, enemyPos, game, standoff, enemy);
-    if (standoffStep) return standoffStep;
-    // overload 流远距不逼近(standoffStep=null) -> fall through 到虚拟巡逻找开阔位，避免贴向 overload 敌或贴墙副弹行
+    // 后撤/站位步也要过死区复检：绝不朝"握双弹"的敌人走进其炮线/副弹带(mat_Jov6 在墙袋里 standoffStep
+    // 返回 [5,5] 朝握弹敌走="还回头"撞副弹)。该步是死区则放弃，fall through 到下方横移/巡逻另寻活路。
+    if (standoffStep && !stepEntersKillZone(myPos, standoffStep, enemyPos, game, enemy, standoff)) return standoffStep;
+    // standoffStep 为死区或 null(overload 流远距不逼近) -> fall through：先尝试横向脱离双弹带，再巡逻找开阔位
+    if (enemyDoubleLaneThreat(enemy)) {
+      const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game);
+      if (bandEscape) return bandEscape;
+    }
   }
 
   // 3. 看不见敌人(隐身/草丛)：若最近见过，避开其最后已知位置周边的危险区
@@ -1222,9 +1230,12 @@ function hasDoubleLaneEscapeAt(next, enemyPos, game) {
 /**
  * 判断是否值得放弃交战去追星星
  */
-function shouldChaseStar(myPos, enemyPos, game, starPath) {
+function shouldChaseStar(myPos, enemyPos, game, starPath, enemy) {
   if (!game.star || !starPath || starPath.dist < 0) return false;
   if (!enemyPos) return true; // 看不到敌人必追星星
+  // 守星陷阱：敌"此刻握双弹"且星就贴在它的双弹覆盖带里(它在守这颗星)，冲过去抢 = 落进双弹炮线送死
+  // (mat_Jov6 星[1,5]紧贴握弹敌[2,4] d=1，我沿副弹行迎敌抢星被秒)。放弃这颗星，交走位拉开/另寻机会。
+  if (enemy && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, game.star, 4)) return false;
   if (manhattan(myPos, game.star) <= 5) return true; // 星星很近就去吃
 
   const enemyDist = pathDistance(enemyPos, game.star, game, myPos);
@@ -1295,6 +1306,30 @@ function stepAwayFromEnemy(myPos, enemyPos, game, enemy) {
       best = p;
     }
   }
+  return best;
+}
+
+/**
+ * 横向脱离"双弹覆盖带"：敌此刻握双弹、我站在其正行/列或相邻±1行/列(副弹道)内时，朝垂直于敌我连线的
+ * 方向走一步，尽量跨到 dx>=2 且 dy>=2 的覆盖带外安全格(mat_Jov6 在副弹行 y=5 沿带迎敌走="还回头"被秒；
+ * mat_EUR 贴 x=16 副弹列顺子弹逃被追)。优先：跨出覆盖带 > 远离边缘 > 当前朝向即可走(省一帧转向)。
+ * 只在握双弹(enemyDoubleLaneThreat)时调用；找不到比当前更好的脱离格则返回 null(交巡逻兜底)。
+ */
+function escapeDoubleLaneBand(myPos, enemyPos, game) {
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    const dx = Math.abs(enemyPos[0] - p[0]);
+    const dy = Math.abs(enemyPos[1] - p[1]);
+    const outOfBand = dx >= 2 && dy >= 2; // 既不在(相邻)列也不在(相邻)行 -> 真正跨出双弹覆盖带
+    // 不能往敌人更近处挪(否则是"靠近握弹敌"而非脱离)
+    if (manhattan(p, enemyPos) < manhattan(myPos, enemyPos)) continue;
+    let score = (outOfBand ? 100 : 0) + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  // 只有当确实能往覆盖带外/更远走才返回；否则 null 让巡逻/兜底接手
   return best;
 }
 
@@ -1799,7 +1834,8 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
   if (enemy.status && enemy.status.overloaded) return null; // 过载敌人近距太危险，交给躲避/拉距离，不站着对枪
-  // overload 流敌人(哪怕此刻冷却中)：近距守线对枪换不过——我开一发它冷却好就双弹回敬，应拉开距离抢星而非贴脸对射(mat_D9W)
+  // overload 流敌人(哪怕此刻冷却中)：findGuardLineShot 是"近距(<=4)蹲坑守线"，对会突然过载的敌人太险——
+  // 它过载后一帧双弹回敬。近距守线交给拉距离；真正的"没双弹刚"由 onIdle 主开火分支在 standoff 处裁决(mat_LVd)。
   if (enemyIsOverloadType(enemy)) return null;
   // shield 流敌人：守线预转/站桩对枪意义低，我这一发常被开盾吃掉；仅在已同线且打完仍能脱线时才允许开火。
   const shieldEnemy = enemyHasShieldSkill(enemy);
