@@ -189,18 +189,26 @@ function onIdle(me, enemy, game) {
 
   // 6. 射击敌人：判断是否在同一直线上且无障碍物
   const shotDir = enemyPos ? clearShotDirection(myPos, enemyPos, game) : null;
+  const shieldDuelSafe = shotDir && enemyPos
+    ? canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos)
+    : false;
   if (shotDir && canShoot(me, enemy)) {
-    // overload 流敌人 + 近距(进入其安全间距内)：开一发它冷却好就双弹回敬，对射换不过 -> 不主动对枪，
-    // 让位给下方抢星/走位拉开距离(mat_D9W 贴身缠斗被双弹秒)。已拉开到 standoff 外才正常开火压制。
-    const overloadClose = enemyIsOverloadType(enemy) && manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
-    if (!overloadClose) {
-      // 方向一致直接开火，否则先转向敌人
-      if (me.tank.direction === shotDir) {
-        me.fire();
-      } else {
-        turnToward(me, shotDir);
+    // shield 流敌人：我这一发常会被它开盾吃掉，只有确认打完还能侧移躲开回弹时才值得对枪。
+    if (enemyHasShieldSkill(enemy) && !shieldDuelSafe) {
+      // 交给后续抢星/走位，避免像 mat_EFOl 那样白送一发再被回敬击毁。
+    } else {
+      // overload 流敌人 + 近距(进入其安全间距内)：开一发它冷却好就双弹回敬，对射换不过 -> 不主动对枪，
+      // 让位给下方抢星/走位拉开距离(mat_D9W 贴身缠斗被双弹秒)。已拉开到 standoff 外才正常开火压制。
+      const overloadClose = enemyIsOverloadType(enemy) && manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
+      if (!overloadClose) {
+        // 方向一致直接开火，否则先转向敌人
+        if (me.tank.direction === shotDir) {
+          me.fire();
+        } else {
+          turnToward(me, shotDir);
+        }
+        return;
       }
-      return;
     }
   }
 
@@ -373,6 +381,50 @@ function canShoot(me, enemy) {
   if (!gunReady(me)) return false; // 炮管未就绪
   if (enemy.status && enemy.status.shielded) return false; // 敌人开着护盾不打
   return true;
+}
+
+/**
+ * 敌方是否为 shield 流：拥有 shield 技能，不论此刻是否已开盾。
+ */
+function enemyHasShieldSkill(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "shield");
+}
+
+/**
+ * 面对 shield 流敌人时，这一发多半只是骗盾/试探，不能站桩白送对方回敬。
+ * 仅当我开火后仍能在敌方最早命中前侧移离线，才允许主动对枪；否则宁可不打。
+ */
+function canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+  if (!enemyHasShieldSkill(enemy)) return true;
+  if (!enemyTank || !enemyPos) return false;
+  if (!gunReady(me)) return false;
+
+  const myPos = me.tank.position;
+  const dirToEnemy = clearShotDirection(myPos, enemyPos, game);
+  if (!dirToEnemy) return false;
+  if (!enemyCanFireSoon(enemy)) return true;
+
+  const dirToMe = clearShotDirection(enemyPos, myPos, game);
+  if (!dirToMe) return true;
+
+  const dist = manhattan(myPos, enemyPos);
+  const enemyHitFrames = turnDistance(enemyTank.direction, dirToMe) + Math.ceil(dist / BULLET_SPEED);
+  const perp = (dirToEnemy === "up" || dirToEnemy === "down")
+    ? [DIRS[dirIndex("left")], DIRS[dirIndex("right")]]
+    : [DIRS[dirIndex("up")], DIRS[dirIndex("down")]];
+
+  for (let i = 0; i < perp.length; i++) {
+    const d = perp[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue;
+    const escapeFrames = d.name === me.tank.direction ? 1 : 2;
+    // 我开火占本帧，下一帧才能移动；敌子弹 enemyHitFrames 帧后到达我当前格。
+    // 需要在子弹到达前离开：escapeFrames <= enemyHitFrames（等于时恰好来得及）。
+    if (escapeFrames <= enemyHitFrames) return true;
+  }
+  return false;
 }
 
 /**
@@ -1652,15 +1704,18 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   const dirToMe = clearShotDirection(enemyPos, myPos, game);
   const enemyTurn = dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1;
   const enemyDuel = enemyTurn + Math.ceil(dist / BULLET_SPEED);
+  const shieldDuelSafe = canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos);
 
-  // 我严格更快命中 -> 对射占优，不躲，交给后续开火分支
-  if (myDuel < enemyDuel) return null;
+  // 普通敌人：我严格更快命中 -> 对射占优，不躲，交给后续开火分支
+  // shield 流敌人：先手快也不代表能赚，因为这一发常被护盾吃掉；只有打完仍能脱线才值得对枪。
+  if (!enemyHasShieldSkill(enemy) && myDuel < enemyDuel) return null;
+  if (enemyHasShieldSkill(enemy) && myDuel <= enemyDuel && shieldDuelSafe) return null;
 
   // 以守为攻：敌人此刻并未瞄准我（炮口不朝我，无实弹在途），且我对射不慢于它(myDuel<=enemyDuel) ->
   // 不必侧移逃避，交给开火/守线分支先手压制（敌没瞄我时侧移只是浪费先手，见 mat_AZpe 被压到墙角）。
   const enemyAimingMe = enemyAimsAt(myPos, enemyTank, game);
   const enemyHasBullet = enemy && enemy.bullet && enemy.bullet.position;
-  if (!enemyAimingMe && !enemyHasBullet && myDuel <= enemyDuel) return null;
+  if (!enemyHasShieldSkill(enemy) && !enemyAimingMe && !enemyHasBullet && myDuel <= enemyDuel) return null;
 
   // 评估"侧移脱线"能否在敌方子弹到达前离开这条直线。
   // 侧移耗帧：当前朝向即侧向 -> 1 帧(直接 go 离格)；否则需先转向 -> 2 帧(转+走)。
@@ -1711,6 +1766,8 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (enemy.status && enemy.status.overloaded) return null; // 过载敌人近距太危险，交给躲避/拉距离，不站着对枪
   // overload 流敌人(哪怕此刻冷却中)：近距守线对枪换不过——我开一发它冷却好就双弹回敬，应拉开距离抢星而非贴脸对射(mat_D9W)
   if (enemyIsOverloadType(enemy)) return null;
+  // shield 流敌人：守线预转/站桩对枪意义低，我这一发常被开盾吃掉；仅在已同线且打完仍能脱线时才允许开火。
+  const shieldEnemy = enemyHasShieldSkill(enemy);
   if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
   // 放宽："即将同线"也备战——距离<=4 就考虑(原<=3过严，常来不及转炮口)。
   if (manhattan(me.tank.position, enemyPos) > 4) return null;
@@ -1719,9 +1776,13 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   // 已在同行/同列且视线清晰：能打就打/对准
   const lineDir = clearShotDirection(myPos, enemyPos, game);
   if (lineDir) {
+    if (shieldEnemy && !canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos)) return null;
     if (me.tank.direction === lineDir) return { fire: true };
     return { dir: lineDir };
   }
+
+  // shield 流敌人不做近距守线预转，避免主动把自己摆进无收益对枪。
+  if (shieldEnemy) return null;
 
   // 尚未同线：敌人很近(<=3)，预判它将从哪条轴进入我的枪线，提前转炮口对准那个轴向。
   const dx = enemyPos[0] - myPos[0];
