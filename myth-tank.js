@@ -906,7 +906,9 @@ function chooseStep(me, enemy, game, enemyPos, state) {
       if (laneStep && !stepEntersKillZone(myPos, laneStep, enemyPos, game, enemy, standoff)) return laneStep;
     }
     // 维持安全站位：太近则后撤到 standoff 环，太远才靠近
-    return nextStepToStandoff(myPos, enemyPos, game, standoff, enemy);
+    const standoffStep = nextStepToStandoff(myPos, enemyPos, game, standoff, enemy);
+    if (standoffStep) return standoffStep;
+    // overload 流远距不逼近(standoffStep=null) -> fall through 到虚拟巡逻找开阔位，避免贴向 overload 敌或贴墙副弹行
   }
 
   // 3. 看不见敌人(隐身/草丛)：若最近见过，避开其最后已知位置周边的危险区
@@ -1101,6 +1103,12 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
  */
 function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
   const curD = manhattan(myPos, enemyPos);
+  // overload 流敌人：不主动逼近(逼近会穿过其行/列、走进副弹覆盖带或贴墙副弹行陷阱，mat_LBH 逼近到 y=13 贴墙副弹行被秒)。
+  // 太近则后撤离开覆盖带，否则不靠近——交给上层巡逻/抢星，保持机动不贴脸。
+  if (enemyIsOverloadType(enemy)) {
+    if (curD < standoff) return stepAwayFromEnemy(myPos, enemyPos, game, enemy);
+    return null; // 远距不逼近 overload 敌 -> 上层走虚拟巡逻/找开阔位
+  }
   // 已在安全环带内(standoff..standoff+2)，原地附近找能瞄到敌人的格，不主动贴近
   if (curD >= standoff && curD <= standoff + 2) {
     return nextStepToFiringLane(myPos, enemyPos, game, standoff);
@@ -1786,7 +1794,42 @@ function collectEnemyBullets(enemy) {
     }
     if (!dup) out.push(enemy.bullet);
   }
+  // 过载双弹但 API 只暴露 1 发：按双弹机制补出平行的配对弹(同方向同进度，在另一条相邻车道)。
+  // 否则闪避时只看到副弹、把主弹行当安全躲过去送死(mat_LBH 副弹y=13可见、主弹y=12看不见，误往y=12躲)。
+  const paired = inferOverloadPairedBullet(enemy, out);
+  if (paired) out.push(paired);
   return out;
+}
+
+/**
+ * 过载双弹只可见 1 发时，推断配对弹的位置。
+ * 双弹走两条平行相邻车道(敌正行/列 + 相邻±1)，同方向同进度。已知可见弹与敌人位置：
+ * - 可见弹在敌正行/列 -> 配对弹在相邻车道(朝飞行方向的右手侧或离敌正行 ±1)；
+ * - 可见弹在相邻行/列 -> 配对弹在敌正行/列。
+ * 用"敌正行/列"锚定：配对车道 = 关于敌正行/列对称镜像或敌正行/列本身。保守地：取与可见弹平行、
+ * 垂直偏移到"敌人所在的那条行/列"的弹（覆盖最危险的主弹道）；若可见弹已在敌正行/列，则补相邻一条。
+ */
+function inferOverloadPairedBullet(enemy, bullets) {
+  if (!enemy || bullets.length !== 1) return null; // 只在恰好可见 1 发时推断
+  const overloadActive = (enemy.status && enemy.status.overloaded) ||
+    (enemy.skill && enemy.skill.type === "overload");
+  if (!overloadActive) return null;
+  const ep = enemy.tank && enemy.tank.position;
+  if (!ep) return null;
+  const b = bullets[0];
+  const dir = b.direction;
+  const horizontal = dir === "left" || dir === "right"; // 水平飞 -> 双弹分布在不同行(y)；竖直飞 -> 不同列(x)
+  // 可见弹与敌的垂直偏移：水平飞看 y 差，竖直飞看 x 差
+  const visOff = horizontal ? (b.position[1] - ep[1]) : (b.position[0] - ep[0]);
+  // 配对弹的垂直偏移：双弹一条在敌正行/列(off=0)、一条在相邻(off=±1)。
+  // 可见弹 off=0 -> 配对在相邻(取 +1 或 -1，朝可见弹未覆盖侧；默认 +1)；可见弹 off=±1 -> 配对在敌正行/列(off=0)。
+  let pairOff;
+  if (visOff === 0) pairOff = 1;          // 可见的是主弹 -> 补副弹(相邻+1)
+  else pairOff = 0;                        // 可见的是副弹 -> 补主弹(敌正行/列)
+  const pairPos = horizontal
+    ? [b.position[0], ep[1] + pairOff]     // 同 x 进度，y 落在配对车道
+    : [ep[0] + pairOff, b.position[1]];    // 同 y 进度，x 落在配对车道
+  return { position: pairPos, direction: dir, _inferred: true };
 }
 
 /**
