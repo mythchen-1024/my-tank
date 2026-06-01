@@ -308,6 +308,8 @@ const BULLET_SPEED = 2;
 // 刺杀传送的最小与最大距离
 const ASSASSIN_MIN_RANGE = 5;
 const ASSASSIN_MAX_RANGE = 8;
+// 一局总帧数（从 replay 逆向：超时按星数判胜负，见 mat_7JO 打满 128 帧）
+const MAX_GAME_FRAMES = 128;
 
 // ================= 跨帧状态（onIdle 每帧无状态调用，用模块级变量在帧间持久化） =================
 let MATCH_STATE = null;
@@ -428,6 +430,14 @@ function findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state) 
   if (enemyDoubleLaneThreat(enemy)) return null;
   // 本局敌方已展示过躲刺杀子弹的反应 -> 全局禁用刺杀
   if (state && state.assassinBanned) return null;
+  // 脚边有星(走两步内可吃)且我不比敌人远 -> 别把传送浪费在远处刺杀上，留着走过去/传送吃星(mat_E3G 开局[2,2]星在[3,3]却传去刺杀[11,12]丢星)
+  if (game && game.star) {
+    const myToStar = pathDistance(me.tank.position, game.star, game, enemyTank.position);
+    if (myToStar >= 0 && myToStar <= 2) {
+      const enemyToStar = pathDistance(enemyTank.position, game.star, game, me.tank.position);
+      if (enemyToStar < 0 || myToStar <= enemyToStar) return null;
+    }
+  }
 
   const enemyPos = enemyTank.position;
   let best = null;
@@ -648,6 +658,11 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   const enemyPos = enemyTank ? enemyTank.position : null;
   const walkDist = pathDistance(me.tank.position, game.star, game, enemyPos);
 
+  // 终局帧数博弈：临近 128 帧结束时，按星数判胜负。若走路来不及吃星(walkDist>剩余帧)，但传送+剩余帧内
+  // 敌人即使立刻开火也打不到我(剩余帧 < 敌开火命中所需帧)，则大胆传送抢星锁分——哪怕落点在敌炮线。
+  const endgameGrab = endgameStarTeleport(me, enemy, enemyTank, game, walkDist);
+  if (endgameGrab) return endgameGrab;
+
   // 如果走路过去只要5步以内，就不浪费传送了
   if (walkDist >= 0 && walkDist <= 5) return null;
 
@@ -670,6 +685,34 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
 
   // 星星上不安全则传送到星星附近最安全的点
   return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0, enemy);
+}
+
+/**
+ * 终局抢星传送：临近第 128 帧、走路来不及吃星时，若传送到星点后敌人即使立刻开火也来不及在终局前命中，
+ * 就传送抢星锁定星数胜负（超时按星数判）。子弹2格/帧：敌最快命中我需 1(传送占帧,敌下帧响应)+敌转向(0或1)+ceil(dist/2)。
+ * 剩余帧 < 该命中帧 -> 终局前打不到我 -> 安全抢星，哪怕落点在敌炮线。落点本身必须可站(不卡墙/不接现有子弹)。
+ */
+function endgameStarTeleport(me, enemy, enemyTank, game, walkDist) {
+  const frame = (game && game.frames) || 0;
+  const framesLeft = MAX_GAME_FRAMES - frame;
+  if (framesLeft <= 0) return null;
+  // 只在终局窗口内启用(剩余<=8帧)，且走路确实来不及吃(walkDist 不可达或 > 剩余帧)
+  if (framesLeft > 8) return null;
+  if (walkDist >= 0 && walkDist <= framesLeft) return null; // 走路来得及，无需传送
+  const star = game.star;
+  // 落点必须能站(不卡墙/土块；星点格按规则可站)
+  if (!isPassable(game, star, enemyTank ? enemyTank.position : null)) return null;
+  // 敌人最快命中我所需帧：传送当前帧用掉，敌下一帧起算
+  const enemyPos = enemyTank ? enemyTank.position : null;
+  if (enemyPos) {
+    const lineDir = clearShotDirection(enemyPos, star, game);
+    const dist = manhattan(enemyPos, star);
+    // 同线无墙才打得到；不同线/有墙则需敌移动+转向，更慢，这里取最快的同线情形保守估计
+    const enemyFacing = lineDir && enemyTank.direction === lineDir;
+    const hitFrames = 1 + (lineDir ? (enemyFacing ? 0 : 1) : 2) + Math.ceil(dist / BULLET_SPEED);
+    if (framesLeft >= hitFrames) return null; // 敌来得及在终局前打到 -> 不强抢
+  }
+  return star;
 }
 
 /**
@@ -822,6 +865,11 @@ function chooseStep(me, enemy, game, enemyPos, state) {
 
   // 3. 看不见敌人(隐身/草丛)：若最近见过，避开其最后已知位置周边的危险区
   if (state && state.lastEnemyPos && (game.frames || 0) - state.lastEnemySeenFrame <= 8) {
+    // 3a. 隐身敌伏击线：与其最后已知位置同行/同列且中间无墙遮挡时，即使曼哈顿较远也要横向离开那条线
+    //     （隐身敌常沿原行/列游弋伏击，子弹2格/帧很快到；mat_E3G 吃完星沿 y=2 行走进隐身敌伏击被秒）。
+    //     有石墙挡着则那条线其实安全，不必避让(呼应"石墙挡子弹"，避免无谓徘徊)。
+    const lineEscape = escapeAmbushLine(myPos, state.lastEnemyPos, game);
+    if (lineEscape) return lineEscape;
     const avoidStep = nextStepAvoiding(myPos, state.lastEnemyPos, game, standoff + 1);
     if (avoidStep) return avoidStep;
   }
@@ -908,10 +956,19 @@ function safeStandoffDistance(enemy) {
  * 子弹 2 格/帧 + 我转向 1 帧：3 格内只要需要转向就躲不掉，故普通敌人 d<=3 即死区。
  * 双弹威胁敌人(过载中 或 过载流冷却就绪)：一帧双弹走"正行/列+相邻±1行/列"，
  * d<=4 一律死区；standoff 内且落在双弹覆盖带、又无法一步横向跨出覆盖带(走廊夹死)亦为死区。
+ * 石墙遮挡豁免：敌我之间有墙、敌人当前及移动一步后都打不到 next 时，那条"近距"其实安全(子弹被墙吃掉)，
+ * 不算死区——否则会因曼哈顿很近就不敢走，明明有墙挡着却对峙空转(mat_7JO 卡 100+ 帧不去吃 [1,10] 星)。
  */
 function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
   const d = manhattan(next, enemyPos);
   const doubleLane = enemyDoubleLaneThreat(enemy);
+  // 贴脸 d<=1：无论有无墙，敌一步即可近身/绕射，恒死区
+  if (d <= 1) return true;
+  // 石墙完全遮挡：敌当前打不到 next、且敌四向移动一步后也仍打不到 next -> 子弹被墙挡，非死区
+  if (d >= 2 && wallBlocksEnemyShot(next, enemyPos, game)) {
+    // 被墙挡住时只豁免"普通炮线死区"；双弹覆盖带若仍可达则继续走下方判定
+    if (!doubleLane) return false;
+  }
   // 普通敌人：贴近 3 格内即死区（转向就被追上）
   if (d <= 3) return true;
   // 双弹威胁敌人：4 格内一律死区
@@ -921,6 +978,21 @@ function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
     if (!hasDoubleLaneEscapeAt(next, enemyPos, game)) return true;
   }
   return false;
+}
+
+/**
+ * 敌人的子弹此刻打不到 next、且敌人朝四个方向各移动一步后也仍打不到 next（中间都有墙遮挡）。
+ * 即 next 被石墙保护，敌人近距也无法直射 -> 该格其实安全(mat_7JO [3,10] 与敌[6,10]间 [5,10] 是墙)。
+ */
+function wallBlocksEnemyShot(next, enemyPos, game) {
+  if (clearShotDirection(enemyPos, next, game)) return false; // 当前就能直射 -> 没被墙挡
+  // 敌移动一步后的四个位置，任一能直射 next 则不算被墙完全封住
+  for (let i = 0; i < DIRS.length; i++) {
+    const ep = [enemyPos[0] + DIRS[i].dx, enemyPos[1] + DIRS[i].dy];
+    if (!isPassable(game, ep, null)) continue;
+    if (clearShotDirection(ep, next, game)) return false;
+  }
+  return true; // 当前及移动一步后都打不到 -> 被墙挡
 }
 
 /**
@@ -1015,6 +1087,30 @@ function stepAwayFromEnemy(myPos, enemyPos, game) {
 function nextStepAvoiding(myPos, dangerPos, game, minDist) {
   if (manhattan(myPos, dangerPos) >= minDist + 2) return null; // 已经够远，不必特意避让
   return stepAwayFromEnemy(myPos, dangerPos, game);
+}
+
+/**
+ * 隐身敌"伏击线"横移脱离：我与 dangerPos(敌最后已知位置)同行或同列、且中间无墙遮挡(真能被一炮打到)时，
+ * 朝垂直方向走一步彻底离开那条行/列。隐身敌看不见、会沿原线游弋开火，远距也危险。
+ * 有石墙挡在中间 -> 那条线其实安全(子弹会被墙吃掉)，返回 null 不避让(避免无谓徘徊、不防过头)。
+ */
+function escapeAmbushLine(myPos, dangerPos, game) {
+  const lineDir = clearShotDirection(dangerPos, myPos, game); // 敌->我 无遮挡方向(同行/列且无墙)
+  if (!lineDir) return null; // 不同线 或 中间有墙(石墙挡子弹) -> 不必横移
+  const sameCol = dangerPos[0] === myPos[0]; // 同列(竖直线) -> 需左右(x)脱离; 同行 -> 上下(y)脱离
+  const lateral = sameCol
+    ? [{ dx: -1, dy: 0 }, { dx: 1, dy: 0 }]
+    : [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }];
+  let best = null, bestScore = -9999;
+  for (let i = 0; i < lateral.length; i++) {
+    const q = [myPos[0] + lateral[i].dx, myPos[1] + lateral[i].dy];
+    if (!isPassable(game, q, null)) continue;
+    // 走过去后不能仍与敌最后位置同行/同列(否则没真正离开线)
+    if (q[0] === dangerPos[0] || q[1] === dangerPos[1]) continue;
+    const score = manhattan(q, dangerPos) + distanceFromEdges(q, game) * 0.5;
+    if (score > bestScore) { bestScore = score; best = q; }
+  }
+  return best;
 }
 
 /**
