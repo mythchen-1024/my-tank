@@ -330,6 +330,8 @@ const ASSASSIN_MIN_RANGE = 5;
 const ASSASSIN_MAX_RANGE = 8;
 // 一局总帧数（从 replay 逆向：超时按星数判胜负，见 mat_7JO 打满 128 帧）
 const MAX_GAME_FRAMES = 128;
+// 冰冻技能锁定帧数（replay mat_0Wmx 逆向：applied durationFrames:2，被冻 2 帧不能移动/转向）
+const FREEZE_DURATION = 2;
 
 // ================= 跨帧状态（onIdle 每帧无状态调用，用模块级变量在帧间持久化） =================
 let MATCH_STATE = null;
@@ -478,6 +480,33 @@ function enemyDoubleLaneThreat(enemy) {
  */
 function enemyIsOverloadType(enemy) {
   return !!(enemy && enemy.skill && enemy.skill.type === "overload");
+}
+
+/**
+ * 敌方是否为 freeze(冰冻)流：拥有 freeze 技能，不论此刻冷却与否。
+ * 冰冻命中后锁我 FREEZE_DURATION(=2) 帧不能移动/转向——这 2 帧里敌人可从容转向对准再开火，
+ * 我完全无法躲(mat_0Wmx：敌贴到相邻列 d=1 冻我 2 帧，转身一炮点死)。
+ * 故对 freeze 流敌人不能贴身，必须保持"即使被冻也来不及被打到"的安全间距。
+ */
+function enemyIsFreezeType(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "freeze");
+}
+
+/**
+ * freeze 流敌人的"被冻致死"预计算：假设敌人此刻冻住我 FREEZE_DURATION(=2) 帧。
+ * 关键点：冻结期间我不能移动/转向，而敌人可以**自由转向**(≤2 次转向即可对准任意方向，正好被 2 帧冻结吸收)，
+ * 所以致死的硬约束只是子弹飞行时间，不取决于敌人当前朝向。
+ * 最坏时序(敌已在我所在行/列、冻结期间开火)：T 冻结(锁 T,T+1)、T+1 开火、子弹 ceil(dist/2) 帧到达；
+ * 我 T+2 解冻，需朝向正确本帧脱线、否则要先转向(T+3)。
+ *   - dist<=4：ceil(4/2)=2，子弹 T+3 到达，我需转向脱线也是 T+3 -> 命中(必死)。
+ *   - dist>=5：ceil(5/2)=3，子弹 T+4，我 T+2/T+3 即可脱线 -> 安全。
+ * 故 cell 与 freeze 敌在同一无墙射线上、且曼哈顿 <= 2*FREEZE_DURATION(=4) 即"被冻必死"格。
+ * 中间有墙挡住射线则打不到，安全。
+ */
+function freezeKillsAt(cell, enemyPos, game) {
+  if (!enemyPos) return false;
+  if (!clearShotDirection(enemyPos, cell, game)) return false; // 不同线或有墙遮挡 -> 冻住也打不到
+  return manhattan(enemyPos, cell) <= 2 * FREEZE_DURATION;
 }
 
 /**
@@ -1109,6 +1138,8 @@ function nearestOpenTo(game, target) {
 function safeStandoffDistance(enemy) {
   if (enemyDoubleLaneThreat(enemy)) return 6;
   if (enemyIsOverloadType(enemy)) return 5;
+  // freeze 流：冻我 2 帧期间敌可从容对准开火，贴近(<=4 同线)被冻必死，保守拉到 5 格周旋(mat_0Wmx)。
+  if (enemyIsFreezeType(enemy)) return 5;
   if (enemy && enemy.skill && enemy.skill.type === "cloak") return 5;
   return 4;
 }
@@ -1127,6 +1158,7 @@ function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
   const d = manhattan(next, enemyPos);
   const doubleLane = enemyDoubleLaneThreat(enemy);   // 真实双弹威胁(已过载/就绪) -> d<=4 一律死区
   const overloadType = enemyIsOverloadType(enemy);    // overload 流(含冷却中) -> 覆盖带逗留也危险(错位射击)
+  const freezeType = enemyIsFreezeType(enemy);        // freeze 流 -> 同线 d<=4 被冻必死(冻2帧期间敌从容对准开火)
   // 贴脸 d<=1：无论有无墙，敌一步即可近身/绕射，恒死区
   if (d <= 1) return true;
   // 石墙完全遮挡：敌当前打不到 next、且敌四向移动一步后也仍打不到 next -> 子弹被墙挡，非死区
@@ -1138,6 +1170,9 @@ function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
   if (d <= 3) return true;
   // 双弹威胁敌人：4 格内一律死区
   if (doubleLane && d <= 4) return true;
+  // freeze 流：与敌同行/列、无墙、曼哈顿<=4 时被冻 2 帧期间会被对准击杀(mat_0Wmx d=1 被冻点死) -> 死区。
+  // 不同线/有墙(freezeKillsAt 内 clearShotDirection 判定)则不算，避免对开阔地相邻列防过头。
+  if (freezeType && freezeKillsAt(next, enemyPos, game)) return true;
   // 双弹威胁/overload流：standoff 内 + 落在双弹覆盖带(同行/列或相邻±1) + 无法一步跨出覆盖带 -> 死区
   // (mat_73I 走廊夹死 / mat_4YF 错位副弹列逗留)。overload流即使冷却中也算——敌会突然过载。
   if ((doubleLane || overloadType) && d < standoff && inDoubleLaneBand(enemyPos, next, standoff)) {
