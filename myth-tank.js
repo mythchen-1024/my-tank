@@ -397,6 +397,15 @@ function enemyHasTeleport(enemy) {
 }
 
 /**
+ * 敌方传送是否就绪（本帧/下帧可瞬移）。teleport 敌人威胁来自"能瞬移到星星的行/列上狙击星点"，
+ * 与它当前离星远近无关（mat_JOj 敌从 [16,12] 一跳到星同行 [15,4]，曼哈顿 9 也够得着）。
+ * 所以"是否会来抢这颗星"要看传送冷却，不能只看当前距离。
+ */
+function enemyTeleportReady(enemy) {
+  return enemyHasTeleport(enemy) && enemy.skill && (enemy.skill.remainingCooldownFrames || 0) <= 1;
+}
+
+/**
  * 敌方是否构成"双弹相邻列"威胁：已过载(下次开火即双弹)，或技能是 overload 且冷却就绪(随时可过载)。
  * 过载双弹一发走敌人正行/列，另一发走相邻 ±1 行/列(replay mat_EHR/mat_73I 逆向证实)，
  * 故安全判定不能只看严格同线，敌人相邻行/列近距也要算危险。
@@ -695,6 +704,14 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
     }
   }
 
+  // 双 teleport 抢星对撞：敌方传送也就绪时，直传星点 = 站在对方能预判的靶位上送死(mat_JOj 直传 [17,4]，
+  // 敌一跳到 [15,4] 同行右射 2格/帧瞬达把我秒)。星点同时暴露在"行+列"两条线，对方传到任一条线即可命中。
+  // 改传星十字相邻一格(只暴露行或列之一、对方猜不到我落哪个十字格)，下一帧再走上去补吃；找不到安全相邻格再退回原逻辑。
+  if (enemyTeleportReady(enemy)) {
+    const crossGrab = crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game);
+    if (crossGrab) return crossGrab;
+  }
+
   // 优先直接传送到星星上（但要排除"落地即被敌方开火打死、又躲不掉"的死亡陷阱）
   // 过载敌人额外排除：星点落在其双弹覆盖带(同行/列或相邻±1列)近距时直接放弃直传(mat_EHR 直传 [17,10] 被相邻列双弹秒)
   const starInDoubleLane = enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, game.star, 6);
@@ -707,6 +724,45 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   // 星星上不安全则传送到星星附近最安全的点
   return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0, enemy);
 }
+
+/**
+ * 双 teleport 抢星：传送到星星"十字相邻一格"而非星点本身。
+ *
+ * 为什么不直传星点：双方都是 teleport 时，对方可瞬移到星星所在行/列上沿线狙击(mat_JOj 敌跳到 [15,4]
+ * 与星 [17,4] 同行右射，子弹 2格/帧瞬达把我秒)。星点同时位于"行 y=4"和"列 x=17"两条线，
+ * 对方传到任一条线即可命中我。
+ *
+ * 十字相邻格(星的上/下/左/右一格)只落在"行或列"之一上：例如落星上方 [17,3]，则敌沿星所在行 y=4 的炮弹
+ * 打不到 y=3 的我；对方也无法预判我会落四个十字格中的哪个。落点本身用 isTeleportSafe + starLandingDeadly
+ * 双重过滤(不卡墙、不在现有子弹/炮线、对射不吃亏)，选离敌最远、最不易被狙的那个。
+ * 下一帧 onIdle 会走 1 步上去吃星(走路 1 格/帧)。找不到任何安全十字格则返回 null，退回原直传逻辑。
+ */
+function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
+  const star = game.star;
+  if (!star) return null;
+  const myPos = me.tank.position;
+  const enemyPos = enemyTank ? enemyTank.position : null;
+  let best = null;
+  let bestScore = -Infinity;
+  for (let i = 0; i < DIRS.length; i++) {
+    const c = [star[0] + DIRS[i].dx, star[1] + DIRS[i].dy];
+    if (samePos(c, myPos)) continue;
+    // 落点必须能站、不在子弹/炮线上、对射不吃亏
+    if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, null)) continue;
+    if (starLandingDeadly(c, me, enemyTank, null, game)) continue;
+    // 必须能从该格一步走到星(中间无墙/相邻)——十字相邻天然满足，但星可能贴墙导致某向不可达，复检
+    if (!isPassable(game, star, enemyPos)) return null; // 星点本身不可站则无意义
+    // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)
+    const enemyScore = enemyPos ? manhattan(c, enemyPos) : 0;
+    const score = enemyScore * 2 + distanceFromEdges(c, game);
+    if (score > bestScore) {
+      bestScore = score;
+      best = c;
+    }
+  }
+  return best;
+}
+
 
 /**
  * 传送抢星前是否应"先转向再传送"，返回应转到的朝向(null=直接传)。
@@ -723,6 +779,9 @@ function teleportPreTurnDir(me, landing, enemy, enemyTank, game) {
   if (manhattan(enemyPos, game.star) > ASSASSIN_MAX_RANGE) return null;
   // 落点要贴星(对撞区, 距星<=2)才需要预转；远离星的安全落点不必
   if (manhattan(landing, game.star) > 2) return null;
+  // 落点已避开敌方当前清晰炮线(如十字相邻安全格)则无对射风险，直接传不必浪费一帧预转；
+  // 仅当落点确实在敌当前炮线/即落点就是星点(双方对撞挤同格)时才需先转对准。
+  if (!samePos(landing, game.star) && !clearShotDirection(enemyPos, landing, game)) return null;
   // 理想落地朝向 = 落点指向星(对撞方向)。落点即星点时退而指向敌人当前方位。
   const dir = samePos(landing, game.star)
     ? clearShotDirection(landing, enemyPos, game) || directionBetween(landing, enemyPos)
