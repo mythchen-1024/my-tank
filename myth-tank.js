@@ -383,6 +383,33 @@ function enemyHasTeleport(enemy) {
 }
 
 /**
+ * 敌方是否构成"双弹相邻列"威胁：已过载(下次开火即双弹)，或技能是 overload 且冷却就绪(随时可过载)。
+ * 过载双弹一发走敌人正行/列，另一发走相邻 ±1 行/列(replay mat_EHR/mat_73I 逆向证实)，
+ * 故安全判定不能只看严格同线，敌人相邻行/列近距也要算危险。
+ */
+function enemyDoubleLaneThreat(enemy) {
+  if (!enemy) return false;
+  if (enemy.status && enemy.status.overloaded) return true; // 已过载，下一发就是双弹
+  // overload 流且冷却就绪：逼近到位即可放过载双弹(mat_73I 敌迎面逼近才过载)
+  return !!(enemy.skill && enemy.skill.type === "overload" &&
+    enemy.skill.remainingCooldownFrames !== undefined &&
+    enemy.skill.remainingCooldownFrames <= 1);
+}
+
+/**
+ * cell 是否落在过载敌人的"双弹覆盖带"内：敌人所在行/列，或相邻 ±1 行/列，且在近距(maxDist)内。
+ * 用于传送落点安全判定与走位死区判定——双弹副弹走相邻列，严格同线判定会漏掉。
+ */
+function inDoubleLaneBand(enemyPos, cell, maxDist) {
+  if (!enemyPos) return false;
+  if (manhattan(enemyPos, cell) > maxDist) return false;
+  const dx = Math.abs(enemyPos[0] - cell[0]);
+  const dy = Math.abs(enemyPos[1] - cell[1]);
+  // 同列或相邻列(竖直双弹覆盖带) 或 同行或相邻行(水平双弹覆盖带)
+  return dx <= 1 || dy <= 1;
+}
+
+/**
  * 寻找最佳传送刺杀方案（严格门槛）。
  * 返回 { pos: [x, y], dir: "方向" }
  *
@@ -397,6 +424,8 @@ function findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state) 
   if (enemy.status && (enemy.status.cloaked || enemy.status.shielded)) return null;
   // 敌方是传送技能：它能瞬移脱离我的刺杀弹道（甚至反传送到我背后），刺杀收益太低 -> 放弃
   if (enemyHasTeleport(enemy)) return null;
+  // 敌方过载(双弹就绪)：刺杀落点必与敌同线(才能直射)，恰好落进双弹正列，反被一帧双弹反杀 -> 放弃刺杀
+  if (enemyDoubleLaneThreat(enemy)) return null;
   // 本局敌方已展示过躲刺杀子弹的反应 -> 全局禁用刺杀
   if (state && state.assassinBanned) return null;
 
@@ -608,7 +637,7 @@ function findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game) {
     manhattan(enemyTank.position, myPos) <= 6;
   if (!threatened && !overloadAmbush) return null;
   // 过载敌人弹道更密，逃生落点额外拉开距离
-  return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, overloadEnemy ? 6 : 4);
+  return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, overloadEnemy ? 6 : 4, enemy);
 }
 
 /**
@@ -631,13 +660,16 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   }
 
   // 优先直接传送到星星上（但要排除"落地即被敌方开火打死、又躲不掉"的死亡陷阱）
-  if (isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0) &&
+  // 过载敌人额外排除：星点落在其双弹覆盖带(同行/列或相邻±1列)近距时直接放弃直传(mat_EHR 直传 [17,10] 被相邻列双弹秒)
+  const starInDoubleLane = enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, game.star, 6);
+  if (!starInDoubleLane &&
+      isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0, enemy) &&
       !starLandingDeadly(game.star, me, enemyTank, enemy, game)) {
     return game.star;
   }
 
   // 星星上不安全则传送到星星附近最安全的点
-  return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0);
+  return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0, enemy);
 }
 
 /**
@@ -713,14 +745,14 @@ function bestUnknownEnemyStarTeleport(myPos, enemyGuess, enemyBullets, game) {
  * 遍历全图，评估并返回最佳的通用传送落点
  * minEnemyDist: 落点与敌人的最小曼哈顿距离门槛（防开火锁定/对射），0 表示不限制。
  */
-function bestTeleportTile(myPos, enemyTank, enemyBullets, game, target, preferDistance, minEnemyDist) {
+function bestTeleportTile(myPos, enemyTank, enemyBullets, game, target, preferDistance, minEnemyDist, enemy) {
   let best = null;
   let bestScore = -9999;
   for (let x = 0; x < game.map.length; x++) {
     for (let y = 0; y < game.map[x].length; y++) {
       const p = [x, y];
       if (samePos(p, myPos)) continue;
-      if (!isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist || 0)) continue;
+      if (!isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist || 0, enemy)) continue;
 
       const enemyPos = enemyTank ? enemyTank.position : null;
       // 偏好远离敌人打分
@@ -742,7 +774,7 @@ function bestTeleportTile(myPos, enemyTank, enemyBullets, game, target, preferDi
  * 判断某个坐标是否适合传送（不卡墙、不接子弹、不被瞄准）
  * minEnemyDist: 与敌人的最小允许曼哈顿距离，0 表示不限制。
  */
-function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist) {
+function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist, enemy) {
   const enemyPos = enemyTank ? enemyTank.position : null;
   if (!isPassable(game, p, enemyPos)) return false;
   const bullets = enemyBullets || [];
@@ -755,6 +787,8 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist) {
   if (minEnemyDist > 0 && enemyPos && manhattan(p, enemyPos) <= minEnemyDist) return false;
   // 避免落在敌方清晰炮线上的近距(<=4)：敌人转身即可开火，我落地多半来不及脱离（闪现送死，见 mat_JYuX/mat_1BN）
   if (enemyPos && manhattan(p, enemyPos) <= 4 && clearShotDirection(enemyPos, p, game)) return false;
+  // 过载敌人：落点不能进双弹覆盖带(敌同行/列 或 相邻±1 行/列且近距)——副弹走相邻列，严格同线判定会漏(mat_EHR 传 [17,10] 距敌3格相邻列被秒)
+  if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, p, 6)) return false;
   return true;
 }
 
@@ -860,11 +894,11 @@ function nearestOpenTo(game, target) {
 }
 
 /**
- * 与敌人的最小安全间距：过载敌人双弹难躲，需拉到 6 格外；隐身/普通敌人 5 格；
- * 5 格是子弹约 3 帧到达的距离，配合横移刚好够躲。
+ * 与敌人的最小安全间距：双弹威胁敌人(过载中或过载流冷却就绪)双弹难躲，需拉到 6 格外；
+ * 隐身敌人 5 格；普通敌人 4 格。5~6 格是子弹约 3 帧到达的距离，配合横移刚好够躲。
  */
 function safeStandoffDistance(enemy) {
-  if (enemy && enemy.status && enemy.status.overloaded) return 6;
+  if (enemyDoubleLaneThreat(enemy)) return 6;
   if (enemy && enemy.skill && enemy.skill.type === "cloak") return 5;
   return 4;
 }
@@ -872,35 +906,42 @@ function safeStandoffDistance(enemy) {
 /**
  * 判断走到 next 后是否进入"会被秒的死区"。
  * 子弹 2 格/帧 + 我转向 1 帧：3 格内只要需要转向就躲不掉，故普通敌人 d<=3 即死区。
- * 过载敌人一帧双弹更难躲：d<=4、或在其同行/同列 standoff 内且无横向脱离，都算死区。
+ * 双弹威胁敌人(过载中 或 过载流冷却就绪)：一帧双弹走"正行/列+相邻±1行/列"，
+ * d<=4 一律死区；standoff 内且落在双弹覆盖带、又无法一步横向跨出覆盖带(走廊夹死)亦为死区。
  */
 function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
   const d = manhattan(next, enemyPos);
-  const overloaded = enemy && enemy.status && enemy.status.overloaded;
+  const doubleLane = enemyDoubleLaneThreat(enemy);
   // 普通敌人：贴近 3 格内即死区（转向就被追上）
   if (d <= 3) return true;
-  // 过载敌人：4 格内一律死区
-  if (overloaded && d <= 4) return true;
-  // 过载敌人：进入 standoff 内且与之同行/同列(可被直接命中)且无横向脱离 -> 死区
-  if (overloaded && d < standoff) {
-    if (enemyPos[0] === next[0] || enemyPos[1] === next[1]) {
-      if (!hasLateralEscapeAt(next, enemyPos, game)) return true;
-    }
+  // 双弹威胁敌人：4 格内一律死区
+  if (doubleLane && d <= 4) return true;
+  // 双弹威胁敌人：standoff 内 + 落在双弹覆盖带(同行/列或相邻±1) + 无法一步跨出覆盖带 -> 死区(走廊夹死，mat_73I)
+  if (doubleLane && d < standoff && inDoubleLaneBand(enemyPos, next, standoff)) {
+    if (!hasDoubleLaneEscapeAt(next, enemyPos, game)) return true;
   }
   return false;
 }
 
 /**
- * next 是否有垂直于"敌->next 连线"的可走脱离格（用于评估走过去后还能不能躲弹）。
+ * next 是否能横向(垂直于敌我连线)脱离双弹覆盖带：
+ * 至少一侧能连走两格(第一格脱出敌人正列/行进入相邻列、第二格再跨出相邻列)到 dx>=2(或 dy>=2)的安全格。
+ * 走廊贴墙时一侧是墙、另一侧仅一格就撞回主弹列 -> 无此脱离 -> 双弹夹死(mat_73I 沿 x=17 走廊被相邻列副弹追死)。
+ * 开阔地两侧能延伸 -> 有脱离(两帧横移即可躲开)，照常走，避免防过头不敢抢星。
  */
-function hasLateralEscapeAt(next, enemyPos, game) {
-  const horizontal = enemyPos[1] === next[1]; // 同行 -> 子弹水平来 -> 需上下脱离
-  const dirs = horizontal
-    ? [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }]
-    : [{ dx: -1, dy: 0 }, { dx: 1, dy: 0 }];
-  for (let i = 0; i < dirs.length; i++) {
-    const q = [next[0] + dirs[i].dx, next[1] + dirs[i].dy];
-    if (isPassable(game, q, enemyPos)) return true;
+function hasDoubleLaneEscapeAt(next, enemyPos, game) {
+  const vertical = enemyPos[0] === next[0] || Math.abs(enemyPos[0] - next[0]) <= 1; // 大体同列 -> 双弹竖直来 -> 需左右(x)脱离
+  const lateral = vertical
+    ? [{ dx: -1, dy: 0 }, { dx: 1, dy: 0 }]
+    : [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }];
+  for (let i = 0; i < lateral.length; i++) {
+    const s1 = [next[0] + lateral[i].dx, next[1] + lateral[i].dy];
+    if (!isPassable(game, s1, enemyPos)) continue; // 第一步就被墙堵
+    const s2 = [s1[0] + lateral[i].dx, s1[1] + lateral[i].dy];
+    if (!isPassable(game, s2, enemyPos)) continue; // 第二步被墙堵(走廊) -> 这侧脱不掉
+    const dx = Math.abs(enemyPos[0] - s2[0]);
+    const dy = Math.abs(enemyPos[1] - s2[1]);
+    if (dx >= 2 || dy >= 2) return true; // 两格横移跨出双弹覆盖带
   }
   return false;
 }
