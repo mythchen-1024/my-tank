@@ -154,6 +154,17 @@ function onIdle(me, enemy, game) {
     return;
   }
 
+  // 3.4 两步脱困：双弹平行夹击导致单步无安全格时，朝"威胁子弹还较远、下一帧能再纵向脱离"的相邻列/行走一步
+  //     （mat_FXI：双弹夹 x=16/x=17，单步全堵，但 f4/f5 往左到 x=16 后下帧仍来得及脱离）。
+  //     注意：目标格本身仍被某子弹威胁，不能走 moveToward(会被安全复检拒绝)，直接朝它走。
+  const twoStep = findTwoStepEscape(me, enemyBullets, game, enemyPos, enemyTank);
+  if (twoStep) {
+    const tdir = directionBetween(myPos, twoStep);
+    if (tdir === me.tank.direction) me.go();
+    else if (tdir) turnToward(me, tdir);
+    return;
+  }
+
   // 3.5 绝境横移：被子弹威胁、又躲不掉也传送不了时，至少朝垂直方向挣一步脱离弹道，
   //     绝不顺着子弹方向逃（顺向必被 2 格/帧的子弹追上，见 mat_DXZ）。
   const desperate = findDesperateDodge(me, enemyBullets, game, enemyPos, enemyTank);
@@ -1158,6 +1169,60 @@ function findDesperateDodge(me, enemyBullets, game, enemyPos, enemyTank) {
   return best;
 }
 
+/**
+ * 两步脱困：单步无安全格（findBulletDodge=null）时的备用逃生。
+ * 适用于双弹平行夹击（如 mat_FXI：x=16/x=17 两列都有子弹朝 up，右侧是墙）。
+ *
+ * 策略：在相邻格中找一个"虽然当前被某子弹威胁、但该子弹还有 ≥3 帧才到、
+ * 且从该格出发下一帧能找到真正安全的纵向脱离格"的方向走过去。
+ * 优先选远离边界（避免被逼到墙角）、且威胁子弹最远的方向。
+ */
+function findTwoStepEscape(me, enemyBullets, game, enemyPos, enemyTank) {
+  const myPos = me.tank.position;
+  const bullets = enemyBullets || [];
+  if (!anyBulletThreatens(bullets, myPos, game)) return null;
+
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue;
+    // 不走顺着威胁子弹方向的格（顺向必被追上）
+    let isAlongThreat = false;
+    for (let j = 0; j < bullets.length; j++) {
+      if (bulletThreatens(bullets[j], myPos, game) && bullets[j].direction === d.name) {
+        isAlongThreat = true; break;
+      }
+    }
+    if (isAlongThreat) continue;
+
+    // 到达 p 所需帧：当前朝向=1(直接go)，否则 turnDistance+1(先转再走)
+    const arriveFrames = (d.name === me.tank.direction) ? 1 : (turnDistance(me.tank.direction, d.name) + 1);
+    // 该格被子弹威胁：必须在我到达之后才命中（留出落脚帧），否则走过去就被打
+    const framesAtP = minBulletFramesTo(bullets, p, game);
+    if (framesAtP >= 0 && framesAtP <= arriveFrames) continue;
+
+    // 从 p 出发能否再脱离：存在一个真正安全(不在任何弹道)的相邻格，且其到位帧早于威胁命中
+    let nextEscapeOk = false;
+    for (let k = 0; k < DIRS.length; k++) {
+      const q = [p[0] + DIRS[k].dx, p[1] + DIRS[k].dy];
+      if (!isPassable(game, q, enemyPos)) continue;
+      if (anyBulletThreatens(bullets, q, game)) continue;
+      if (enemyAimsAt(q, enemyTank, game)) continue;
+      nextEscapeOk = true; break;
+    }
+    if (!nextEscapeOk) continue;
+
+    // 打分：远离边界（避免被逼墙角）+ 威胁子弹越远越好 + 到位越快越好
+    const edgeScore = distanceFromEdges(p, game);
+    const threatDist = framesAtP >= 0 ? framesAtP : 99;
+    const score = edgeScore * 3 + threatDist - arriveFrames * 2;
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  return best;
+}
 
 /**
  * 对射"先射后走"判定：在子弹来袭、findBulletDodge 已确认本帧有躲位的前提下，
