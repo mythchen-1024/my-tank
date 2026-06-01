@@ -277,6 +277,16 @@ function onIdle(me, enemy, game) {
     return;
   }
 
+  // 9.5 草丛蹲守等闪现抢星(用户策略，对 overload 双弹流)：我已藏在草丛(敌锁不定我、双弹无从瞄准)、
+  //     当前无星可抢、敌不贴脸时——原地保位不乱跑，保留传送等星刷新再闪现抢分。
+  //     躲避/守线/抢星都在上方先处理过(无星时 findStarTeleport 不触发)，所以走到这里"原地蹲守"是安全的。
+  if (enemyIsOverloadType(enemy) && !game.star && iAmHidden(me, game) && teleportReady(me)) {
+    const safeInBush = !anyBulletThreatens(enemyBullets, myPos, game) &&
+      (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&     // 敌不贴脸(贴脸交给下方走位拉开)
+      (!enemyTank || !enemyAimsAt(myPos, enemyTank, game)); // 敌没瞄到我(草丛里通常看不见我，双保险)
+    if (safeInBush) return; // 蹲草丛不动，等星刷新由 step9 findStarTeleport 闪现抢
+  }
+
   // 10. 战术走位：基于 BFS 寻路（优先星星 -> 射击轨道 -> 靠近敌人 -> 地图中心）
   // 安全站位：对过载/隐身敌人保持更大间距，且只走"走过去后仍能躲开敌方子弹"的格子
   const step = chooseStep(me, enemy, game, enemyPos, state);
@@ -540,6 +550,9 @@ function findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state) 
   if (enemyHasTeleport(enemy)) return null;
   // 敌方过载(双弹就绪)：刺杀落点必与敌同线(才能直射)，恰好落进双弹正列，反被一帧双弹反杀 -> 放弃刺杀
   if (enemyDoubleLaneThreat(enemy)) return null;
+  // overload 流敌人(哪怕此刻冷却中)：刺杀=传送到敌身边对射，它一过载就双弹反杀(刺杀落点必同线=副弹正列)。
+  // 对双弹流应"怂"——保留传送躲草丛/抢星，绝不主动凑上去送(呼应 mat_D9W/mat_4YF "别贴双弹敌")。
+  if (enemyIsOverloadType(enemy)) return null;
   // 本局敌方已展示过躲刺杀子弹的反应 -> 全局禁用刺杀
   if (state && state.assassinBanned) return null;
   // 脚边有星(走两步内可吃)且我不比敌人远 -> 别把传送浪费在远处刺杀上，留着走过去/传送吃星(mat_E3G 开局[2,2]星在[3,3]却传去刺杀[11,12]丢星)
@@ -1057,6 +1070,12 @@ function chooseStep(me, enemy, game, enemyPos, state) {
       const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game);
       if (bandEscape) return bandEscape;
     }
+    // overload 双弹流：无星可安全抢的空窗期，奔最近安全草丛蹲守，让敌锁不定我(双弹无从瞄准)，
+    // 保留传送等星刷新再闪现抢分(用户策略)。仅当当前没有正在追的星(上方 step1 已优先抢星)时才躲草丛。
+    if (enemyIsOverloadType(enemy) && !game.star) {
+      const bushStep = nextStepToSafeBush(me, enemy, game, enemyPos, standoff);
+      if (bushStep) return bushStep;
+    }
   }
 
   // 3. 看不见敌人(隐身/草丛)：若最近见过，避开其最后已知位置周边的危险区
@@ -1136,6 +1155,55 @@ function nearestOpenTo(game, target) {
   }
   return best;
 }
+
+/**
+ * 我此刻是否藏在草丛里（对敌方脚本隐身）。草丛 'o' 或被冰冻/技能标记 cloaked 均算。
+ */
+function iAmHidden(me, game) {
+  return !!((me.status && me.status.cloaked) || tileAt(game, me.tank.position) === "o");
+}
+
+/**
+ * 奔草丛躲双弹：面对 overload 双弹流、无星可安全抢的空窗期，走向最近的"安全草丛"蹲守，
+ * 让敌方脚本失去我的位置(enemy.tank=null)——双弹无从瞄准；保留传送等星刷新再闪现抢分(用户策略)。
+ * 安全草丛要求：可站、不在敌近距死区(stepEntersKillZone)、不落在握弹敌的双弹覆盖带里。
+ * 返回朝最近安全草丛的下一步；找不到(或我已在草丛里)返回 null，交上层巡逻/兜底。
+ * 仅对 overload 流敌人触发，避免对普通敌防过头。
+ */
+function nextStepToSafeBush(me, enemy, game, enemyPos, standoff) {
+  const myPos = me.tank.position;
+  if (tileAt(game, myPos) === "o") return null; // 已在草丛，不必再找
+  let bestBush = null, bestD = 9999;
+  for (let x = 0; x < game.map.length; x++) {
+    for (let y = 0; y < game.map[x].length; y++) {
+      if (tileAt(game, [x, y]) !== "o") continue;          // 只找草丛格
+      const c = [x, y];
+      if (!isPassable(game, c, enemyPos)) continue;
+      if (samePos(c, myPos)) continue;
+      // 草丛本身不能在敌握弹双弹带/近距死区(躲进去反被秒，mat_EHR 落点不安全的教训)
+      if (enemyPos && stepEntersKillZone(myPos, c, enemyPos, game, enemy, standoff)) continue;
+      if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, c, standoff)) continue;
+      const d = pathDistance(myPos, c, game, enemyPos);
+      if (d < 0) continue;                                  // 不可达
+      if (d < bestD) { bestD = d; bestBush = c; }
+    }
+  }
+  if (!bestBush) return null;
+  const step = nextStepToward(myPos, bestBush, game, enemyPos);
+  if (!step || !enemyPos) return step;
+  // 奔草丛途中这一步也不许进死区(穿过握弹敌炮线)
+  if (stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff)) return null;
+  // 握双弹敌：途中这一步也不要顺着敌人正行/列往敌人方向挪(BFS 可能沿敌列直上)，
+  // 宁可这一步先横向脱出双弹带——若该步留在带内且比当前更靠近敌人，改用横移脱带步。
+  if (enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, step, standoff) &&
+      manhattan(step, enemyPos) < manhattan(myPos, enemyPos)) {
+    const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game);
+    if (bandEscape) return bandEscape;
+    return null; // 没有更好的脱带步，交上层巡逻，别朝握弹敌挪
+  }
+  return step;
+}
+
 
 /**
  * 与敌人的最小安全间距：
