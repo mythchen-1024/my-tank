@@ -140,6 +140,7 @@ function onIdle(me, enemy, game) {
   if (dodge) {
     // 对射先射后走：来袭子弹下、我与敌同线且炮口对准、开火后仍来得及躲，则先回敬一炮再躲（化被动为压制）
     if (shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos)) {
+      me.speak("开炮！！！");
       me.fire();
       return;
     }
@@ -204,6 +205,7 @@ function onIdle(me, enemy, game) {
       if (!doubleLaneClose) {
         // 方向一致直接开火，否则先转向敌人
         if (me.tank.direction === shotDir) {
+          me.speak("开炮！！！");
           me.fire();
         } else {
           turnToward(me, shotDir);
@@ -217,16 +219,24 @@ function onIdle(me, enemy, game) {
   //     躲避优先（已在上方处理实弹来袭），这里只在无实弹威胁时主动备战，避免被动逃到墙角挨打。
   const guardShot = findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (guardShot) {
-    if (guardShot.fire) me.fire();
-    else turnToward(me, guardShot.dir);
+    if (guardShot.fire) {
+      me.speak("开炮！！！");
+      me.fire();
+    } else {
+      turnToward(me, guardShot.dir);
+    }
     return;
   }
 
   // 6.6 草丛攻防：敌藏同线草丛(看不见)时朝那条线预射打草惊蛇/防伏击；我在草丛且与敌同线则主动伏击开火。
   const bushShot = findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state);
   if (bushShot) {
-    if (bushShot.fire) me.fire();
-    else turnToward(me, bushShot.dir);
+    if (bushShot.fire) {
+      me.speak("开炮！！！");
+      me.fire();
+    } else {
+      turnToward(me, bushShot.dir);
+    }
     return;
   }
 
@@ -304,6 +314,7 @@ function onIdle(me, enemy, game) {
   const digDir = findDigDirection(myPos, game, game.star || enemyPos || nearestOpenToCenter(game));
   if (digDir && gunReady(me)) {
     if (me.tank.direction === digDir) {
+      me.speak("开炮！！！");
       me.fire();
     } else {
       turnToward(me, digDir);
@@ -356,7 +367,7 @@ let MATCH_STATE = null;
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, stuckFrames: 0, patrolTarget: null };
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, stuckFrames: 0, patrolTarget: null, lastEvadeAxis: undefined };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
@@ -501,6 +512,17 @@ function enemyIsOverloadType(enemy) {
  */
 function enemyIsFreezeType(enemy) {
   return !!(enemy && enemy.skill && enemy.skill.type === "freeze");
+}
+
+/**
+ * 敌方是否为 cloak(隐身)流：拥有 cloak 技能，不论此刻是否隐身。
+ * 隐身敌会 cast cloak 后悄悄绕到我正后方同行/同列(我看不见它真实位置)，再从背后一炮偷袭。
+ * 此时若我沿单一行/列直线逃，2 格/帧的子弹必从背后追上(mat_L4l9：敌隐身滑到我同行 y=6 背后，
+ * 我沿 y=6 连走 3 格直线退被追死)。对这类敌人逃跑要走"斜线/之字"——每帧换行又换列，
+ * 让隐身敌无论藏在我哪条线背后，其直线子弹到达时我都已离开那条线。
+ */
+function enemyIsCloakType(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "cloak");
 }
 
 /**
@@ -1080,7 +1102,14 @@ function chooseStep(me, enemy, game, enemyPos, state) {
 
   // 3. 看不见敌人(隐身/草丛)：若最近见过，避开其最后已知位置周边的危险区
   if (state && state.lastEnemyPos && (game.frames || 0) - state.lastEnemySeenFrame <= 8) {
-    // 3a. 隐身敌伏击线：与其最后已知位置同行/同列且中间无墙遮挡时，即使曼哈顿较远也要横向离开那条线
+    // 3a-cloak. 隐身流敌人"之字斜逃"：cloak 敌会隐身后悄悄绕到我正后方任意行/列偷袭，
+    //     沿单一行/列直线退必被 2 格/帧子弹从背后追上(mat_L4l9 沿 y=6 直线退被追死)。
+    //     改走斜向(逐帧交替换轴)，让任何一条偷袭直线到达时我都已离开那条线。优先于旧的"仅同线横移"。
+    if (enemyIsCloakType(enemy)) {
+      const zig = diagonalEvadeStep(myPos, state.lastEnemyPos, game, state);
+      if (zig) return zig;
+    }
+    // 3b. 隐身敌伏击线：与其最后已知位置同行/同列且中间无墙遮挡时，即使曼哈顿较远也要横向离开那条线
     //     （隐身敌常沿原行/列游弋伏击，子弹2格/帧很快到；mat_E3G 吃完星沿 y=2 行走进隐身敌伏击被秒）。
     //     有石墙挡着则那条线其实安全，不必避让(呼应"石墙挡子弹"，避免无谓徘徊)。
     const lineEscape = escapeAmbushLine(myPos, state.lastEnemyPos, game);
@@ -1430,6 +1459,35 @@ function escapeAmbushLine(myPos, dangerPos, game) {
     const score = manhattan(q, dangerPos) + distanceFromEdges(q, game) * 0.5;
     if (score > bestScore) { bestScore = score; best = q; }
   }
+  return best;
+}
+
+/**
+ * 隐身敌"之字斜逃"：面对 cloak 流敌人逃跑时，绝不沿单一行/列直线退（mat_L4l9：敌隐身绕到我正后方
+ * 同行 y=6，我沿 y=6 连走 3 格直线退，被 2 格/帧的子弹从背后追死）。隐身时我看不见敌真实位置，
+ * 它可能藏在我**任意**行/列背后；走斜向(每帧换行又换列)能让任何一条直线子弹到达时我都已离开那条线。
+ *
+ * 坦克一帧只能走一格(不能真正对角移动)，所以"之字"靠**逐帧交替换轴**实现：本帧优先选一个
+ * "既离 lastEnemyPos 更远、又能为下一帧换轴留出空间"的方向；并尽量避免与上一步同轴(交替 x/y)。
+ * lastStepAxis 记录上一步走的轴(0=x,1=y)，本帧优先换另一轴，凑出之字轨迹。
+ */
+function diagonalEvadeStep(myPos, dangerPos, game, state) {
+  const lastAxis = state ? state.lastEvadeAxis : undefined; // 0=x轴(left/right), 1=y轴(up/down)
+  let best = null, bestScore = -9999, bestAxis = null;
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, null)) continue;
+    if (manhattan(p, dangerPos) < manhattan(myPos, dangerPos)) continue; // 不往隐身敌方向靠
+    const axis = d.dx !== 0 ? 0 : 1;
+    // 离开"敌可能藏身"的两条线：走过去后既不与 dangerPos 同行、也不同列最优(彻底脱离任何一条偷袭直线)
+    const offDanger = (p[0] !== dangerPos[0] ? 1 : 0) + (p[1] !== dangerPos[1] ? 1 : 0);
+    // 交替换轴(之字核心)：本帧换到与上一步不同的轴 -> 加分；同轴(直线退) -> 不加分
+    const altBonus = (lastAxis === undefined || axis !== lastAxis) ? 6 : 0;
+    const score = altBonus + offDanger * 4 + manhattan(p, dangerPos) + distanceFromEdges(p, game) * 0.5;
+    if (score > bestScore) { bestScore = score; best = p; bestAxis = axis; }
+  }
+  if (best && state) state.lastEvadeAxis = bestAxis;
   return best;
 }
 
