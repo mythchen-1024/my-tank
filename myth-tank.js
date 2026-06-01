@@ -1067,10 +1067,14 @@ function chooseStep(me, enemy, game, enemyPos, state) {
   if (game.star) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
     if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy) && starPath.step) {
-      if (!enemyPos || !stepEntersKillZone(myPos, starPath.step, enemyPos, game, enemy, standoff)) {
+      const killZone = enemyPos && stepEntersKillZone(myPos, starPath.step, enemyPos, game, enemy, standoff);
+      // 死胡同陷阱(mat_2Wz)：追星的下一步若踏进"敌能封锁开口的死胡同"，且星本身不在那个死格里
+      //（途经死角而非星在死角），则别钻进去——会被敌同行/列子弹封死无垂直脱离。星就在死格里则照常去抢。
+      const sealedTrap = stepIntoSealedDeadEnd(starPath.step, enemyPos, game) && !samePos(starPath.step, game.star);
+      if (!killZone && !sealedTrap) {
         return starPath.step;
       }
-      // 追星会撞进死区：放弃这一步，转入安全站位逻辑（下方）重新决策
+      // 追星会撞进死区/死胡同陷阱：放弃这一步，转入安全站位逻辑（下方）重新决策
     }
   }
 
@@ -1080,13 +1084,21 @@ function chooseStep(me, enemy, game, enemyPos, state) {
     // 找轨道会把我留在副弹覆盖带。改走安全站位拉开/离开覆盖带。开火压制交给 onIdle 在 standoff 处对枪("没双弹刚")。
     if (!enemyIsOverloadType(enemy)) {
       const laneStep = nextStepToFiringLane(myPos, enemyPos, game, standoff);
-      if (laneStep && !stepEntersKillZone(myPos, laneStep, enemyPos, game, enemy, standoff)) return laneStep;
+      if (laneStep && !stepEntersKillZone(myPos, laneStep, enemyPos, game, enemy, standoff) &&
+          !stepIntoSealedDeadEnd(laneStep, enemyPos, game)) return laneStep;
     }
     // 维持安全站位：太近则后撤到 standoff 环，太远才靠近
     const standoffStep = nextStepToStandoff(myPos, enemyPos, game, standoff, enemy);
     // 后撤/站位步也要过死区复检：绝不朝"握双弹"的敌人走进其炮线/副弹带(mat_Jov6 在墙袋里 standoffStep
     // 返回 [5,5] 朝握弹敌走="还回头"撞副弹)。该步是死区则放弃，fall through 到下方横移/巡逻另寻活路。
-    if (standoffStep && !stepEntersKillZone(myPos, standoffStep, enemyPos, game, enemy, standoff)) return standoffStep;
+    // 同时过死胡同复检：远离敌时别被推进墙角死路(mat_2Wz 敌同行逼近，standoff 把我往右推进死角[17,1]被封死)。
+    if (standoffStep && !stepEntersKillZone(myPos, standoffStep, enemyPos, game, enemy, standoff) &&
+        !stepIntoSealedDeadEnd(standoffStep, enemyPos, game)) return standoffStep;
+    // standoffStep 撞进死区/死胡同陷阱：先尝试改走"非被封锁死角"的安全开阔格(别原地卡死)
+    if (standoffStep && stepIntoSealedDeadEnd(standoffStep, enemyPos, game)) {
+      const openStep = safestNonDeadEndStep(myPos, game, enemyPos);
+      if (openStep) return openStep;
+    }
     // standoffStep 为死区或 null(overload 流远距不逼近) -> fall through：先尝试横向脱离双弹带，再巡逻找开阔位
     if (enemyDoubleLaneThreat(enemy)) {
       const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game);
@@ -1122,11 +1134,33 @@ function chooseStep(me, enemy, game, enemyPos, state) {
   const vt = virtualPatrolTarget(me, game, state);
   if (vt) {
     const step = nextStepToward(myPos, vt, game, null);
-    if (step) return step;
+    // 死胡同规避(mat_2Wz)：巡逻步若走进"敌能封锁开口的死胡同"(无垂直脱离、对射慢一拍被秒)，
+    // 改朝远离死角的安全开阔邻格走，绝不把自己往墙角死路里送。
+    if (step && !stepIntoSealedDeadEnd(step, enemyPos, game)) return step;
+    const openStep = safestNonDeadEndStep(myPos, game, enemyPos);
+    if (openStep) return openStep;
+    if (step) return step; // 实在没有更好的，仍走原巡逻步(不卡死)
   }
   // 兜底：往地图中心走
   const center = nearestOpenToCenter(game);
   return center ? nextStepToward(myPos, center, game, null) : null;
+}
+
+/**
+ * 在四邻里挑一个"非被封锁死胡同"的安全开阔格走一步：优先开口多、离边远、不在敌炮线的格。
+ * 用于巡逻/走位即将踏进墙角死路时改道（mat_2Wz）。
+ */
+function safestNonDeadEndStep(myPos, game, enemyPos) {
+  let best = null, bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (stepIntoSealedDeadEnd(p, enemyPos, game)) continue; // 跳过会被封锁的死胡同
+    const sealed = enemyPos && clearShotDirection(enemyPos, p, game) ? -4 : 0; // 敌能直线打到的格降权
+    const score = openNeighborCount(p, game) * 3 + distanceFromEdges(p, game) + sealed;
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  return best;
 }
 
 /**
@@ -2111,10 +2145,11 @@ function collectEnemyBullets(enemy) {
     }
     if (!dup) out.push(enemy.bullet);
   }
-  // 过载双弹但 API 只暴露 1 发：按双弹机制补出平行的配对弹(同方向同进度，在另一条相邻车道)。
+  // 过载双弹但 API 只暴露 1 发：按双弹机制补出平行的配对弹(同方向同进度，在相邻车道)。
   // 否则闪避时只看到副弹、把主弹行当安全躲过去送死(mat_LBH 副弹y=13可见、主弹y=12看不见，误往y=12躲)。
+  // 敌开火后垂直移开车道时锚点不可信，inferOverloadPairedBullet 会两侧都补，保证真实弹不漏判(mat_8iF)。
   const paired = inferOverloadPairedBullet(enemy, out);
-  if (paired) out.push(paired);
+  for (let i = 0; i < paired.length; i++) out.push(paired[i]);
   return out;
 }
 
@@ -2127,26 +2162,30 @@ function collectEnemyBullets(enemy) {
  * 垂直偏移到"敌人所在的那条行/列"的弹（覆盖最危险的主弹道）；若可见弹已在敌正行/列，则补相邻一条。
  */
 function inferOverloadPairedBullet(enemy, bullets) {
-  if (!enemy || bullets.length !== 1) return null; // 只在恰好可见 1 发时推断
+  if (!enemy || bullets.length !== 1) return []; // 只在恰好可见 1 发时推断
   const overloadActive = (enemy.status && enemy.status.overloaded) ||
     (enemy.skill && enemy.skill.type === "overload");
-  if (!overloadActive) return null;
+  if (!overloadActive) return [];
   const ep = enemy.tank && enemy.tank.position;
-  if (!ep) return null;
+  if (!ep) return [];
   const b = bullets[0];
   const dir = b.direction;
   const horizontal = dir === "left" || dir === "right"; // 水平飞 -> 双弹分布在不同行(y)；竖直飞 -> 不同列(x)
-  // 可见弹与敌的垂直偏移：水平飞看 y 差，竖直飞看 x 差
-  const visOff = horizontal ? (b.position[1] - ep[1]) : (b.position[0] - ep[0]);
-  // 配对弹的垂直偏移：双弹一条在敌正行/列(off=0)、一条在相邻(off=±1)。
-  // 可见弹 off=0 -> 配对在相邻(取 +1 或 -1，朝可见弹未覆盖侧；默认 +1)；可见弹 off=±1 -> 配对在敌正行/列(off=0)。
-  let pairOff;
-  if (visOff === 0) pairOff = 1;          // 可见的是主弹 -> 补副弹(相邻+1)
-  else pairOff = 0;                        // 可见的是副弹 -> 补主弹(敌正行/列)
-  const pairPos = horizontal
-    ? [b.position[0], ep[1] + pairOff]     // 同 x 进度，y 落在配对车道
-    : [ep[0] + pairOff, b.position[1]];    // 同 y 进度，x 落在配对车道
-  return { position: pairPos, direction: dir, _inferred: true };
+  // 可见弹所在车道(水平飞看 y，竖直飞看 x)。双弹是相邻两条平行车道(差 1)：主弹在敌开火行/列，
+  // 副弹恒在主弹 +1。给定可见弹，真实配对弹只可能在 visLane-1(可见的是副弹) 或 visLane+1(可见的是主弹)。
+  const visLane = horizontal ? b.position[1] : b.position[0];
+  const enemyLane = horizontal ? ep[1] : ep[0];
+  // 关键修复(mat_8iF)：双弹车道在**开火瞬间**由敌位置决定且固定不变。敌开火后会移动——
+  // 用敌"当前"位置锚定哪侧是配对弹并不可靠(敌沿子弹方向移动时锚点恰好可信，垂直移动后就失真，
+  // 会把配对弹算到错误行/列、漏判真实那发被秒)。鉴于漏判=被秒，无法 100% 确定哪侧时宁可**两侧都补**：
+  //   - 敌仍在可见弹车道(可见主弹) -> 配对副弹必在 +1，补单侧(不过度保守)；
+  //   - 否则(可见副弹 或 敌已垂直移开) -> 真实配对弹在 -1 或 +1 不确定，两侧都补，保证真实弹必被覆盖。
+  const lanes = (enemyLane === visLane) ? [visLane + 1] : [visLane - 1, visLane + 1];
+  return lanes.map(lane => ({
+    position: horizontal ? [b.position[0], lane] : [lane, b.position[1]],
+    direction: dir,
+    _inferred: true
+  }));
 }
 
 /**
@@ -2476,6 +2515,38 @@ function dirIndex(dir) {
  */
 function distanceFromEdges(p, game) {
   return Math.min(p[0], p[1], game.map.length - 1 - p[0], game.map[0].length - 1 - p[1]);
+}
+
+/**
+ * 统计某格的"可通行开口"数量(四邻里非墙非土块的格)。
+ */
+function openNeighborCount(p, game) {
+  let c = 0;
+  for (let i = 0; i < DIRS.length; i++) {
+    const q = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
+    if (isPassable(game, q, null)) c++;
+  }
+  return c;
+}
+
+/**
+ * 死胡同判定：某格只有 ≤1 个可通行开口(走进去只能原路退出)。
+ * 面对能封锁开口的敌人(同行/列子弹封住唯一出口)时，走进死胡同 = 没有垂直脱离方向，必被秒
+ * (mat_2Wz：沿 y=1 边行抢星走到右上角 [17,1]，右/上/下三面墙、唯一开口 [16,1] 被敌同行子弹封死，
+ * 原地对射我慢一拍被击毁)。走位/巡逻应避免走进死胡同，除非那里有星值得冒险。
+ */
+function isDeadEnd(p, game) {
+  return openNeighborCount(p, game) <= 1;
+}
+
+/**
+ * 走到 next 是否会陷入"被封锁的死胡同"：next 是死胡同(≤1开口)，且敌人当前与 next 同行/列、视线无墙
+ * (能用子弹封住唯一出口方向)。此时 next 无垂直脱离、对射又常慢一拍 -> 判危险，走位应避开。
+ */
+function stepIntoSealedDeadEnd(next, enemyPos, game) {
+  if (!enemyPos) return false;
+  if (!isDeadEnd(next, game)) return false;
+  return !!clearShotDirection(enemyPos, next, game); // 敌能直线打到 next(封锁唯一开口)
 }
 
 /**
