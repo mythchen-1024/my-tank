@@ -190,13 +190,18 @@ function onIdle(me, enemy, game) {
   // 6. 射击敌人：判断是否在同一直线上且无障碍物
   const shotDir = enemyPos ? clearShotDirection(myPos, enemyPos, game) : null;
   if (shotDir && canShoot(me, enemy)) {
-    // 方向一致直接开火，否则先转向敌人
-    if (me.tank.direction === shotDir) {
-      me.fire();
-    } else {
-      turnToward(me, shotDir);
+    // overload 流敌人 + 近距(进入其安全间距内)：开一发它冷却好就双弹回敬，对射换不过 -> 不主动对枪，
+    // 让位给下方抢星/走位拉开距离(mat_D9W 贴身缠斗被双弹秒)。已拉开到 standoff 外才正常开火压制。
+    const overloadClose = enemyIsOverloadType(enemy) && manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
+    if (!overloadClose) {
+      // 方向一致直接开火，否则先转向敌人
+      if (me.tank.direction === shotDir) {
+        me.fire();
+      } else {
+        turnToward(me, shotDir);
+      }
+      return;
     }
-    return;
   }
 
   // 6.5 以守为攻：敌人近距(<=3)正逼近、即将进入我的同行/同列枪线时，提前把炮口对准那条线（守株待兔）。
@@ -221,6 +226,13 @@ function onIdle(me, enemy, game) {
   if (!inCloakStarTrap(me, enemy, enemyTank, game, state)) {
     const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
     if (starTeleport) {
+      // 敌方是 teleport 时，双方可能同帧传送到星两侧近距对撞(mat_KBZ 传 [3,6] 落地朝向不对被秒)。
+      // 传送落地朝向不变 -> 先把车头转到"落地后朝向星/对撞方向"，下一帧再传送，落地即可对准抢先开火/对射。
+      const faceDir = teleportPreTurnDir(me, starTeleport, enemy, enemyTank, game);
+      if (faceDir && me.tank.direction !== faceDir) {
+        turnToward(me, faceDir); // 这一帧先转，下一帧 onIdle 会再次进到这里并传送
+        return;
+      }
       me.teleport(starTeleport[0], starTeleport[1]);
       return;
     }
@@ -396,6 +408,15 @@ function enemyDoubleLaneThreat(enemy) {
   return !!(enemy.skill && enemy.skill.type === "overload" &&
     enemy.skill.remainingCooldownFrames !== undefined &&
     enemy.skill.remainingCooldownFrames <= 1);
+}
+
+/**
+ * 敌方是否为 overload(双弹)流：拥有 overload 技能，不论此刻冷却与否。
+ * 即使技能在冷却，它也会冷却好就过载双弹——所以对这类敌人不能贴身缠斗，应保持保守间距、以抢星走位为主。
+ * (mat_D9W：金闪闪 overload 冷却中时我 standoff 退回4格贴到 d=1~4 缠斗，等它冷却好一过载就被双弹贴脸秒。)
+ */
+function enemyIsOverloadType(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "overload");
 }
 
 /**
@@ -688,6 +709,28 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
 }
 
 /**
+ * 传送抢星前是否应"先转向再传送"，返回应转到的朝向(null=直接传)。
+ * 仅当敌方是 teleport 技能(能瞬移到星另一侧对撞) + 双方都离星近(可能同帧抢同一颗星) + 传送落点也贴星时触发：
+ * 传送落地朝向不变，若不先对准，落地后转向那帧会被对侧传来的敌人抢先开火(mat_KBZ 传[3,6]朝向不对被秒)。
+ * 返回"落点 -> 星"方向：对撞在星周围发生，朝星即朝可能出现的敌人，落地即可对射不被抢先。
+ */
+function teleportPreTurnDir(me, landing, enemy, enemyTank, game) {
+  if (!enemyHasTeleport(enemy)) return null;     // 仅针对会瞬移对撞的 teleport 敌人
+  if (!game.star) return null;
+  const enemyPos = enemyTank ? enemyTank.position : null;
+  if (!enemyPos) return null;
+  // 双方都离星近(都可能传送来抢)才有对撞风险；敌离星远则不会来对撞，无需预转
+  if (manhattan(enemyPos, game.star) > ASSASSIN_MAX_RANGE) return null;
+  // 落点要贴星(对撞区, 距星<=2)才需要预转；远离星的安全落点不必
+  if (manhattan(landing, game.star) > 2) return null;
+  // 理想落地朝向 = 落点指向星(对撞方向)。落点即星点时退而指向敌人当前方位。
+  const dir = samePos(landing, game.star)
+    ? clearShotDirection(landing, enemyPos, game) || directionBetween(landing, enemyPos)
+    : directionBetween(landing, game.star);
+  return dir || null;
+}
+
+/**
  * 终局抢星传送：临近第 128 帧、走路来不及吃星时，若传送到星点后敌人即使立刻开火也来不及在终局前命中，
  * 就传送抢星锁定星数胜负（超时按星数判）。子弹2格/帧：敌最快命中我需 1(传送占帧,敌下帧响应)+敌转向(0或1)+ceil(dist/2)。
  * 剩余帧 < 该命中帧 -> 终局前打不到我 -> 安全抢星，哪怕落点在敌炮线。落点本身必须可站(不卡墙/不接现有子弹)。
@@ -857,8 +900,11 @@ function chooseStep(me, enemy, game, enemyPos, state) {
 
   // 2. 看得见敌人：走位找射击轨道(但不进死区)，否则保持安全间距，不再无脑贴近
   if (enemyPos) {
-    const laneStep = nextStepToFiringLane(myPos, enemyPos, game, standoff);
-    if (laneStep && !stepEntersKillZone(myPos, laneStep, enemyPos, game, enemy, standoff)) return laneStep;
+    // overload 流敌人：不找射击轨道贴近(对射换不过且会留在副弹覆盖带，mat_4YF 错位射击)，直接走安全站位拉开/离开覆盖带
+    if (!enemyIsOverloadType(enemy)) {
+      const laneStep = nextStepToFiringLane(myPos, enemyPos, game, standoff);
+      if (laneStep && !stepEntersKillZone(myPos, laneStep, enemyPos, game, enemy, standoff)) return laneStep;
+    }
     // 维持安全站位：太近则后撤到 standoff 环，太远才靠近
     return nextStepToStandoff(myPos, enemyPos, game, standoff, enemy);
   }
@@ -942,11 +988,14 @@ function nearestOpenTo(game, target) {
 }
 
 /**
- * 与敌人的最小安全间距：双弹威胁敌人(过载中或过载流冷却就绪)双弹难躲，需拉到 6 格外；
- * 隐身敌人 5 格；普通敌人 4 格。5~6 格是子弹约 3 帧到达的距离，配合横移刚好够躲。
+ * 与敌人的最小安全间距：
+ * - 双弹威胁(已过载/过载就绪)：6 格(双弹随时来，最危险)；
+ * - overload 流但冷却中：5 格(冷却好就双弹，不能贴身缠斗，保守周旋 mat_D9W)；
+ * - 隐身敌人：5 格；普通敌人：4 格。5~6 格是子弹约 3 帧到达的距离，配合横移刚好够躲。
  */
 function safeStandoffDistance(enemy) {
   if (enemyDoubleLaneThreat(enemy)) return 6;
+  if (enemyIsOverloadType(enemy)) return 5;
   if (enemy && enemy.skill && enemy.skill.type === "cloak") return 5;
   return 4;
 }
@@ -956,25 +1005,29 @@ function safeStandoffDistance(enemy) {
  * 子弹 2 格/帧 + 我转向 1 帧：3 格内只要需要转向就躲不掉，故普通敌人 d<=3 即死区。
  * 双弹威胁敌人(过载中 或 过载流冷却就绪)：一帧双弹走"正行/列+相邻±1行/列"，
  * d<=4 一律死区；standoff 内且落在双弹覆盖带、又无法一步横向跨出覆盖带(走廊夹死)亦为死区。
- * 石墙遮挡豁免：敌我之间有墙、敌人当前及移动一步后都打不到 next 时，那条"近距"其实安全(子弹被墙吃掉)，
- * 不算死区——否则会因曼哈顿很近就不敢走，明明有墙挡着却对峙空转(mat_7JO 卡 100+ 帧不去吃 [1,10] 星)。
+ * overload 流(哪怕此刻冷却中)：敌可"错位一列"站位，过载副弹专打相邻列(mat_4YF 敌[14,8]站我[15,10]相邻列，
+ * 过载副弹走 x=15 把我秒)。故对 overload 流敌人，落在其双弹覆盖带(相邻±1)且 standoff 内、无法跨出也判死区——
+ * 逼自己离开相邻列到 dx>=2 的安全列，不在 overload 敌身边的副弹道上逗留。
+ * 石墙遮挡豁免：敌我之间有墙、敌人当前及移动一步后都打不到 next 时，那条"近距"其实安全(子弹被墙吃掉)。
  */
 function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
   const d = manhattan(next, enemyPos);
-  const doubleLane = enemyDoubleLaneThreat(enemy);
+  const doubleLane = enemyDoubleLaneThreat(enemy);   // 真实双弹威胁(已过载/就绪) -> d<=4 一律死区
+  const overloadType = enemyIsOverloadType(enemy);    // overload 流(含冷却中) -> 覆盖带逗留也危险(错位射击)
   // 贴脸 d<=1：无论有无墙，敌一步即可近身/绕射，恒死区
   if (d <= 1) return true;
   // 石墙完全遮挡：敌当前打不到 next、且敌四向移动一步后也仍打不到 next -> 子弹被墙挡，非死区
   if (d >= 2 && wallBlocksEnemyShot(next, enemyPos, game)) {
     // 被墙挡住时只豁免"普通炮线死区"；双弹覆盖带若仍可达则继续走下方判定
-    if (!doubleLane) return false;
+    if (!doubleLane && !overloadType) return false;
   }
   // 普通敌人：贴近 3 格内即死区（转向就被追上）
   if (d <= 3) return true;
   // 双弹威胁敌人：4 格内一律死区
   if (doubleLane && d <= 4) return true;
-  // 双弹威胁敌人：standoff 内 + 落在双弹覆盖带(同行/列或相邻±1) + 无法一步跨出覆盖带 -> 死区(走廊夹死，mat_73I)
-  if (doubleLane && d < standoff && inDoubleLaneBand(enemyPos, next, standoff)) {
+  // 双弹威胁/overload流：standoff 内 + 落在双弹覆盖带(同行/列或相邻±1) + 无法一步跨出覆盖带 -> 死区
+  // (mat_73I 走廊夹死 / mat_4YF 错位副弹列逗留)。overload流即使冷却中也算——敌会突然过载。
+  if ((doubleLane || overloadType) && d < standoff && inDoubleLaneBand(enemyPos, next, standoff)) {
     if (!hasDoubleLaneEscapeAt(next, enemyPos, game)) return true;
   }
   return false;
@@ -1053,8 +1106,8 @@ function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
     return nextStepToFiringLane(myPos, enemyPos, game, standoff);
   }
   if (curD < standoff) {
-    // 太近 -> 朝远离敌人的可走方向后撤一步
-    return stepAwayFromEnemy(myPos, enemyPos, game);
+    // 太近 -> 朝远离敌人的可走方向后撤一步（overload 流额外避开副弹覆盖带相邻列）
+    return stepAwayFromEnemy(myPos, enemyPos, game, enemy);
   }
   // 太远 -> 逼近到 standoff 环
   return nextStepToGoal(myPos, game, enemyPos, function (p) {
@@ -1065,14 +1118,24 @@ function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
 
 /**
  * 选一个远离敌人、且不撞进敌方炮线的相邻后撤格。
+ * 对 overload 流敌人：重罚仍留在其双弹覆盖带(相邻±1行/列)的后撤格，奖励跨出覆盖带的格——
+ * 否则只按"远离+离边"打分会在副弹列上下挪(mat_4YF 在 x=15 副弹列徘徊被错位双弹秒)。
  */
-function stepAwayFromEnemy(myPos, enemyPos, game) {
+function stepAwayFromEnemy(myPos, enemyPos, game, enemy) {
+  const overloadType = enemyIsOverloadType(enemy);
   let best = null;
   let bestScore = -9999;
   for (let i = 0; i < DIRS.length; i++) {
     const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
     if (!isPassable(game, p, enemyPos)) continue;
-    const score = manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    let score = manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    if (overloadType) {
+      // 跨出双弹覆盖带(既不同行±1也不同列±1)大幅加分，仍在覆盖带内则减分，逼自己离开副弹道
+      const dx = Math.abs(enemyPos[0] - p[0]);
+      const dy = Math.abs(enemyPos[1] - p[1]);
+      if (dx >= 2 && dy >= 2) score += 10;
+      else score -= 6;
+    }
     if (score > bestScore) {
       bestScore = score;
       best = p;
@@ -1579,6 +1642,8 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
   if (enemy.status && enemy.status.overloaded) return null; // 过载敌人近距太危险，交给躲避/拉距离，不站着对枪
+  // overload 流敌人(哪怕此刻冷却中)：近距守线对枪换不过——我开一发它冷却好就双弹回敬，应拉开距离抢星而非贴脸对射(mat_D9W)
+  if (enemyIsOverloadType(enemy)) return null;
   if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
   // 放宽："即将同线"也备战——距离<=4 就考虑(原<=3过严，常来不及转炮口)。
   if (manhattan(me.tank.position, enemyPos) > 4) return null;
