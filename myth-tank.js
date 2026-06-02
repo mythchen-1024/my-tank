@@ -1139,7 +1139,7 @@ function chooseStep(me, enemy, game, enemyPos, state) {
   }
 
   // 4. 无目标：虚拟巡逻，绝不原地空转（mat_EAL9/mat_DXFuNn8）
-  const vt = virtualPatrolTarget(me, game, state);
+  const vt = virtualPatrolTarget(me, game, state, enemy);
   if (vt) {
     const step = nextStepToward(myPos, vt, game, null);
     if (step && !stepIntoSealedDeadEnd(step, enemyPos, game)) return step;
@@ -1173,11 +1173,16 @@ function safestNonDeadEndStep(myPos, game, enemyPos) {
  * 虚拟巡逻目标：无真星星时给坦克一个移动目标，避免原地空转挨打。
  * 目标"粘性"：一旦选定就持续走向它直到到达(或失效/逼近危险)，再换下一个，避免每帧重选导致来回横跳。
  * 选点：四象限中心的开阔格里，离我足够远(保证移动)、且远离隐身敌人最后已知位置。
+ *
+ * overload 流优化（mat_KxY8/mat_C5iE）：敌从对角逼近时，我会被推进同侧墙角来回震荡。
+ * 对 overload 流，给"在敌方对侧象限"的锚点额外加分，驱动绕到敌人背面开阔地而非同侧徘徊。
+ * 同时对"贴地图边缘(distanceFromEdges<=2)"的锚点降权，避免选进死角。
  */
-function virtualPatrolTarget(me, game, state) {
+function virtualPatrolTarget(me, game, state, enemy) {
   const myPos = me.tank.position;
   const danger = state && state.lastEnemyPos && ((game.frames || 0) - state.lastEnemySeenFrame <= 12)
     ? state.lastEnemyPos : null;
+  const enemyPos = enemy && enemy.tank ? enemy.tank.position : null;
 
   // 已有粘性目标且仍有效(未到达、可通行、不贴危险点) -> 继续用，保持稳定航向
   if (state && state.patrolTarget) {
@@ -1189,6 +1194,7 @@ function virtualPatrolTarget(me, game, state) {
   }
 
   const w = game.map.length, h = game.map[0].length;
+  const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
   const ax = [Math.floor(w / 4), Math.floor(w * 3 / 4)];
   const ay = [Math.floor(h / 4), Math.floor(h * 3 / 4)];
   const anchors = [];
@@ -1197,13 +1203,27 @@ function virtualPatrolTarget(me, game, state) {
     if (o) anchors.push(o);
   }
   if (anchors.length === 0) return null;
+
+  const isOverload = enemyIsOverloadType(enemy);
+
   let best = null, bestScore = -9999;
   for (let i = 0; i < anchors.length; i++) {
     const p = anchors[i];
     const distMe = manhattan(p, myPos);
     if (distMe < 4) continue; // 太近的不作为目标(到了就停=空转)
     const dangerScore = danger ? manhattan(p, danger) * 2 : 0;
-    const score = dangerScore + distMe + distanceFromEdges(p, game);
+    const edgeD = distanceFromEdges(p, game);
+    // overload 流：贴边锚点降权(-8)；对侧象限加分(+6)，驱动绕到敌人背面
+    let overloadBonus = 0;
+    if (isOverload && enemyPos) {
+      if (edgeD <= 2) overloadBonus -= 8; // 贴墙角落降权，避免往死角走
+      // 对侧象限：x 方向对侧 + y 方向对侧各 +3
+      const oppX = (enemyPos[0] > cx) ? p[0] < cx : p[0] > cx;
+      const oppY = (enemyPos[1] > cy) ? p[1] < cy : p[1] > cy;
+      if (oppX) overloadBonus += 3;
+      if (oppY) overloadBonus += 3;
+    }
+    const score = dangerScore + distMe + edgeD + overloadBonus;
     if (score > bestScore) { bestScore = score; best = p; }
   }
   if (best && state) state.patrolTarget = best; // 记住，保持航向
@@ -1392,15 +1412,61 @@ function isStarGuardTrap(enemyPos, enemy, starPos) {
 }
 
 /**
- * BFS 寻找能打到敌人的射击轨道的下一步走位（不进入比 standoff 更近的死区）
+ * BFS 寻找能打到敌人的射击轨道的下一步走位（不进入比 standoff 更近的死区）。
+ *
+ * 先手优化：在多个等距轨道格中，优先选"走过去后我已对准敌人"的格——省去一帧转向，
+ * 避免逼近途中方向不对被敌人抢先开炮（mat_CD9x：我从右侧逼近，走到同行时朝 right 背对敌）。
+ * 具体打分：走过去后的 clearShotDirection = 当前行进方向 -> +4（原地就能开炮）；
+ *           走过去后需要转 1 次 -> +0；其余 -> -4。
  */
 function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
-  const minD = Math.max(3, standoff - 1); // 轨道点不能比安全站位近太多
-  return nextStepToGoal(myPos, game, enemyPos, function (p) {
-    if (samePos(p, myPos)) return false;
+  const minD = Math.max(3, standoff - 1);
+  // 收集所有候选轨道格（BFS 层序，记录到达每格的第一步和步数）
+  const w = game.map.length, h = game.map[0].length;
+  const queue = [myPos];
+  const seen = {}, dist = {}, firstStep_ = {};
+  const startKey = key(myPos);
+  seen[startKey] = true; dist[startKey] = 0;
+  let candidates = [], minDist = 9999;
+
+  for (let qi = 0; qi < queue.length; qi++) {
+    const p = queue[qi];
+    const pd = dist[key(p)];
+    if (pd > minDist + 1) break; // 只找最近的一批
     const d = manhattan(p, enemyPos);
-    return d >= minD && d <= 9 && !!clearShotDirection(p, enemyPos, game);
-  });
+    if (!samePos(p, myPos) && d >= minD && d <= 9 && clearShotDirection(p, enemyPos, game)) {
+      if (pd <= minDist) { minDist = pd; candidates.push(p); }
+    }
+    for (let i = 0; i < DIRS.length; i++) {
+      const n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
+      const nk = key(n);
+      if (seen[nk]) continue;
+      if (n[0] < 0 || n[1] < 0 || n[0] >= w || n[1] >= h) continue;
+      if (!isPassable(game, n, enemyPos)) continue;
+      seen[nk] = true;
+      dist[nk] = pd + 1;
+      // 记录到达 n 的第一步
+      firstStep_[nk] = samePos(p, myPos) ? n : firstStep_[key(p)];
+      queue.push(n);
+    }
+  }
+  if (candidates.length === 0) return null;
+
+  // 对候选格按"走过去后是否对准敌人"打分
+  let best = null, bestScore = -9999;
+  for (let i = 0; i < candidates.length; i++) {
+    const c = candidates[i];
+    const ck = key(c);
+    const step = samePos(c, myPos) ? c : (firstStep_[ck] || c);
+    const lineDir = clearShotDirection(c, enemyPos, game);
+    // 走到 c 的行进方向（第一步方向）
+    const moveDir = directionBetween(myPos, step);
+    // 若走到 c 后 lineDir 就是我到达时的朝向（即行进中已对准）-> 无需再转向
+    const alreadyAimed = lineDir === moveDir ? 4 : 0;
+    const score = alreadyAimed + distanceFromEdges(c, game);
+    if (score > bestScore) { bestScore = score; best = step; }
+  }
+  return best;
 }
 
 /**
@@ -1412,7 +1478,8 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
  *   C. 太远(d > standoff+2)    → 逼近到 standoff 环（BFS 寻路）
  *
  * overload 流特例：逼近会穿过其行/列、走进副弹覆盖带或贴墙副弹行陷阱（mat_LBH）。
- * 仅允许路径 A（太近时后撤），路径 C（逼近）直接禁止，交给上层巡逻/抢星保持机动。
+ * 路径 B 调 nextStepToFiringLane 可能选"走过去对准"的格，同样有向敌正列逼近的风险。
+ * 对 overload 流，路径 B 和路径 C 均禁止，交给上层 bandEscape/bushStep 保持机动。
  */
 function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
   const curD = manhattan(myPos, enemyPos);
@@ -1423,7 +1490,10 @@ function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
   }
 
   // 路径 B：已在安全环带内 → 找射击轨道（在此停留，不贴近）
+  // overload 流：路径 B 调 nextStepToFiringLane 会选"走过去对准"的格，可能往敌正列方向逼近（副弹陷阱）。
+  // 对 overload 流同样禁止路径 B，交给上层 bandEscape/bushStep 保持机动（与路径 C 一致）。
   if (curD <= standoff + 2) {
+    if (enemyIsOverloadType(enemy)) return null;
     return nextStepToFiringLane(myPos, enemyPos, game, standoff);
   }
 
