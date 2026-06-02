@@ -282,5 +282,14 @@ class Game {
   frames;
 }
 
-// 导出为空，仅用于类型提示
-module.exports = {};
+// 导出为模块，供 JSDoc 引用以实现 IDE 智能提示和跳转
+module.exports = {
+  Bullet,
+  TankState,
+  SkillInfo,
+  EffectsInfo,
+  StatusInfo,
+  Me,
+  Enemy,
+  Game
+};

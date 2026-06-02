@@ -135,7 +135,10 @@ function onIdle(me, enemy, game) {
 
   // 1. 异常状态拦截：如果处于眩晕或冰冻状态，无法操作，直接返回
   // if (me.status && (me.status.stunned || me.status.frozen)) return;
-  if (me.status && me.status.frozen) return;
+  if (me.status && me.status.frozen) {
+    me.speak("我被冰冻了");
+    return;
+  }
 
   // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
@@ -258,6 +261,7 @@ function onIdle(me, enemy, game) {
   if (lateAction) {
     // 统一执行最终裁决出的最优后段战术，便于后期接入决策日志 (Trace) 和统一打分门控。
     lateAction.exec();
+    return;
   }
 }
 
@@ -290,15 +294,38 @@ let MATCH_STATE = null;
 
 /**
  * 获取本局持久状态。靠帧数倒退判断新对局并重置。
- * - assassinBanned: 本局是否已禁用传送刺杀（敌方展示过躲刺杀子弹的反应）
- * - pendingAssassin: 最近一次传送刺杀的跟踪信息 { dir, targetPos, frame }
- * - lastEnemyPos / lastEnemySeenFrame: 敌人最后一次可见的位置与帧（隐身后据此避让）
- * - shortIntent: 短期意图缓存，只保留 2~4 步的低风险连续动作
+ * 状态字段详细说明：
+ * - lastFrame: 上次记录的帧数，用于判定是否进入了新对局（帧数倒退意味着新对局）
+ * - assassinBanned: 布尔值，本局是否已禁用传送刺杀（如发现敌方有躲避刺杀的反应则禁用）
+ * - pendingAssassin: 对象或 null，最近一次传送刺杀的跟踪信息 { dir, targetPos, frame }
+ * - lastEnemyPos: 数组 [x, y] 或 null，敌人最后一次可见的位置（隐身或进草丛后依然保留记忆供避让等策略使用）
+ * - lastEnemySeenFrame: 数字，敌人最后一次可见时的帧数
+ * - lastMyPos: 数组 [x, y] 或 null，我方上一帧的坐标，用于判断是否卡住
+ * - lastMyPos2: 数组 [x, y] 或 null，我方上上帧的坐标，用于判断是否在两个格子间反复横跳（震荡死循环）
+ * - stuckFrames: 数字，记录当前处于"卡住"（原地不动或反复震荡）状态的连续帧数
+ * - patrolTarget: 数组 [x, y] 或 null，当前巡逻的目标坐标
+ * - shortIntent: 对象或 null，短期意图缓存，用于保留 2~4 步的低风险连续动作（例如 { kind, target, createdFrame, expireFrame, stepsLeft }）
+ * - lastEvadeAxis: 字符串 "x" 或 "y"，或 undefined，记录上一次躲避移动所在的轴，防止在角落被封死时反复无意义同轴移动
+ * - enemyFleeFrames: 数字，记录敌人连续"背对逃跑"的帧数（连续逃跑一定帧数会被判定为跑路流）
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
+  // 初始话，重置上一局帧数
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, lastMyPos2: null, stuckFrames: 0, patrolTarget: null, shortIntent: null, lastEvadeAxis: undefined, enemyFleeFrames: 0 };
+    MATCH_STATE = {
+      lastFrame: frame,
+      assassinBanned: false,
+      pendingAssassin: null,
+      lastEnemyPos: null,
+      lastEnemySeenFrame: -999,
+      lastMyPos: null,
+      lastMyPos2: null,
+      stuckFrames: 0,
+      patrolTarget: null,
+      shortIntent: null,
+      lastEvadeAxis: undefined,
+      enemyFleeFrames: 0
+    };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
@@ -409,19 +436,30 @@ function trackEnemy(state, enemyTank, myPos, game) {
   if (enemyTank && enemyTank.position) {
     state.lastEnemyPos = enemyTank.position.slice();
     state.lastEnemySeenFrame = (game && game.frames) || 0;
-    // 逃跑检测：敌在同行/列视线内，朝向却背对我
+    // 逃跑检测：只要敌人的朝向会让他进一步远离我，就算作逃跑（不再局限于同行同列）
     if (myPos) {
       const ep = enemyTank.position;
+      // dx（横坐标差）表示敌人和我方在水平（x轴）上的相对距离和方向。
+      //    dx > 0 意味着敌人在我的右边。
+      //    dx < 0 意味着敌人在我的左边。
+      //    dx === 0 意味着敌我处于同一列（垂直共线）。
+      // dy（纵坐标差）表示敌人和我方在垂直（y轴）上的相对距离和方向。
+      //    dy > 0 意味着敌人在我的下方。
+      //    dy < 0 意味着敌人在我的上方。
+      //    dy === 0 意味着敌我处于同一行（水平共线）。
       const dx = ep[0] - myPos[0], dy = ep[1] - myPos[1];
-      // 同行或同列才有"背对"意义（不同线就不算逃跑）
-      const sameLine = dx === 0 || dy === 0;
-      if (sameLine) {
-        const towardMe = dx === 0 ? (dy > 0 ? "up" : "down") : (dx > 0 ? "left" : "right");
-        const opposite = { up: "down", down: "up", left: "right", right: "left" };
-        const fleeing = enemyTank.direction === opposite[towardMe];
-        state.enemyFleeFrames = fleeing ? (state.enemyFleeFrames || 0) + 1 : 0;
+      
+      const isMovingAway = 
+        (enemyTank.direction === "right" && dx > 0) ||
+        (enemyTank.direction === "left" && dx < 0) ||
+        (enemyTank.direction === "down" && dy > 0) ||
+        (enemyTank.direction === "up" && dy < 0);
+
+      if (isMovingAway) {
+        state.enemyFleeFrames = (state.enemyFleeFrames || 0) + 1;
       } else {
-        state.enemyFleeFrames = (state.enemyFleeFrames || 0); // 不同线不累计也不清零
+        // 如果他不仅不逃，反而朝向我这边，或者停在角落准备对枪，则清零
+        state.enemyFleeFrames = 0;
       }
     }
   } else {
@@ -2769,11 +2807,15 @@ function inferOverloadPairedBullet(enemy, bullets) {
   //   - 敌仍在可见弹车道(可见主弹) -> 配对副弹必在 +1，补单侧(不过度保守)；
   //   - 否则(可见副弹 或 敌已垂直移开) -> 真实配对弹在 -1 或 +1 不确定，两侧都补，保证真实弹必被覆盖。
   const lanes = (enemyLane === visLane) ? [visLane + 1] : [visLane - 1, visLane + 1];
-  return lanes.map(lane => ({
+  const inferredBullets = lanes.map(lane => ({
     position: horizontal ? [b.position[0], lane] : [lane, b.position[1]],
     direction: dir,
     _inferred: true
   }));
+
+  // 让坦克在画面上喊话，方便我们在看录像时知道哪一帧触发了推断
+  me.speak("检测到双弹!");
+  return inferredBullets;
 }
 
 /**
