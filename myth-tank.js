@@ -1712,9 +1712,15 @@ function findBulletDodge(me, enemy, game, enemyPos) {
       if (incomingFrames < 1) continue;
     }
 
-    // 打分：当前朝向就能走 > 远离边缘 > 靠近星星。确保确定性、抑制抖动。
+    // 打分：当前朝向就能走 > 逃生开口数 > 远离边缘 > 靠近星星
+    // 死胡同重罚：开口<=1 时后续无法横移脱困，连续躲避会越走越深进墙角
+    // openExits * 8        开口越多越安全（逃生空间奖励）
+    // deadEndPenalty -150  开口 ≤1 时重罚（死胡同）
+    // 墙角（1个开口）= -150 + 8 + edge分 ≈ 很低分；沿底边走（2个开口）= 16 + edge分，更高 → 会优先选择沿图边缘绕走，而非钻进角落。
     const facing = needTurn ? 0 : 100;
-    const score = facing + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+    const openExits = openNeighborCount(p, game);
+    const deadEndPenalty = openExits <= 1 ? -150 : 0;
+    const score = facing + openExits * 8 + deadEndPenalty + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
     if (score > bestScore) {
       bestScore = score;
       best = p;
