@@ -1677,6 +1677,39 @@ function findBulletDodge(me, enemy, game, enemyPos) {
 }
 
 /**
+ * 时序躲避存在性判定：从 myPos(车头 myDir) 面对给定子弹集，是否存在"来得及"脱离的相邻格。
+ * 完全复用 findBulletDodge 的时序铁律（朝向即脱离 incoming>=1；需转向 incoming>=3 才不会在转向帧被命中），
+ * 但只返回布尔值，供"先射后走"在开火预演后复用——子弹集为推进过的快照即可。
+ * 子弹集已含过载配对弹(collectEnemyBullets 推断)，因此多子弹/双弹一并纳入时序校验。
+ */
+function hasTimedDodge(myPos, myDir, bullets, game, enemyPos, enemyTank) {
+  const list = bullets || [];
+  if (!anyBulletThreatens(list, myPos, game)) return true; // 当前格本就不被任何子弹威胁
+  const incoming = minBulletFramesTo(list, myPos, game);
+  if (incoming < 0) return true;
+
+  // 威胁我的子弹飞行方向集合：排除"顺向逃"（2格/帧必被追上）
+  const threatDirs = {};
+  for (let i = 0; i < list.length; i++) {
+    if (bulletThreatens(list[i], myPos, game)) threatDirs[list[i].direction] = true;
+  }
+
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(list, p, game)) continue;     // 落点必须脱离所有子弹弹道
+    if (enemyAimsAt(p, enemyTank, game)) continue;        // 落点不能正撞敌炮口
+    if (threatDirs[d.name]) continue;                     // 不顺着来袭子弹方向逃
+    const needTurn = d.name !== myDir;
+    if (needTurn) { if (incoming < 3) continue; }          // 先转后走：转向帧不能被命中
+    else { if (incoming < 1) continue; }
+    return true;                                           // 找到来得及的躲位
+  }
+  return false;
+}
+
+/**
  * 绝境横移：被子弹威胁、findBulletDodge 与传送都救不了时的兜底。
  * 在垂直于来袭子弹方向的两个相邻格里挑一个可走、且本身不在弹道上的，朝它移动（哪怕需转向）。
  * 目的：绝不顺着子弹方向直线逃（必被 2 格/帧子弹追上），横向挣一步仍有活命机会。
@@ -1790,19 +1823,15 @@ function shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, e
 
   const bullets = enemyBullets || [];
   const incoming = minBulletFramesTo(bullets, me.tank.position, game);
-  if (incoming < 2) return false; // 来不及"开火再躲"，老实躲
+  if (incoming < 2) return false; // 子弹 0~1 帧即到，开火占掉本帧必来不及躲，老实躲
 
-  // 预演：开火后下一帧，子弹各推进 BULLET_SPEED 格，检查我是否仍有脱离弹道的相邻格
+  // 时序验算（用户要求）：开火占掉当前帧、子弹随之推进 1 帧(BULLET_SPEED 格)，剩下的就是一个
+  // 全新的"躲子弹"问题。我必朝敌(沿弹道轴)，脱离只能垂直=必先转向一帧再移动，所以唯有
+  // "转向帧+移动帧 < 子弹(含双弹)命中帧"时才躲得掉。直接复用 hasTimedDodge 的时序铁律
+  // (需转向要求剩余 incoming>=3，等价于开火前 incoming>=4)对**推进后的全部子弹**(已含过载配对弹)
+  // 做存在性校验：开火后仍存在来得及的躲位才值得先射，否则白送一发又躲不掉(见用户复盘)。
   const advanced = advanceBullets(bullets, BULLET_SPEED);
-  const myPos = me.tank.position;
-  for (let i = 0; i < DIRS.length; i++) {
-    const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
-    if (!isPassable(game, p, enemyPos)) continue;
-    if (anyBulletThreatens(advanced, p, game)) continue;
-    if (enemyAimsAt(p, enemyTank, game)) continue;
-    return true; // 开火后下一帧仍有活路 -> 值得先射一发
-  }
-  return false;
+  return hasTimedDodge(me.tank.position, me.tank.direction, advanced, game, enemyPos, enemyTank);
 }
 
 /**
