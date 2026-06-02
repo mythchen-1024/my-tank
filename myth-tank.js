@@ -305,12 +305,27 @@ function onIdle(me, enemy, game) {
     const safeInBush = !anyBulletThreatens(enemyBullets, myPos, game) &&
       (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&     // 敌不贴脸(贴脸交给下方走位拉开)
       (!enemyTank || !enemyAimsAt(myPos, enemyTank, game)); // 敌没瞄到我(草丛里通常看不见我，双保险)
-    if (safeInBush) return; // 蹲草丛不动，等星刷新由 step9 findStarTeleport 闪现抢
+    if (safeInBush) {
+      primeShortIntent(state, "hold", myPos, (game && game.frames) || 0, 3);
+      return; // 蹲草丛不动，等星刷新由 step9 findStarTeleport 闪现抢
+    }
+  }
+
+  const shortIntent = resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state);
+  if (shortIntent) {
+    if (shortIntent.hold) return;
+    if (state.stuckFrames >= 2) {
+      clearShortIntent(state);
+      breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+      return;
+    }
+    moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
+    return;
   }
 
   // 10. 战术走位：基于 BFS 寻路（优先星星 -> 射击轨道 -> 靠近敌人 -> 地图中心）
   // 安全站位：对过载/隐身敌人保持更大间距，且只走"走过去后仍能躲开敌方子弹"的格子
-  const step = chooseStep(me, enemy, game, enemyPos, state);
+  const step = chooseStep(me, enemy, game, enemyPos, state, enemyBullets);
   if (step) {
     // 防靠墙空转：已连续多帧原地未动时，强制打破死循环——朝向可直接走就走，否则确定性转向一个可通行安全方向
     if (state.stuckFrames >= 2) {
@@ -380,7 +395,7 @@ let MATCH_STATE = null;
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, lastMyPos2: null, stuckFrames: 0, patrolTarget: null, lastEvadeAxis: undefined, enemyFleeFrames: 0 };
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, lastMyPos2: null, stuckFrames: 0, patrolTarget: null, shortIntent: null, lastEvadeAxis: undefined, enemyFleeFrames: 0 };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
@@ -401,6 +416,77 @@ function trackStuck(state, myPos) {
   }
   state.lastMyPos2 = state.lastMyPos ? state.lastMyPos.slice() : null;
   state.lastMyPos = myPos.slice();
+}
+
+function clearShortIntent(state) {
+  if (state) state.shortIntent = null;
+}
+
+function primeShortIntent(state, kind, target, frame, steps) {
+  if (!state || !target) return;
+  state.shortIntent = {
+    kind,
+    target: target.slice(),
+    createdFrame: frame,
+    expireFrame: frame + steps,
+    stepsLeft: steps,
+  };
+}
+
+function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state) {
+  const intent = state && state.shortIntent;
+  if (!intent) return null;
+
+  const frame = (game && game.frames) || 0;
+  if (intent.expireFrame !== undefined && frame > intent.expireFrame) {
+    clearShortIntent(state);
+    return null;
+  }
+  if (intent.stepsLeft !== undefined && intent.stepsLeft <= 0) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  const myPos = me.tank.position;
+  const enemyPos = enemyTank ? enemyTank.position : null;
+  const bullets = enemyBullets || [];
+
+  if (intent.kind === "hold") {
+    const stillHidden = iAmHidden(me, game) && !game.star && teleportReady(me) &&
+      (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&
+      (!enemyTank || !enemyAimsAt(myPos, enemyTank, game)) &&
+      !anyBulletThreatens(bullets, myPos, game);
+    if (!stillHidden) {
+      clearShortIntent(state);
+      return null;
+    }
+    intent.stepsLeft -= 1;
+    if (intent.stepsLeft <= 0) clearShortIntent(state);
+    return { hold: true };
+  }
+
+  if (!intent.target || !isPassable(game, intent.target, enemyPos)) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  const step = nextStepToward(myPos, intent.target, game, enemyPos);
+  if (!step) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  const standoff = safeStandoffDistance(enemy);
+  if (!isPassable(game, step, enemyPos) || enemyAimsAt(step, enemyTank, game) ||
+      stepIntoBulletPath(bullets, step, game) ||
+      (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff))) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  intent.stepsLeft -= 1;
+  if (intent.stepsLeft <= 0) clearShortIntent(state);
+  return { step };
 }
 
 /**
@@ -1106,7 +1192,7 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist, enemy) {
  * 各分支的死区复检统一走这里，消除重复的 stepEntersKillZone + stepIntoSealedDeadEnd 调用。
  * allowStarDeadEnd：星就在死格里时仍允许进入（不因噎废食）。
  */
-function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadEnd) {
+function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadEnd, enemyBullets) {
   if (!next) return false;
   if (enemyPos && stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff)) return false;
   if (stepIntoSealedDeadEnd(next, enemyPos, game) && !allowStarDeadEnd) return false;
@@ -1115,10 +1201,11 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   if (enemyPos && enemyIsOverloadType(enemy) && !allowStarDeadEnd) {
     if (!hasDoubleLaneEscapeAt(next, enemyPos, game) && inDoubleLaneBand(enemyPos, next, standoff + 2)) return false;
   }
+  if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
   return true;
 }
 
-function chooseStep(me, enemy, game, enemyPos, state) {
+function chooseStep(me, enemy, game, enemyPos, state, enemyBullets) {
   const myPos = me.tank.position;
   const standoff = safeStandoffDistance(enemy);
   const fleeMode = !!(state && state.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
@@ -1128,7 +1215,8 @@ function chooseStep(me, enemy, game, enemyPos, state) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
     if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) && starPath.step) {
       const starIsDeadEnd = samePos(starPath.step, game.star);
-      if (isSafeStep(starPath.step, myPos, enemyPos, game, enemy, standoff, starIsDeadEnd)) {
+      if (isSafeStep(starPath.step, myPos, enemyPos, game, enemy, standoff, starIsDeadEnd, enemyBullets)) {
+        primeShortIntent(state, "star", game.star, (game && game.frames) || 0, 4);
         return starPath.step;
       }
       // 追星会撞进死区/死胡同：放弃这一步，转入安全站位逻辑重新决策
@@ -1140,28 +1228,28 @@ function chooseStep(me, enemy, game, enemyPos, state) {
     // overload 流：不找射击轨道贴近（副弹专打相邻列，mat_4YF 错位射击），交 standoff 保持间距
     if (!enemyIsOverloadType(enemy)) {
       const laneStep = nextStepToFiringLane(myPos, enemyPos, game, standoff);
-      if (isSafeStep(laneStep, myPos, enemyPos, game, enemy, standoff, false)) return laneStep;
+      if (isSafeStep(laneStep, myPos, enemyPos, game, enemy, standoff, false, enemyBullets)) return laneStep;
     }
 
     // 维持安全站位（三条路径见 nextStepToStandoff 注释）
-    const standoffStep = nextStepToStandoff(myPos, enemyPos, game, standoff, enemy);
-    if (isSafeStep(standoffStep, myPos, enemyPos, game, enemy, standoff, false)) return standoffStep;
+    const standoffStep = nextStepToStandoff(myPos, enemyPos, game, standoff, enemy, enemyBullets);
+    if (isSafeStep(standoffStep, myPos, enemyPos, game, enemy, standoff, false, enemyBullets)) return standoffStep;
 
     // standoffStep 撞死区/死胡同：改走开阔格（mat_2Wz 敌同行逼近把我推进 [17,1] 死角）
     if (standoffStep && stepIntoSealedDeadEnd(standoffStep, enemyPos, game)) {
-      const openStep = safestNonDeadEndStep(myPos, game, enemyPos);
+      const openStep = safestNonDeadEndStep(myPos, game, enemyPos, enemyBullets);
       if (openStep) return openStep;
     }
 
     // 握双弹时先横向脱离双弹覆盖带（mat_Jov6 还回头/mat_EUR 副弹列逃被追）
     if (enemyDoubleLaneThreat(enemy)) {
-      const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game);
+      const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game, enemyBullets);
       if (bandEscape) return bandEscape;
     }
 
     // overload 流无星空窗期：奔安全草丛蹲守，保留传送等星刷新再闪现抢分
     if (enemyIsOverloadType(enemy) && !game.star) {
-      const bushStep = nextStepToSafeBush(me, enemy, game, enemyPos, standoff);
+      const bushStep = nextStepToSafeBush(me, enemy, game, enemyPos, standoff, enemyBullets);
       if (bushStep) return bushStep;
     }
   }
@@ -1174,9 +1262,9 @@ function chooseStep(me, enemy, game, enemyPos, state) {
       if (zig) return zig;
     }
     // 3b. 通用伏击线：与最后已知位置同行/列且无墙时横移离线（mat_E3G）
-    const lineEscape = escapeAmbushLine(myPos, state.lastEnemyPos, game);
+    const lineEscape = escapeAmbushLine(myPos, state.lastEnemyPos, game, enemyBullets);
     if (lineEscape) return lineEscape;
-    const avoidStep = nextStepAvoiding(myPos, state.lastEnemyPos, game, standoff + 1);
+    const avoidStep = nextStepAvoiding(myPos, state.lastEnemyPos, game, standoff + 1, enemyBullets, enemy);
     if (avoidStep) return avoidStep;
   }
 
@@ -1184,10 +1272,19 @@ function chooseStep(me, enemy, game, enemyPos, state) {
   const vt = virtualPatrolTarget(me, game, state, enemy);
   if (vt) {
     const step = nextStepToward(myPos, vt, game, null);
-    if (step && !stepIntoSealedDeadEnd(step, enemyPos, game)) return step;
-    const openStep = safestNonDeadEndStep(myPos, game, enemyPos);
-    if (openStep) return openStep;
-    if (step) return step; // 实在没有更好的，仍走原巡逻步
+    if (step && !stepIntoSealedDeadEnd(step, enemyPos, game)) {
+      primeShortIntent(state, "patrol", vt, (game && game.frames) || 0, 3);
+      return step;
+    }
+    const openStep = safestNonDeadEndStep(myPos, game, enemyPos, enemyBullets);
+    if (openStep) {
+      primeShortIntent(state, "patrol", vt, (game && game.frames) || 0, 3);
+      return openStep;
+    }
+    if (step) {
+      primeShortIntent(state, "patrol", vt, (game && game.frames) || 0, 2);
+      return step; // 实在没有更好的，仍走原巡逻步
+    }
   }
   // 兜底：往地图中心走
   const center = nearestOpenToCenter(game);
@@ -1198,12 +1295,14 @@ function chooseStep(me, enemy, game, enemyPos, state) {
  * 在四邻里挑一个"非被封锁死胡同"的安全开阔格走一步：优先开口多、离边远、不在敌炮线的格。
  * 用于巡逻/走位即将踏进墙角死路时改道（mat_2Wz）。
  */
-function safestNonDeadEndStep(myPos, game, enemyPos) {
+function safestNonDeadEndStep(myPos, game, enemyPos, enemyBullets) {
   let best = null, bestScore = -9999;
+  const bullets = enemyBullets || [];
   for (let i = 0; i < DIRS.length; i++) {
     const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (stepIntoSealedDeadEnd(p, enemyPos, game)) continue; // 跳过会被封锁的死胡同
+    if (stepIntoBulletPath(bullets, p, game)) continue;
     const sealed = enemyPos && clearShotDirection(enemyPos, p, game) ? -4 : 0; // 敌能直线打到的格降权
     const score = openNeighborCount(p, game) * 3 + distanceFromEdges(p, game) + sealed;
     if (score > bestScore) { bestScore = score; best = p; }
@@ -1301,8 +1400,9 @@ function iAmHidden(me, game) {
  * 返回朝最近安全草丛的下一步；找不到(或我已在草丛里)返回 null，交上层巡逻/兜底。
  * 仅对 overload 流敌人触发，避免对普通敌防过头。
  */
-function nextStepToSafeBush(me, enemy, game, enemyPos, standoff) {
+function nextStepToSafeBush(me, enemy, game, enemyPos, standoff, enemyBullets) {
   const myPos = me.tank.position;
+  const bullets = enemyBullets || [];
   if (tileAt(game, myPos) === "o") return null; // 已在草丛，不必再找
   let bestBush = null, bestD = 9999;
   for (let x = 0; x < game.map.length; x++) {
@@ -1314,6 +1414,7 @@ function nextStepToSafeBush(me, enemy, game, enemyPos, standoff) {
       // 草丛本身不能在敌握弹双弹带/近距死区(躲进去反被秒，mat_EHR 落点不安全的教训)
       if (enemyPos && stepEntersKillZone(myPos, c, enemyPos, game, enemy, standoff)) continue;
       if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, c, standoff)) continue;
+      if (stepIntoBulletPath(bullets, c, game)) continue;
       const d = pathDistance(myPos, c, game, enemyPos);
       if (d < 0) continue;                                  // 不可达
       if (d < bestD) { bestD = d; bestBush = c; }
@@ -1324,11 +1425,12 @@ function nextStepToSafeBush(me, enemy, game, enemyPos, standoff) {
   if (!step || !enemyPos) return step;
   // 奔草丛途中这一步也不许进死区(穿过握弹敌炮线)
   if (stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff)) return null;
+  if (stepIntoBulletPath(bullets, step, game)) return null;
   // 握双弹敌：途中这一步也不要顺着敌人正行/列往敌人方向挪(BFS 可能沿敌列直上)，
   // 宁可这一步先横向脱出双弹带——若该步留在带内且比当前更靠近敌人，改用横移脱带步。
   if (enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, step, standoff) &&
       manhattan(step, enemyPos) < manhattan(myPos, enemyPos)) {
-    const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game);
+    const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game, bullets);
     if (bandEscape) return bandEscape;
     return null; // 没有更好的脱带步，交上层巡逻，别朝握弹敌挪
   }
@@ -1525,12 +1627,12 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
  * 路径 B 调 nextStepToFiringLane 可能选"走过去对准"的格，同样有向敌正列逼近的风险。
  * 对 overload 流，路径 B 和路径 C 均禁止，交给上层 bandEscape/bushStep 保持机动。
  */
-function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
+function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy, enemyBullets) {
   const curD = manhattan(myPos, enemyPos);
 
   // 路径 A：太近 → 后撤
   if (curD < standoff) {
-    return stepAwayFromEnemy(myPos, enemyPos, game, enemy);
+    return stepAwayFromEnemy(myPos, enemyPos, game, enemy, enemyBullets);
   }
 
   // 路径 B：已在安全环带内 → 找射击轨道（在此停留，不贴近）
@@ -1554,13 +1656,15 @@ function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy) {
  * 对 overload 流敌人：重罚仍留在其双弹覆盖带(相邻±1行/列)的后撤格，奖励跨出覆盖带的格——
  * 否则只按"远离+离边"打分会在副弹列上下挪(mat_4YF 在 x=15 副弹列徘徊被错位双弹秒)。
  */
-function stepAwayFromEnemy(myPos, enemyPos, game, enemy) {
+function stepAwayFromEnemy(myPos, enemyPos, game, enemy, enemyBullets) {
   const overloadType = enemyIsOverloadType(enemy);
+  const bullets = enemyBullets || [];
   let best = null;
   let bestScore = -9999;
   for (let i = 0; i < DIRS.length; i++) {
     const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
     if (!isPassable(game, p, enemyPos)) continue;
+    if (stepIntoBulletPath(bullets, p, game)) continue;
     let score = manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
     if (overloadType) {
       // 跨出双弹覆盖带(既不同行±1也不同列±1)大幅加分，仍在覆盖带内则减分，逼自己离开副弹道
@@ -1583,12 +1687,14 @@ function stepAwayFromEnemy(myPos, enemyPos, game, enemy) {
  * mat_EUR 贴 x=16 副弹列顺子弹逃被追)。优先：跨出覆盖带 > 远离边缘 > 当前朝向即可走(省一帧转向)。
  * 只在握双弹(enemyDoubleLaneThreat)时调用；找不到比当前更好的脱离格则返回 null(交巡逻兜底)。
  */
-function escapeDoubleLaneBand(myPos, enemyPos, game) {
+function escapeDoubleLaneBand(myPos, enemyPos, game, enemyBullets) {
   let best = null;
   let bestScore = -9999;
+  const bullets = enemyBullets || [];
   for (let i = 0; i < DIRS.length; i++) {
     const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
     if (!isPassable(game, p, enemyPos)) continue;
+    if (stepIntoBulletPath(bullets, p, game)) continue;
     const dx = Math.abs(enemyPos[0] - p[0]);
     const dy = Math.abs(enemyPos[1] - p[1]);
     const outOfBand = dx >= 2 && dy >= 2; // 既不在(相邻)列也不在(相邻)行 -> 真正跨出双弹覆盖带
@@ -1604,9 +1710,9 @@ function escapeDoubleLaneBand(myPos, enemyPos, game) {
 /**
  * 朝远离某危险点(如隐身敌人最后位置)的方向走一步，保持至少 minDist 间距。
  */
-function nextStepAvoiding(myPos, dangerPos, game, minDist) {
+function nextStepAvoiding(myPos, dangerPos, game, minDist, enemyBullets, enemy) {
   if (manhattan(myPos, dangerPos) >= minDist + 2) return null; // 已经够远，不必特意避让
-  return stepAwayFromEnemy(myPos, dangerPos, game);
+  return stepAwayFromEnemy(myPos, dangerPos, game, enemy, enemyBullets);
 }
 
 /**
@@ -1614,17 +1720,19 @@ function nextStepAvoiding(myPos, dangerPos, game, minDist) {
  * 朝垂直方向走一步彻底离开那条行/列。隐身敌看不见、会沿原线游弋开火，远距也危险。
  * 有石墙挡在中间 -> 那条线其实安全(子弹会被墙吃掉)，返回 null 不避让(避免无谓徘徊、不防过头)。
  */
-function escapeAmbushLine(myPos, dangerPos, game) {
+function escapeAmbushLine(myPos, dangerPos, game, enemyBullets) {
   const lineDir = clearShotDirection(dangerPos, myPos, game); // 敌->我 无遮挡方向(同行/列且无墙)
   if (!lineDir) return null; // 不同线 或 中间有墙(石墙挡子弹) -> 不必横移
   const sameCol = dangerPos[0] === myPos[0]; // 同列(竖直线) -> 需左右(x)脱离; 同行 -> 上下(y)脱离
   const lateral = sameCol
     ? [{ dx: -1, dy: 0 }, { dx: 1, dy: 0 }]
     : [{ dx: 0, dy: -1 }, { dx: 0, dy: 1 }];
+  const bullets = enemyBullets || [];
   let best = null, bestScore = -9999;
   for (let i = 0; i < lateral.length; i++) {
     const q = [myPos[0] + lateral[i].dx, myPos[1] + lateral[i].dy];
     if (!isPassable(game, q, null)) continue;
+    if (stepIntoBulletPath(bullets, q, game)) continue;
     // 走过去后不能仍与敌最后位置同行/同列(否则没真正离开线)
     if (q[0] === dangerPos[0] || q[1] === dangerPos[1]) continue;
     const score = manhattan(q, dangerPos) + distanceFromEdges(q, game) * 0.5;
@@ -2639,11 +2747,13 @@ function pathDistance(start, target, game, blockPos) {
 function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets) {
   let best = null;
   let bestScore = -9999;
+  const bullets = enemyBullets || [];
   for (let i = 0; i < DIRS.length; i++) {
     const p = [pos[0] + DIRS[i].dx, pos[1] + DIRS[i].dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue;
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
+    if (stepIntoBulletPath(bullets, p, game)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;
