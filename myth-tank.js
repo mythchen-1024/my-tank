@@ -1110,6 +1110,11 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   if (!next) return false;
   if (enemyPos && stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff)) return false;
   if (stepIntoSealedDeadEnd(next, enemyPos, game) && !allowStarDeadEnd) return false;
+  // M1/M2: overload 流时，走进"横向出口<=1格且无法跨出双弹带"的窄兜也视为危险。
+  // 副弹封相邻列时角落里横向根本跑不掉（mat_8xLQ/mat_Ae1A：[17,13]仅[16,13]一个出口被副弹封死）。
+  if (enemyPos && enemyIsOverloadType(enemy) && !allowStarDeadEnd) {
+    if (!hasDoubleLaneEscapeAt(next, enemyPos, game) && inDoubleLaneBand(enemyPos, next, standoff + 2)) return false;
+  }
   return true;
 }
 
@@ -2081,6 +2086,12 @@ function enemyCanFireSoon(enemy) {
 function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!enemyCanFireSoon(enemy)) return null; // 敌人开不了火，无近距威胁
+  // M3: overload 冷却中且场上无己弹 = 空窗期，炮管实际是空的，不算"能立刻开火"的近距威胁，
+  // 允许回敬（mat_Lwm4：对方双弹耗尽后我仍一路侧移躲避，最后被单发打死）。
+  if (enemyIsOverloadType(enemy) &&
+      !(enemy.status && enemy.status.overloaded) &&
+      (enemy.skill && typeof enemy.skill.remainingCooldownFrames === "number" && enemy.skill.remainingCooldownFrames > 0) &&
+      !(enemy.bullet && enemy.bullet.position)) return null;
 
   const myPos = me.tank.position;
   // 必须同线且视线无遮挡
