@@ -1766,13 +1766,25 @@ function hasTimedDodge(myPos, myDir, bullets, game, enemyPos, enemyTank) {
     const d = DIRS[i];
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
-    if (anyBulletThreatens(list, p, game)) continue;     // 落点必须脱离所有子弹弹道
     if (enemyAimsAt(p, enemyTank, game)) continue;        // 落点不能正撞敌炮口
     if (threatDirs[d.name]) continue;                     // 不顺着来袭子弹方向逃
-    const needTurn = d.name !== myDir;
-    if (needTurn) { if (incoming < 3) continue; }          // 先转后走：转向帧不能被命中
-    else { if (incoming < 1) continue; }
-    return true;                                           // 找到来得及的躲位
+
+    // 如果不用转向直接能走，1帧脱离，前提是落点也是安全的
+    if (d.name === myDir) {
+      if (!anyBulletThreatens(list, p, game)) return true;
+      continue;
+    }
+    
+    // 如果需要转向，移动需要 2 帧（第 1 帧转身，第 2 帧离开）。
+    // 【致命漏洞修复】：由于第 1 帧（转身帧）仍停留在当前格子 myPos，
+    // 我们必须保证预演的这批 bullets（此时正处于转身帧开始时刻）不会在这一帧内命中 myPos！
+    if (incoming < 2) continue; // 子弹距离不足2帧，转身时就会被直接打死在原地
+    
+    // 预演子弹再飞 1 帧（模拟完成转身，即将进行 go 的那个帧）
+    const bulletsNext = advanceBullets(list, BULLET_SPEED);
+    if (!stepIntoBulletPath(bulletsNext, p, game) && !anyBulletThreatens(bulletsNext, p, game)) {
+      return true;
+    }
   }
   return false;
 }
@@ -2161,10 +2173,14 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   // shield 流敌人不做近距守线预转，避免主动把自己摆进无收益对枪。
   if (shieldEnemy) return null;
 
-  // 敌人很近(<=3)，预判它将从哪条轴进入我的枪线，提前转炮口对准那个轴向。
+  // 【防回头顿挫限制】：如果敌我不在同一条线上，只有当我方处于相对安全的静止/蹲守状态时，才允许提前预转炮口。
+  // 如果我在移动（比如追星或逃跑），预转炮口会导致坦克停顿1帧，这是致命的。
+  // 因此，如果不在同一直线（clearShotDirection 返回 null），我们直接放弃预转，专注走位。
+  return null;
+  
+  /* 旧版预转逻辑（已注释，防止非同线时错误回头）：
   const dx = enemyPos[0] - myPos[0];
   const dy = enemyPos[1] - myPos[1];
-  // 选”垂直偏移更小”的轴：敌人更快能与我对齐的方向
   if (Math.abs(dx) <= Math.abs(dy)) {
     const dir = dy < 0 ? "up" : "down";
     if (me.tank.direction !== dir) return { dir: dir };
@@ -2173,6 +2189,7 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     if (me.tank.direction !== dir) return { dir: dir };
   }
   return null;
+  */
 }
 
 /**
