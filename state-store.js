@@ -112,8 +112,10 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
     return { hold: true };
   }
 
-  // bush 意图在星星出现后立即作废：让 chooseStepScored 重新评估，优先抢星
-  if (intent.kind === "bush" && game.star) {
+  // 非抢星意图在近距离（≤4步）星星出现后立即作废：让 chooseStepScored 重新评估，优先抢星
+  // bush/patrol/standoff 等意图不应让坦克错过就差几步的星星
+  if (intent.kind !== "star" && intent.kind !== "hold" && game.star &&
+      manhattan(myPos, game.star) <= 4) {
     clearShortIntent(state);
     return null;
   }

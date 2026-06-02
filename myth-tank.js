@@ -864,6 +864,9 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
       if (samePos(step, game.star)) score += 40 * urg; // 直接吃到星满分
       if (clearShotDirection(step, game.star, game)) score += 12 * urg; // 拿到抢星防守线加分
       if (framesLeft <= 30) score += Math.max(0, 18 - ds * 2); // 终局抢星加权
+      // 近距离星紧急度：≤4步时补分，防止攻击提案（lane/standoff）靠 clearShot+方向奖励抢走优先级
+      const myStarDist = manhattan(myPos, game.star);
+      if (myStarDist <= 4) score += Math.max(0, 16 - myStarDist * 3) * urg;
     } else {
       score += Math.max(0, 12 - ds * 2); // 其他移动动作若顺路靠近星也稍微加分
     }

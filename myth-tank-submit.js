@@ -1,7 +1,7 @@
 // ============================================================
 // myth-tank.js — 自动生成，请勿手动编辑
 // 源文件: state-store.js, scoring.js, action-proposals.js, myth-tank.js, decision-engine.js
-// 构建时间: 2026-06-02T16:50:22.987Z
+// 构建时间: 2026-06-02T17:03:22.190Z
 // ============================================================
 // ===== state-store.js =====
 // ============================================================
@@ -116,6 +116,12 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
     intent.stepsLeft -= 1;
     if (intent.stepsLeft <= 0) clearShortIntent(state);
     return { hold: true };
+  }
+
+  // bush 意图在星星出现后立即作废：让 chooseStepScored 重新评估，优先抢星
+  if (intent.kind === "bush" && game.star) {
+    clearShortIntent(state);
+    return null;
   }
 
   if (!intent.target || !isPassable(game, intent.target, enemyPos)) {
@@ -603,7 +609,7 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
       proposals.push(buildProposal('short-intent', function () {
         if (state.stuckFrames >= 2) {
           clearShortIntent(state);
-          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
           return;
         }
         moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
@@ -617,7 +623,7 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
   if (step) {
     proposals.push(buildProposal('scored-move', function () {
       if (state.stuckFrames >= 2) {
-        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
         return;
       }
       moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
@@ -3049,10 +3055,11 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
  *  - 都不安全：挑第一个可走方向转过去（至少打破原地空转）。
  * "安全"= 可通行、不在敌方炮线、不在子弹弹道。
  */
-function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets) {
+function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos) {
   const myPos = me.tank.position;
   const bullets = enemyBullets || [];
-  const safe = (p) => isPassable(game, p, enemyPos) && !enemyAimsAt(p, enemyTank, game) && !anyBulletThreatens(bullets, p, game);
+  // prevPos: 上上帧的坐标（lastMyPos2），排除"回头格"，防止 A↔B 乒乓震荡
+  const safe = (p) => isPassable(game, p, enemyPos) && !enemyAimsAt(p, enemyTank, game) && !anyBulletThreatens(bullets, p, game) && !(prevPos && samePos(p, prevPos));
 
   // 当前朝向可直接走且安全 -> 立刻前进
   const ahead = nextInDirection(myPos, me.tank.direction);
