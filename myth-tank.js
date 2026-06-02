@@ -129,7 +129,7 @@ function onIdle(me, enemy, game) {
   // 跨帧状态：检测敌方是否曾躲过我方刺杀子弹，本局据此禁用刺杀
   const state = getMatchState(game);
   recordAssassinOutcome(state, enemy, enemyTank, game);
-  trackEnemy(state, enemyTank, game);
+  trackEnemy(state, enemyTank, myPos, game);
   trackStuck(state, myPos);
 
   // 1. 异常状态拦截：如果处于眩晕或冰冻状态，无法操作，直接返回
@@ -186,6 +186,16 @@ function onIdle(me, enemy, game) {
   const lineDodge = findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (lineDodge) {
     moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets);
+    return;
+  }
+
+  // 5.5 敌炮管空窗期反击：敌方子弹刚射出（在场但不打我），我与敌同线且炮管就绪时主动开火/转向。
+  // 敌方此刻炮管空了（场上已有其子弹），我可以安全进攻——子弹飞出去期间它无法还手。
+  // (mat_8vg6：敌朝 down 射出子弹，我在敌同列上方，本可转 up 对枪，却被 chooseStep 送走了)
+  const openShot = findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  if (openShot) {
+    if (me.tank.direction === openShot) { me.speak("开炮！！！"); me.fire(); }
+    else turnToward(me, openShot);
     return;
   }
 
@@ -355,6 +365,8 @@ const ASSASSIN_MAX_RANGE = 8;
 const MAX_GAME_FRAMES = 128;
 // 冰冻技能锁定帧数（replay mat_0Wmx 逆向：applied durationFrames:2，被冻 2 帧不能移动/转向）
 const FREEZE_DURATION = 2;
+// 认定对方是"跑路流"的连续背向帧阈值：对方连续 N 帧同线却背对我，视为只逃不战（mat_AAKs "小虾"）
+const ENEMY_FLEE_THRESHOLD = 5;
 
 // ================= 跨帧状态（onIdle 每帧无状态调用，用模块级变量在帧间持久化） =================
 let MATCH_STATE = null;
@@ -368,7 +380,7 @@ let MATCH_STATE = null;
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, lastMyPos2: null, stuckFrames: 0, patrolTarget: null, lastEvadeAxis: undefined };
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, lastMyPos2: null, stuckFrames: 0, patrolTarget: null, lastEvadeAxis: undefined, enemyFleeFrames: 0 };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
@@ -394,10 +406,34 @@ function trackStuck(state, myPos) {
 /**
  * 更新敌人最后可见位置：可见则刷新；不可见(隐身/草丛)则保留旧值供避让。
  */
-function trackEnemy(state, enemyTank, game) {
+/**
+ * 更新敌人最后可见位置，同时追踪"敌方逃跑连续帧"（enemyFleeFrames）。
+ * 逃跑定义：敌可见 + 我与敌同行/列视线清晰（有对枪机会）+ 敌朝向背对我（朝远离我的方向）。
+ * 连续 ENEMY_FLEE_THRESHOLD 帧以上则认定对手是"跑路流"，shouldChaseStar/findStarTeleport 据此
+ * 放宽追星竞争条件——不再等"我比敌更近"才追，直接抢（敌根本不进攻，优先拿分）。
+ */
+function trackEnemy(state, enemyTank, myPos, game) {
   if (enemyTank && enemyTank.position) {
     state.lastEnemyPos = enemyTank.position.slice();
     state.lastEnemySeenFrame = (game && game.frames) || 0;
+    // 逃跑检测：敌在同行/列视线内，朝向却背对我
+    if (myPos) {
+      const ep = enemyTank.position;
+      const dx = ep[0] - myPos[0], dy = ep[1] - myPos[1];
+      // 同行或同列才有"背对"意义（不同线就不算逃跑）
+      const sameLine = dx === 0 || dy === 0;
+      if (sameLine) {
+        const towardMe = dx === 0 ? (dy > 0 ? "up" : "down") : (dx > 0 ? "left" : "right");
+        const opposite = { up: "down", down: "up", left: "right", right: "left" };
+        const fleeing = enemyTank.direction === opposite[towardMe];
+        state.enemyFleeFrames = fleeing ? (state.enemyFleeFrames || 0) + 1 : 0;
+      } else {
+        state.enemyFleeFrames = (state.enemyFleeFrames || 0); // 不同线不累计也不清零
+      }
+    }
+  } else {
+    // 敌不可见时清零（隐身敌不是"逃跑"，是另一种策略）
+    state.enemyFleeFrames = 0;
   }
 }
 
@@ -1080,11 +1116,12 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
 function chooseStep(me, enemy, game, enemyPos, state) {
   const myPos = me.tank.position;
   const standoff = safeStandoffDistance(enemy);
+  const fleeMode = !!(state && state.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
 
   // 1. 追星：下一步不进死区/死胡同（星就在死格里则允许进入）
   if (game.star) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
-    if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy) && starPath.step) {
+    if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) && starPath.step) {
       const starIsDeadEnd = samePos(starPath.step, game.star);
       if (isSafeStep(starPath.step, myPos, enemyPos, game, enemy, standoff, starIsDeadEnd)) {
         return starPath.step;
@@ -1387,13 +1424,15 @@ function hasDoubleLaneEscapeAt(next, enemyPos, game) {
 /**
  * 判断是否值得放弃交战去追星星
  */
-function shouldChaseStar(myPos, enemyPos, game, starPath, enemy) {
+function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) {
   if (!game.star || !starPath || starPath.dist < 0) return false;
   if (!enemyPos) return true; // 看不到敌人必追星星
   // 守星陷阱：敌"此刻握双弹"且星就贴在它的双弹覆盖带里(它在守这颗星)，冲过去抢 = 落进双弹炮线送死
   // (mat_Jov6 星[1,5]紧贴握弹敌[2,4] d=1，我沿副弹行迎敌抢星被秒)。放弃这颗星，交走位拉开/另寻机会。
   if (enemy && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, game.star, 4)) return false;
   if (manhattan(myPos, game.star) <= 5) return true; // 星星很近就去吃
+  // 跑路流：对方连续背对我逃跑，说明它只抢星不打架——我也不用等"比它近"才追，直接跟进抢星(mat_AAKs)
+  if (fleeMode) return true;
 
   const enemyDist = pathDistance(enemyPos, game.star, game, myPos);
   // 如果比敌人更近（或者差不多），就去抢
@@ -2112,6 +2151,45 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
  * 行为：在该线上且已对准 -> 开火（先手）；在该线上未对准 -> 转向对准；
  *      尚未同线但近在 <=3 -> 朝敌人所在的更近轴向预先转炮口。
  */
+/**
+ * 敌炮管空窗期反击：检测到敌方子弹已在场（炮管空了）且方向不威胁我时，主动进攻。
+ *
+ * 逻辑：
+ * - 敌方场上有子弹(enemy.bullet)，说明炮管已空，短期内无法再开火
+ * - 这发子弹方向不朝我（不是打我的，我安全）
+ * - 我与敌方同行/同列视线清晰、炮管就绪、无实弹威胁我
+ * - 则返回应该转向/开火的方向
+ *
+ * 不触发的情况：
+ * - 子弹方向朝我（这发子弹在打我，交给躲避逻辑）
+ * - 过载流敌人握双弹时（虽然场上有一发，可能还有第二发）
+ * - shield 流敌人（开盾会吃掉我这发，不值得）
+ */
+function findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+  if (!enemyTank || !enemyPos) return null;
+  if (!canShoot(me, enemy)) return null;
+  // 必须有敌方子弹在场（炮管空了）
+  const eb = enemy && enemy.bullet;
+  if (!eb || !eb.position) return null;
+  // 子弹不朝我（朝我的交给躲避逻辑，这里只处理"子弹打别处"的窗口）
+  const bulletThreatensMe = bulletThreatens(eb, me.tank.position, game);
+  if (bulletThreatensMe) return null;
+  // 过载流握双弹时不进：场上那发可能是双弹之一
+  if (enemyDoubleLaneThreat(enemy)) return null;
+  // shield 流不进（开盾吃掉我这发）
+  if (enemyHasShieldSkill(enemy)) return null;
+  // 无实弹威胁我
+  if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null;
+  // 同行/同列视线清晰
+  const shotDir = clearShotDirection(me.tank.position, enemyPos, game);
+  if (!shotDir) return null;
+  // 距离合理（太远的不值得浪费一炮）
+  const d = manhattan(me.tank.position, enemyPos);
+  if (d > 10) return null;
+  return shotDir; // 返回应该朝的方向
+}
+
+
 function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
