@@ -2240,15 +2240,20 @@ function bulletThreatens(bullet, pos, game) {
 
 /**
  * 走位安全：走到 cell 这一帧子弹也会前进 BULLET_SPEED 格，判断 cell 是否会被子弹"扫到"。
- * 覆盖两种：cell 当前就在弹道(bulletThreatens)，或子弹推进一帧后正好落在 cell（走过去同帧相撞）。
+ * 覆盖三种：
+ *  1. cell 当前就在弹道(bulletThreatens)；
+ *  2. 子弹推进一帧后正好落在 cell（走过去同帧相撞）；
+ *  3. 子弹当前已在 cell（bulletReachTiles 对 dx=0 返回 -1，bulletThreatens 漏判）。
  * 修复"从安全行/列走进相邻子弹路径被同帧撞死"（mat_1BN/mat_KkKOc/mat_HTmg）。
+ * 修复"子弹停在目标格时走过去送死"（mat_5Otwt1NRz03KNip9H：子弹 dx=0 漏判）。
  */
 function stepIntoBulletPath(bullets, cell, game) {
   const list = bullets || [];
   for (let i = 0; i < list.length; i++) {
     const b = list[i];
     if (!b || !b.position) continue;
-    if (bulletThreatens(b, cell, game)) return true; // 已在弹道
+    if (samePos(b.position, cell)) return true;         // 子弹已在目标格，走过去必被命中
+    if (bulletThreatens(b, cell, game)) return true;    // 已在弹道
     // 子弹推进一帧(2格)后是否落在/扫过 cell
     const d = DIRS[dirIndex(b.direction)];
     if (!d) continue;
