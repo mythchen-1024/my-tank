@@ -1,7 +1,7 @@
 // ============================================================
 // myth-tank.js — 自动生成，请勿手动编辑
 // 源文件: state-store.js, scoring.js, action-proposals.js, myth-tank.js, decision-engine.js
-// 构建时间: 2026-06-02T16:33:23.609Z
+// 构建时间: 2026-06-02T16:50:22.987Z
 // ============================================================
 // ===== state-store.js =====
 // ============================================================
@@ -2366,9 +2366,15 @@ function findBulletDodge(me, enemy, game, enemyPos) {
       if (incomingFrames < 1) continue;
     }
 
-    // 打分：当前朝向就能走 > 远离边缘 > 靠近星星。确保确定性、抑制抖动。
+    // 打分：当前朝向就能走 > 逃生开口数 > 远离边缘 > 靠近星星
+    // 死胡同重罚：开口<=1 时后续无法横移脱困，连续躲避会越走越深进墙角
+    // openExits * 8        开口越多越安全（逃生空间奖励）
+    // deadEndPenalty -150  开口 ≤1 时重罚（死胡同）
+    // 墙角（1个开口）= -150 + 8 + edge分 ≈ 很低分；沿底边走（2个开口）= 16 + edge分，更高 → 会优先选择沿图边缘绕走，而非钻进角落。
     const facing = needTurn ? 0 : 100;
-    const score = facing + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+    const openExits = openNeighborCount(p, game);
+    const deadEndPenalty = openExits <= 1 ? -150 : 0;
+    const score = facing + openExits * 8 + deadEndPenalty + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
     if (score > bestScore) {
       bestScore = score;
       best = p;
@@ -2888,15 +2894,20 @@ function bulletThreatens(bullet, pos, game) {
 
 /**
  * 走位安全：走到 cell 这一帧子弹也会前进 BULLET_SPEED 格，判断 cell 是否会被子弹"扫到"。
- * 覆盖两种：cell 当前就在弹道(bulletThreatens)，或子弹推进一帧后正好落在 cell（走过去同帧相撞）。
+ * 覆盖三种：
+ *  1. cell 当前就在弹道(bulletThreatens)；
+ *  2. 子弹推进一帧后正好落在 cell（走过去同帧相撞）；
+ *  3. 子弹当前已在 cell（bulletReachTiles 对 dx=0 返回 -1，bulletThreatens 漏判）。
  * 修复"从安全行/列走进相邻子弹路径被同帧撞死"（mat_1BN/mat_KkKOc/mat_HTmg）。
+ * 修复"子弹停在目标格时走过去送死"（mat_5Otwt1NRz03KNip9H：子弹 dx=0 漏判）。
  */
 function stepIntoBulletPath(bullets, cell, game) {
   const list = bullets || [];
   for (let i = 0; i < list.length; i++) {
     const b = list[i];
     if (!b || !b.position) continue;
-    if (bulletThreatens(b, cell, game)) return true; // 已在弹道
+    if (samePos(b.position, cell)) return true;         // 子弹已在目标格，走过去必被命中
+    if (bulletThreatens(b, cell, game)) return true;    // 已在弹道
     // 子弹推进一帧(2格)后是否落在/扫过 cell
     const d = DIRS[dirIndex(b.direction)];
     if (!d) continue;

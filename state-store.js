@@ -112,6 +112,12 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
     return { hold: true };
   }
 
+  // bush 意图在星星出现后立即作废：让 chooseStepScored 重新评估，优先抢星
+  if (intent.kind === "bush" && game.star) {
+    clearShortIntent(state);
+    return null;
+  }
+
   if (!intent.target || !isPassable(game, intent.target, enemyPos)) {
     clearShortIntent(state);
     return null;

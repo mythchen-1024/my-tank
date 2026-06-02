@@ -2395,10 +2395,11 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
  *  - 都不安全：挑第一个可走方向转过去（至少打破原地空转）。
  * "安全"= 可通行、不在敌方炮线、不在子弹弹道。
  */
-function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets) {
+function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos) {
   const myPos = me.tank.position;
   const bullets = enemyBullets || [];
-  const safe = (p) => isPassable(game, p, enemyPos) && !enemyAimsAt(p, enemyTank, game) && !anyBulletThreatens(bullets, p, game);
+  // prevPos: 上上帧的坐标（lastMyPos2），排除"回头格"，防止 A↔B 乒乓震荡
+  const safe = (p) => isPassable(game, p, enemyPos) && !enemyAimsAt(p, enemyTank, game) && !anyBulletThreatens(bullets, p, game) && !(prevPos && samePos(p, prevPos));
 
   // 当前朝向可直接走且安全 -> 立刻前进
   const ahead = nextInDirection(myPos, me.tank.direction);

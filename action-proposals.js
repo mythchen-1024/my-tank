@@ -262,7 +262,7 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
       proposals.push(buildProposal('short-intent', function () {
         if (state.stuckFrames >= 2) {
           clearShortIntent(state);
-          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
           return;
         }
         moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
@@ -276,7 +276,7 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
   if (step) {
     proposals.push(buildProposal('scored-move', function () {
       if (state.stuckFrames >= 2) {
-        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
         return;
       }
       moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
