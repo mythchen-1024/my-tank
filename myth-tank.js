@@ -830,27 +830,57 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   const turnCost = dir ? turnDistance(me.tank.direction, dir) : 0;
   const open = openNeighborCount(step, game);
 
-  // 【基础占位/稳定性收益】：远离墙角、偏好开阔、降低转头损耗、优先保持当前朝向
-  score += distanceFromEdges(step, game) * 2;
+  // 【基础占位/稳定性收益】：开阔度、降低转头损耗、优先保持当前朝向
+  const distEdge = distanceFromEdges(step, game);
+  const isOverload = enemyIsOverloadType(enemy);
+
+  if (kind === "star") {
+    // 【特判】：抢星时，无视转圈躲避或占中心的规则，以最快吃星为主（只保留微弱的防贴墙）
+    score += distEdge * 1;
+  } else if (isOverload) {
+    // 面对双弹流(Overload)的日常走位：围绕底图边缘转圈躲避（形成环形跑道）
+    // 不去正中心（容易被双弹交叉封死四面八方），偏好距边缘 1~2 格的位置
+    if (distEdge === 0) score -= 2; // 紧贴最外侧墙皮容易被单向封死，微扣分
+    else if (distEdge > 2) score -= (distEdge - 2) * 2; // 越往中心越扣分，逼迫其在外圈绕圈
+    else score += 6; // distEdge === 1 或 2，完美的环绕躲避舒适区
+  } else {
+    // 面对其他技能(如传送、护盾)的日常走位：正常积极走中心，控制视野
+    score += distEdge * 3; 
+  }
+
   score += open * 2;
   score -= turnCost * 3;
   if (dir === me.tank.direction) score += 8;
   if (state && state.stuckFrames >= 2 && dir === me.tank.direction) score += 4; // 卡墙时强烈鼓励沿当前方向破局
+
+  // 严厉的死角惩罚：防止为了拉扯距离而退进角落
+  if (kind !== "star" && kind !== "bandEscape") {
+    if (isDeadEnd(step, game)) {
+      score -= 30; // 绝不进单出口的死胡同
+    } else if (open <= 2 && distEdge <= 1) {
+      score -= 15; // 强烈不建议退到地图边缘的死角(只有2个或更少出口)
+    }
+  }
 
   // 【对峙/压制收益】：维护最佳交火距离 (standoff)，争取射击窗口，惩罚送人头贴脸
   if (enemyPos) {
     const de = manhattan(step, enemyPos);
     // 理想距离：若为抢枪线(lane)可更激进，否则保持安全 standoff
     const ideal = kind === "lane" ? Math.max(3, standoff - 1) : standoff;
-    score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
-    // // 如果目标就是抢星，放宽对理想交战距离的执念，防止为了与敌人拉扯而反向跑离星星
-    // if (kind === "star") {
-    //   // 抢星时，偏离理想距离只扣 2 分（原先是 4 分）
-    //   score += Math.max(0, 8 - Math.abs(de - ideal) * 2);
-    // } else {
-    //   // 日常走位，保持严格拉扯（扣 4 分）
-    //   score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
-    // }
+    
+    if (isOverload) {
+      // 双弹流：保命优先，严格保持交火拉扯距离
+      score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
+    } else {
+      // 其他流派：积极抢星，放宽对理想交战距离的执念
+      if (kind === "star") {
+        // 抢星时，偏离理想距离只扣 2 分（原先是 4 分）
+        score += Math.max(0, 8 - Math.abs(de - ideal) * 2);
+      } else {
+        // 日常走位，保持严格拉扯（扣 4 分）
+        score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
+      }
+    }
     
     if (de <= 1) score -= 40; // 严禁贴脸送死
     if (de <= 3 && kind !== "star" && kind !== "bandEscape") score -= 12; // 非抢星/逃生时不靠近
@@ -1071,6 +1101,8 @@ function chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets) {
 
   // 策略降级优先级字典，用于同分决胜
   const rank = { star: 9, bandEscape: 8, lane: 7, standoff: 6, bush: 6, zigzag: 5, ambush: 5, avoid: 4, patrol: 3, safeNeighbor: 2, center: 1 };
+  const isOverload = enemyIsOverloadType(enemy);
+  
   candidates.sort(function (a, b) {
     // 主排序：按得出的总分降序
     if (b.score !== a.score) return b.score - a.score;
@@ -1078,7 +1110,11 @@ function chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets) {
     const rb = rank[b.kind] || 0;
     const ra = rank[a.kind] || 0;
     if (rb !== ra) return rb - ra;
-    // 同分降级 2：优先选择远离边缘的格子
+    // 同分降级 2：占位偏好
+    if (isOverload && a.kind !== "star" && b.kind !== "star") {
+      // 双弹环绕：倾向于边缘距离 1~2
+      return Math.abs(distanceFromEdges(a.step, game) - 1.5) - Math.abs(distanceFromEdges(b.step, game) - 1.5);
+    }
     return distanceFromEdges(b.step, game) - distanceFromEdges(a.step, game);
   });
 
