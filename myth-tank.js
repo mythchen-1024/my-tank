@@ -133,7 +133,8 @@ function onIdle(me, enemy, game) {
   trackStuck(state, myPos);
 
   // 1. 异常状态拦截：如果处于眩晕或冰冻状态，无法操作，直接返回
-  if (me.status && (me.status.stunned || me.status.frozen)) return;
+  // if (me.status && (me.status.stunned || me.status.frozen)) return;
+  if (me.status && me.status.frozen) return;
 
   // 2. 常规子弹躲避：预判敌方子弹轨迹（含过载双弹），按子弹真实速度寻找来得及躲的相邻格
   const dodge = findBulletDodge(me, enemy, game, enemyPos);
