@@ -842,7 +842,16 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
     const de = manhattan(step, enemyPos);
     // 理想距离：若为抢枪线(lane)可更激进，否则保持安全 standoff
     const ideal = kind === "lane" ? Math.max(3, standoff - 1) : standoff;
-    score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
+    
+    // 如果目标就是抢星，放宽对理想交战距离的执念，防止为了与敌人拉扯而反向跑离星星
+    if (kind === "star") {
+      // 抢星时，偏离理想距离只扣 2 分（原先是 4 分）
+      score += Math.max(0, 8 - Math.abs(de - ideal) * 2);
+    } else {
+      // 日常走位，保持严格拉扯（扣 4 分）
+      score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
+    }
+    
     if (de <= 1) score -= 40; // 严禁贴脸送死
     if (de <= 3 && kind !== "star" && kind !== "bandEscape") score -= 12; // 非抢星/逃生时不靠近
     if (clearShotDirection(step, enemyPos, game)) {
@@ -866,7 +875,7 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
       if (framesLeft <= 30) score += Math.max(0, 18 - ds * 2); // 终局抢星加权
       // 近距离星紧急度：≤4步时补分，防止攻击提案（lane/standoff）靠 clearShot+方向奖励抢走优先级
       const myStarDist = manhattan(myPos, game.star);
-      if (myStarDist <= 4) score += Math.max(0, 16 - myStarDist * 3) * urg;
+      if (myStarDist <= 4) score += Math.max(0, 16 - myStarDist * 6) * urg;
     } else {
       score += Math.max(0, 12 - ds * 2); // 其他移动动作若顺路靠近星也稍微加分
     }
@@ -1081,11 +1090,14 @@ function chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets) {
     // 【计划层注入】：只把已经赢得评分的低风险计划写入缓存，后续几帧优先续跑同一条稳定路线。
     // 这对应重构计划中的 “短期意图缓存 / 稳定性维度”。
     if (best.kind === "star" && game.star) {
-      primeShortIntent(state, "star", game.star, frame, 4);
+      // 抢星降为3帧，防止头铁跑过头
+      primeShortIntent(state, "star", game.star, frame, 3);
     } else if (best.kind === "patrol" && best.meta && best.meta.target) {
-      primeShortIntent(state, "patrol", best.meta.target, frame, 3);
+      // 巡逻降为2帧，更灵活
+      primeShortIntent(state, "patrol", best.meta.target, frame, 2);
     } else if (best.kind === "bush" && best.meta && best.meta.target) {
-      primeShortIntent(state, "bush", best.meta.target, frame, 3);
+       // 蹲草降为2帧
+      primeShortIntent(state, "bush", best.meta.target, frame, 2);
     }
   }
 
