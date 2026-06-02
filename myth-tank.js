@@ -842,15 +842,15 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
     const de = manhattan(step, enemyPos);
     // 理想距离：若为抢枪线(lane)可更激进，否则保持安全 standoff
     const ideal = kind === "lane" ? Math.max(3, standoff - 1) : standoff;
-    
-    // 如果目标就是抢星，放宽对理想交战距离的执念，防止为了与敌人拉扯而反向跑离星星
-    if (kind === "star") {
-      // 抢星时，偏离理想距离只扣 2 分（原先是 4 分）
-      score += Math.max(0, 8 - Math.abs(de - ideal) * 2);
-    } else {
-      // 日常走位，保持严格拉扯（扣 4 分）
-      score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
-    }
+    score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
+    // // 如果目标就是抢星，放宽对理想交战距离的执念，防止为了与敌人拉扯而反向跑离星星
+    // if (kind === "star") {
+    //   // 抢星时，偏离理想距离只扣 2 分（原先是 4 分）
+    //   score += Math.max(0, 8 - Math.abs(de - ideal) * 2);
+    // } else {
+    //   // 日常走位，保持严格拉扯（扣 4 分）
+    //   score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
+    // }
     
     if (de <= 1) score -= 40; // 严禁贴脸送死
     if (de <= 3 && kind !== "star" && kind !== "bandEscape") score -= 12; // 非抢星/逃生时不靠近
@@ -875,7 +875,7 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
       if (framesLeft <= 30) score += Math.max(0, 18 - ds * 2); // 终局抢星加权
       // 近距离星紧急度：≤4步时补分，防止攻击提案（lane/standoff）靠 clearShot+方向奖励抢走优先级
       const myStarDist = manhattan(myPos, game.star);
-      if (myStarDist <= 4) score += Math.max(0, 16 - myStarDist * 6) * urg;
+      if (myStarDist <= 4) score += Math.max(0, 16 - myStarDist * 3) * urg;
     } else {
       score += Math.max(0, 12 - ds * 2); // 其他移动动作若顺路靠近星也稍微加分
     }
@@ -2173,14 +2173,10 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   // shield 流敌人不做近距守线预转，避免主动把自己摆进无收益对枪。
   if (shieldEnemy) return null;
 
-  // 【防回头顿挫限制】：如果敌我不在同一条线上，只有当我方处于相对安全的静止/蹲守状态时，才允许提前预转炮口。
-  // 如果我在移动（比如追星或逃跑），预转炮口会导致坦克停顿1帧，这是致命的。
-  // 因此，如果不在同一直线（clearShotDirection 返回 null），我们直接放弃预转，专注走位。
-  return null;
-  
-  /* 旧版预转逻辑（已注释，防止非同线时错误回头）：
+  // 敌人很近(<=3)，预判它将从哪条轴进入我的枪线，提前转炮口对准那个轴向。
   const dx = enemyPos[0] - myPos[0];
   const dy = enemyPos[1] - myPos[1];
+  // 选”垂直偏移更小”的轴：敌人更快能与我对齐的方向
   if (Math.abs(dx) <= Math.abs(dy)) {
     const dir = dy < 0 ? "up" : "down";
     if (me.tank.direction !== dir) return { dir: dir };
@@ -2189,7 +2185,6 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     if (me.tank.direction !== dir) return { dir: dir };
   }
   return null;
-  */
 }
 
 /**
