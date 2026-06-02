@@ -1,3 +1,657 @@
+// ============================================================
+// myth-tank.js — 自动生成，请勿手动编辑
+// 源文件: state-store.js, scoring.js, action-proposals.js, myth-tank.js, decision-engine.js
+// 构建时间: 2026-06-02T16:23:27.709Z
+// ============================================================
+// ===== state-store.js =====
+// ============================================================
+// state-store.js — 跨帧状态层
+// 管理 MATCH_STATE 的生命周期、初始化、更新与查询。
+// 被 decision-engine.js 在每帧开头调用；也供测试直接引用。
+// ============================================================
+
+var MATCH_STATE = null;
+
+/**
+ * 获取本局持久状态。靠帧数倒退判断新对局并重置。
+ * 状态字段详细说明：
+ * - lastFrame: 上次记录的帧数，用于判定是否进入了新对局（帧数倒退意味着新对局）
+ * - assassinBanned: 布尔值，本局是否已禁用传送刺杀（如发现敌方有躲避刺杀的反应则禁用）
+ * - pendingAssassin: 对象或 null，最近一次传送刺杀的跟踪信息 { dir, targetPos, frame }
+ * - lastEnemyPos: 数组 [x, y] 或 null，敌人最后一次可见的位置（隐身或进草丛后依然保留记忆供避让等策略使用）
+ * - lastEnemySeenFrame: 数字，敌人最后一次可见时的帧数
+ * - lastMyPos: 数组 [x, y] 或 null，我方上一帧的坐标，用于判断是否卡住
+ * - lastMyPos2: 数组 [x, y] 或 null，我方上上帧的坐标，用于判断是否在两个格子间反复横跳（震荡死循环）
+ * - stuckFrames: 数字，记录当前处于"卡住"（原地不动或反复震荡）状态的连续帧数
+ * - patrolTarget: 数组 [x, y] 或 null，当前巡逻的目标坐标
+ * - shortIntent: 对象或 null，短期意图缓存，用于保留 2~4 步的低风险连续动作（例如 { kind, target, createdFrame, expireFrame, stepsLeft }）
+ * - lastEvadeAxis: 字符串 "x" 或 "y"，或 undefined，记录上一次躲避移动所在的轴，防止在角落被封死时反复无意义同轴移动
+ * - enemyFleeFrames: 数字，记录敌人连续"背对逃跑"的帧数（连续逃跑一定帧数会被判定为跑路流）
+ */
+function getMatchState(game) {
+  const frame = (game && game.frames) || 0;
+  // 初始话，重置上一局帧数
+  if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
+    MATCH_STATE = {
+      lastFrame: frame,
+      assassinBanned: false,
+      pendingAssassin: null,
+      lastEnemyPos: null,
+      lastEnemySeenFrame: -999,
+      lastMyPos: null,
+      lastMyPos2: null,
+      stuckFrames: 0,
+      patrolTarget: null,
+      shortIntent: null,
+      lastEvadeAxis: undefined,
+      enemyFleeFrames: 0
+    };
+  }
+  MATCH_STATE.lastFrame = frame;
+  return MATCH_STATE;
+}
+
+/**
+ * 跟踪"原地未移动"帧数：本帧位置与上帧相同则累加，移动了则清零。
+ * 用于识别靠墙/拉锯时反复转向却走不出去的死循环（见 mat_Enkd 转 7 帧被打死）。
+ */
+function trackStuck(state, myPos) {
+  if (state.lastMyPos && samePos(state.lastMyPos, myPos)) {
+    state.stuckFrames = (state.stuckFrames || 0) + 1;
+  } else {
+    // 检测"功能性卡住"：在 ≤2 格小区域内来回震荡（如 [12,12]↔[12,13] 来回跳，位置变但进展为0）
+    // 记录上上帧位置，若与当前相同（一步来一步回），也计入卡住
+    const osc = state.lastMyPos2 && samePos(state.lastMyPos2, myPos);
+    state.stuckFrames = osc ? (state.stuckFrames || 0) + 1 : 0;
+  }
+  state.lastMyPos2 = state.lastMyPos ? state.lastMyPos.slice() : null;
+  state.lastMyPos = myPos.slice();
+}
+
+// 短期意图只允许短暂续跑，失效后立刻清空，避免旧计划抢占后续决策。
+function clearShortIntent(state) {
+  if (state) state.shortIntent = null;
+}
+
+// 这里只缓存 2~4 步的低风险计划，像巡逻、蹲草、轻度追星这类连续动作。
+function primeShortIntent(state, kind, target, frame, steps) {
+  if (!state || !target) return;
+  state.shortIntent = {
+    kind,
+    target: target.slice(),
+    createdFrame: frame,
+    expireFrame: frame + steps,
+    stepsLeft: steps,
+  };
+}
+
+// 每帧续跑前先复核安全条件：一旦目标失效、被敌人盯上或会扫进弹道，就马上中止。
+function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state) {
+  const intent = state && state.shortIntent;
+  if (!intent) return null;
+
+  const frame = (game && game.frames) || 0;
+  if (intent.expireFrame !== undefined && frame > intent.expireFrame) {
+    clearShortIntent(state);
+    return null;
+  }
+  if (intent.stepsLeft !== undefined && intent.stepsLeft <= 0) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  const myPos = me.tank.position;
+  const enemyPos = enemyTank ? enemyTank.position : null;
+  const bullets = enemyBullets || [];
+
+  if (intent.kind === "hold") {
+    const stillHidden = iAmHidden(me, game) && !game.star && teleportReady(me) &&
+      (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&
+      (!enemyTank || !enemyAimsAt(myPos, enemyTank, game)) &&
+      !anyBulletThreatens(bullets, myPos, game);
+    if (!stillHidden) {
+      clearShortIntent(state);
+      return null;
+    }
+    intent.stepsLeft -= 1;
+    if (intent.stepsLeft <= 0) clearShortIntent(state);
+    return { hold: true };
+  }
+
+  if (!intent.target || !isPassable(game, intent.target, enemyPos)) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  const step = nextStepToward(myPos, intent.target, game, enemyPos);
+  if (!step) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  const standoff = safeStandoffDistance(enemy);
+  if (!isPassable(game, step, enemyPos) || enemyAimsAt(step, enemyTank, game) ||
+      stepIntoBulletPath(bullets, step, game) ||
+      (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff))) {
+    clearShortIntent(state);
+    return null;
+  }
+
+  intent.stepsLeft -= 1;
+  if (intent.stepsLeft <= 0) clearShortIntent(state);
+  return { step };
+}
+
+/**
+ * 更新敌人最后可见位置，同时追踪"敌方逃跑连续帧"（enemyFleeFrames）。
+ * 逃跑定义：敌可见 + 我与敌同行/列视线清晰（有对枪机会）+ 敌朝向背对我（朝远离我的方向）。
+ * 连续 ENEMY_FLEE_THRESHOLD 帧以上则认定对手是"跑路流"，shouldChaseStar/findStarTeleport 据此
+ * 放宽追星竞争条件——不再等"我比敌更近"才追，直接抢（敌根本不进攻，优先拿分）。
+ */
+function trackEnemy(state, enemyTank, myPos, game) {
+  if (enemyTank && enemyTank.position) {
+    state.lastEnemyPos = enemyTank.position.slice();
+    state.lastEnemySeenFrame = (game && game.frames) || 0;
+    if (myPos) {
+      const ep = enemyTank.position;
+      const dx = ep[0] - myPos[0], dy = ep[1] - myPos[1];
+      const isMovingAway =
+        (enemyTank.direction === "right" && dx > 0) ||
+        (enemyTank.direction === "left"  && dx < 0) ||
+        (enemyTank.direction === "down"  && dy > 0) ||
+        (enemyTank.direction === "up"    && dy < 0);
+      if (isMovingAway) {
+        state.enemyFleeFrames = (state.enemyFleeFrames || 0) + 1;
+      } else {
+        state.enemyFleeFrames = 0;
+      }
+    }
+  } else {
+    state.enemyFleeFrames = 0;
+  }
+}
+
+/**
+ * 记录传送刺杀的结局：若上一帧刚发起刺杀，本帧观察敌人是否已移出我方瞄准线（成功躲开）。
+ * 一旦发现敌人能反应过来躲刺杀子弹，本局后续禁用刺杀。
+ */
+function recordAssassinOutcome(state, enemy, enemyTank, game) {
+  const pending = state.pendingAssassin;
+  if (!pending) return;
+  const frame = (game && game.frames) || 0;
+  const elapsed = frame - pending.frame;
+  if (elapsed < 1 || elapsed > 3) {
+    if (elapsed > 3) state.pendingAssassin = null;
+    return;
+  }
+  if (enemyTank && enemyTank.position && !samePos(enemyTank.position, pending.targetPos)) {
+    state.assassinBanned = true;
+    state.pendingAssassin = null;
+    return;
+  }
+  if (!enemyTank) {
+    state.assassinBanned = true;
+    state.pendingAssassin = null;
+  }
+}
+
+
+// ===== scoring.js =====
+// ============================================================
+// scoring.js — 统一评分引擎
+// 负责：候选提案的数据结构、打分公式、硬约束校验、最优提案裁决。
+// 所有权重均集中在此文件，Phase 5 校准时只改这里。
+// ============================================================
+
+// ---- 权重配置（Phase 5 校准入口） ----
+var SCORE_WEIGHTS = {
+  reward:    1.0,
+  risk:      1.2,
+  stability: 0.3,
+};
+
+// ---- 提案工厂 ----
+/**
+ * 构造一个候选动作提案。
+ * @param {string}   type     动作类型（用于日志与分析）
+ * @param {Function} exec     执行闭包（调用时无参数）
+ * @param {Object}   opts     评分元数据
+ *   reward    {number}  0-100 收益分（默认30）
+ *   risk      {number}  0-100 风险分（默认50）
+ *   stability {number}  跨帧连续性加成（默认0）
+ *   hardGate  {boolean} true=绕过打分直接执行（用于致命威胁的硬闸门）
+ *   step      {Array}   目标坐标，供 isDeadlyProposal 复检
+ *   tags      {Array}   标签，供 braveBonus 识别（'star','attack','hold-line'）
+ *   reason    {string}  调试说明
+ */
+function buildProposal(type, exec, opts) {
+  opts = opts || {};
+  return {
+    type:      type,
+    exec:      exec,
+    reward:    opts.reward    !== undefined ? opts.reward    : 30,
+    risk:      opts.risk      !== undefined ? opts.risk      : 50,
+    stability: opts.stability !== undefined ? opts.stability : 0,
+    hardGate:  opts.hardGate  || false,
+    step:      opts.step      || null,
+    tags:      opts.tags      || [],
+    reason:    opts.reason    || '',
+  };
+}
+
+// ---- 评分上下文构建 ----
+function buildScoringContext(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
+  const frame     = (game && game.frames) || 0;
+  const myStars   = (me && me.stars)            || 0;
+  const enmStars  = (enemy && enemy.stars)      || 0;
+  const framesLeft = MAX_GAME_FRAMES - frame;
+  return {
+    me, enemy, game, state,
+    enemyBullets: enemyBullets || [],
+    enemyTank, enemyPos,
+    myPos:      me.tank.position,
+    myStars,
+    enmStars,
+    frame,
+    framesLeft,
+    isEndgame:  framesLeft <= 20,
+    isLosing:   myStars < enmStars,
+    isWinning:  myStars > enmStars,
+  };
+}
+
+// ---- 勇敢基线奖励（防止坦克过于保守不进攻） ----
+function braveBonus(proposal, ctx) {
+  var bonus = 0;
+  var tags  = proposal.tags;
+
+  // ── 落后时：大幅提升抢星动力（游戏只靠星得分，攻击无直接收益）
+  if (ctx.isLosing) {
+    if (tags.indexOf('star')   >= 0) bonus += 20;   // 落后时抢星比攻击更直接
+    if (tags.indexOf('attack') >= 0) bonus +=  6;   // 攻击仍有战略价值，但低于抢星
+  }
+
+  // ── 终局（剩余≤20帧）+ 落后：再加码抢星
+  if (ctx.isEndgame && ctx.isLosing) {
+    if (tags.indexOf('star') >= 0) bonus += 25;     // 终局落后必须全力冲星
+  }
+
+  // ── 最后10帧无论输赢：全力冲星（最后机会）
+  if (ctx.framesLeft <= 10) {
+    if (tags.indexOf('star') >= 0) bonus += 20;
+  }
+
+  // ── 领先时：提高生存稳定性，不要冒险（守住优势）
+  if (ctx.isWinning) {
+    if (tags.indexOf('survival') >= 0) bonus += 5; // 领先时更积极躲避
+    if (tags.indexOf('star')     >= 0) bonus += 8; // 领先时仍追星，但幅度小
+  }
+
+  // ── 持线稳定性：守在己方星线附近
+  if (tags.indexOf('hold-line') >= 0) bonus += 8;
+
+  return bonus;
+}
+
+// ---- 硬约束：绝对致命的提案（不参与打分，直接丢弃） ----
+/**
+ * 对提案进行致死性复检，返回 true 则该提案被丢弃。
+ * Phase 1：只做最基础的子弹弹道检测，其余约束留 Phase 2 补充。
+ */
+function isDeadlyProposal(proposal, ctx) {
+  if (!proposal.step) return false;
+  // 下一步落入子弹弹道
+  if (stepIntoBulletPath(ctx.enemyBullets, proposal.step, ctx.game)) return true;
+  // 踏入封闭死胡同（仅在能拿到对方坐标时校验）
+  if (stepIntoSealedDeadEnd(proposal.step, ctx.enemyPos, ctx.game)) return true;
+  return false;
+}
+
+// ---- 单个提案打分 ----
+function scoreProposal(proposal, ctx) {
+  if (isDeadlyProposal(proposal, ctx)) return -9999;
+  var w = SCORE_WEIGHTS;
+  return proposal.reward    * w.reward
+       - proposal.risk      * w.risk
+       + proposal.stability * w.stability
+       + braveBonus(proposal, ctx);
+}
+
+// ---- 从候选列表裁决最优提案 ----
+/**
+ * 依次检查 hardGate 提案（直接返回）；否则对所有提案打分取最高。
+ */
+function selectBestProposal(proposals, ctx) {
+  // 硬闸门提案已在 decision-engine 中提前处理，此处不再重复。
+  var best      = null;
+  var bestScore = -Infinity;
+  for (var i = 0; i < proposals.length; i++) {
+    var p = proposals[i];
+    if (!p || !p.exec) continue;
+    var s = scoreProposal(p, ctx);
+    if (s > bestScore) {
+      bestScore = s;
+      best = p;
+    }
+  }
+  return best;
+}
+
+
+// ===== action-proposals.js =====
+// ============================================================
+// action-proposals.js — 候选动作提案构建器
+//
+// 将原 onIdle 中散落的 if/return 规则，按行为族重组为
+// 返回 Proposal 数组的函数族。所有函数只负责"提案"，
+// 不做执行决定——由 decision-engine.js 统一裁决。
+//
+// 调用约定：每个 collect* 函数返回 Proposal[]（可以为空数组）。
+// hardGate=true 的提案由调用方在进入打分前直接执行。
+//
+// 评分基准值（Phase 5 校准后：星星优先于直接开火，追星是首要目标）：
+//   survival soft  aim-dodge   r=82 risk=10  s=0  ~70
+//   survival soft  line-duel   r=83 risk=15  s=0  ~65
+//   attack         open-shot   r=79 risk=20  s=0  ~55  (敌炮管空窗期)
+//   target         star-tele   r=80 risk=25  s=5  ~50  (星=直接得分)
+//   attack         fire-direct r=75 risk=25  s=0  ~45  (战略价值)
+//   attack         guard-line  r=65 risk=20  s=0  ~41
+//   attack         bush-shot   r=60 risk=15  s=0  ~42
+//   target         cloak-guard r=56 risk=15  s=0  ~38
+//   target         star-guard  r=50 risk=15  s=0  ~32
+//   target         assassin    r=70 risk=35  s=0  ~28
+//   move           bush-hold   r=34 risk=10  s=15 ~26  (蹲守粘性)
+//   move           short-int   r=38 risk=17  s=10 ~20  (计划连续性)
+//   move           scored-move r=35 risk=18  s=3  ~14
+//   move           dig         r=26 risk=15  s=0  ~8
+//   move           safe-nbr    r=28 risk=20  s=0  ~4
+//   move           turn-right  r=40 risk=40  s=0  ~-8
+// ============================================================
+
+// ---- 硬闸门层（步骤 2–3.5，直接返回单个提案或 null，不进入打分） ----
+
+/**
+ * 检查所有必须立即响应的致命威胁。
+ * 返回单个带 hardGate=true 的 Proposal，或 null（无紧急威胁）。
+ * 调用方应在进入打分流程前执行并返回。
+ */
+function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
+  const myPos = me.tank.position;
+
+  // 步骤 2：常规子弹躲避
+  const dodge = findBulletDodge(me, enemy, game, enemyPos);
+  if (dodge) {
+    // 对射先射后走：来袭子弹下可先反击一炮
+    if (shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos)) {
+      return buildProposal('counter-shoot', function () {
+        me.speak("开炮！！！");
+        me.fire();
+      }, { reward: 79, risk: 10, hardGate: true, tags: ['attack', 'survival'], reason: 'counter-shoot-then-dodge' });
+    }
+    return buildProposal('bullet-dodge', function () {
+      moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
+    }, { reward: 88, risk: 8, hardGate: true, step: dodge, tags: ['survival'], reason: 'bullet-dodge' });
+  }
+
+  // 步骤 3：紧急传送逃生
+  const escapeTeleport = findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game);
+  if (escapeTeleport) {
+    return buildProposal('escape-teleport', function () {
+      me.teleport(escapeTeleport[0], escapeTeleport[1]);
+    }, { reward: 90, risk: 5, hardGate: true, tags: ['survival'], reason: 'escape-teleport' });
+  }
+
+  // 步骤 3.4：两步脱困（双弹夹击）
+  const twoStep = findTwoStepEscape(me, enemyBullets, game, enemyPos, enemyTank);
+  if (twoStep) {
+    return buildProposal('two-step-escape', function () {
+      const tdir = directionBetween(myPos, twoStep);
+      if (tdir === me.tank.direction) me.go();
+      else if (tdir) turnToward(me, tdir);
+    }, { reward: 85, risk: 10, hardGate: true, tags: ['survival'], reason: 'two-step-escape' });
+  }
+
+  // 步骤 3.5：绝境横移
+  const desperate = findDesperateDodge(me, enemyBullets, game, enemyPos, enemyTank);
+  if (desperate) {
+    return buildProposal('desperate-dodge', function () {
+      moveToward(me, game, desperate, enemyPos, enemyTank, enemyBullets);
+    }, { reward: 80, risk: 12, hardGate: true, step: desperate, tags: ['survival'], reason: 'desperate-dodge' });
+  }
+
+  return null;
+}
+
+// ---- 软生存层（步骤 4–5，不再硬返回，以高分参与竞争） ----
+
+/**
+ * 防瞄移动 + 近距对射规避。
+ * 返回 Proposal[]（0 或 1 个），分数足够高确保优先于攻击提案。
+ */
+function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
+  const proposals = [];
+
+  // 步骤 4：防范敌方瞄准
+  const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  if (aimDodge) {
+    proposals.push(buildProposal('aim-dodge', function () {
+      moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
+    }, { reward: 82, risk: 10, step: aimDodge, tags: ['survival'], reason: 'aim-dodge' }));
+    return proposals; // aim-dodge 命中则 line-duel 不再评估（优先级更高）
+  }
+
+  // 步骤 5：近距对射规避
+  const lineDodge = findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  if (lineDodge) {
+    proposals.push(buildProposal('line-duel-dodge', function () {
+      moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets);
+    }, { reward: 83, risk: 15, step: lineDodge, tags: ['survival'], reason: 'line-duel-dodge' }));
+  }
+
+  return proposals;
+}
+
+// ---- 攻击层（步骤 5.5–6.6） ----
+
+/**
+ * 开火/预瞄等主动攻击提案。
+ */
+function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
+  const proposals = [];
+  const myPos = me.tank.position;
+
+  // 步骤 5.5：敌炮管空窗期反击
+  const openShot = findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  if (openShot) {
+    proposals.push(buildProposal('open-shot', function () {
+      if (me.tank.direction === openShot) { me.speak("开炮！！！"); me.fire(); }
+      else turnToward(me, openShot);
+    }, { reward: 79, risk: 20, tags: ['attack'], reason: 'open-shot-window' }));
+  }
+
+  // 步骤 6：同线无障碍直接开火
+  const shotDir = enemyPos ? clearShotDirection(myPos, enemyPos, game) : null;
+  if (shotDir && canShoot(me, enemy)) {
+    const shieldDuelSafe = canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+    const shieldBlock    = enemyHasShieldSkill(enemy) && !shieldDuelSafe;
+    const doubleLaneClose = enemyDoubleLaneThreat(enemy) &&
+      manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
+    if (!shieldBlock && !doubleLaneClose) {
+      proposals.push(buildProposal('fire-direct', function () {
+        if (me.tank.direction === shotDir) { me.speak("开炮！！！"); me.fire(); }
+        else turnToward(me, shotDir);
+      }, { reward: 75, risk: 25, tags: ['attack'], reason: 'fire-direct' }));
+    }
+  }
+
+  // 步骤 6.5：以守为攻——预瞄守线
+  const guardShot = findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  if (guardShot) {
+    proposals.push(buildProposal('guard-line', function () {
+      if (guardShot.fire) { me.speak("开炮！！！"); me.fire(); }
+      else turnToward(me, guardShot.dir);
+    }, { reward: 65, risk: 20, tags: ['attack', 'hold-line'], reason: 'guard-line-shot' }));
+  }
+
+  // 步骤 6.6：草丛攻防（预射打草惊蛇 / 草丛伏击）
+  const bushShot = findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state);
+  if (bushShot) {
+    proposals.push(buildProposal('bush-shot', function () {
+      if (bushShot.fire) { me.speak("开炮！！！"); me.fire(); }
+      else turnToward(me, bushShot.dir);
+    }, { reward: 60, risk: 15, tags: ['attack'], reason: 'bush-shot' }));
+  }
+
+  return proposals;
+}
+
+// ---- 目标层（星星 & 刺杀） ----
+
+/**
+ * 与星星相关的高收益动作 + 刺杀提案。
+ */
+function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
+  const proposals = [];
+  const myPos = me.tank.position;
+  const frame  = (game && game.frames) || 0;
+
+  // 提案 1：隐身守星防陷阱（优先于追星）
+  if (inCloakStarTrap(me, enemy, enemyTank, game, state)) {
+    const guard = cloakStarGuardStep(me, game, state);
+    if (guard) {
+      proposals.push(buildProposal('cloak-guard', function () {
+        moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets);
+      }, { reward: 56, risk: 15, step: guard, tags: ['survival', 'star'], reason: 'cloak-star-trap' }));
+    } else {
+      // 有陷阱但找不到安全格，原地不动（高分阻断追星）
+      proposals.push(buildProposal('cloak-trap-hold', function () {}, {
+        reward: 58, risk: 12, tags: ['survival'], reason: 'cloak-trap-no-guard',
+      }));
+    }
+    return proposals; // 陷阱状态下不评估其他目标提案
+  }
+
+  // 提案 2：传送抢星（终局加分）
+  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
+  if (starTeleport) {
+    const faceDir = teleportPreTurnDir(me, starTeleport, enemy, enemyTank, game);
+    proposals.push(buildProposal('star-teleport', function () {
+      if (faceDir && me.tank.direction !== faceDir) { turnToward(me, faceDir); return; }
+      me.teleport(starTeleport[0], starTeleport[1]);
+    }, { reward: 80, risk: 25, stability: 5, tags: ['star'], reason: 'star-teleport' }));
+  }
+
+  // 提案 3：星星争夺预瞄守点
+  const starGuard = findContestedStarGuard(me, enemyTank, game);
+  if (starGuard) {
+    proposals.push(buildProposal('star-guard', function () {
+      if (me.tank.direction !== starGuard.dir) turnToward(me, starGuard.dir);
+    }, { reward: 50, risk: 15, tags: ['star', 'hold-line'], reason: 'contested-star-guard' }));
+  }
+
+  // 提案 4：传送刺杀
+  const assassination = findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state);
+  if (assassination) {
+    proposals.push(buildProposal('assassination', function () {
+      if (me.tank.direction === assassination.dir) {
+        state.pendingAssassin = {
+          targetPos: enemyPos.slice(),
+          dir:       assassination.dir,
+          frame:     frame,
+        };
+        me.teleport(assassination.pos[0], assassination.pos[1]);
+      } else {
+        turnToward(me, assassination.dir);
+      }
+    }, { reward: 70, risk: 35, tags: ['attack'], reason: 'assassination' }));
+  }
+
+  return proposals;
+}
+
+// ---- 移动/计划层（步骤 9 后段） ----
+
+/**
+ * 巡逻、短期意图、评分走位、破墙、安全邻格、兜底转向。
+ */
+function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
+  const proposals = [];
+  const myPos = me.tank.position;
+
+  // 计划层：草丛蹲守（overload 双弹流 + 无星）
+  if (enemyIsOverloadType(enemy) && !game.star && iAmHidden(me, game) && teleportReady(me)) {
+    const safeInBush = !anyBulletThreatens(enemyBullets, myPos, game) &&
+      (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&
+      (!enemyTank || !enemyAimsAt(myPos, enemyTank, game));
+    if (safeInBush) {
+      primeShortIntent(state, "hold", myPos, (game && game.frames) || 0, 3);
+      proposals.push(buildProposal('bush-hold', function () {
+        // 静止即行动：原地隐身等待
+      }, { reward: 34, risk: 10, stability: 15, tags: ['survival', 'plan'], reason: 'overload-bush-hold' }));
+      return proposals;
+    }
+  }
+
+  // 计划层：执行缓存的短期意图
+  const shortIntent = resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state);
+  if (shortIntent) {
+    if (shortIntent.hold) {
+      proposals.push(buildProposal('short-intent-hold', function () {}, {
+        reward: 36, risk: 10, tags: ['plan'], reason: 'short-intent-hold',
+      }));
+    } else {
+      proposals.push(buildProposal('short-intent', function () {
+        if (state.stuckFrames >= 2) {
+          clearShortIntent(state);
+          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+          return;
+        }
+        moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
+      }, { reward: 38, risk: 17, stability: 10, step: shortIntent.step, tags: ['plan'], reason: 'short-intent' }));
+    }
+    return proposals; // 短期意图命中时不再叠加走位提案
+  }
+
+  // 收益核心：评分走位 chooseStepScored
+  const step = chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets);
+  if (step) {
+    proposals.push(buildProposal('scored-move', function () {
+      if (state.stuckFrames >= 2) {
+        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+        return;
+      }
+      moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
+    }, { reward: 35, risk: 18, stability: 3, step: step, tags: ['move'], reason: 'scored-move' }));
+  }
+
+  // 破墙开路
+  const digTarget = game.star || enemyPos || nearestOpenToCenter(game);
+  const digDir    = findDigDirection(myPos, game, digTarget);
+  if (digDir && gunReady(me)) {
+    proposals.push(buildProposal('dig', function () {
+      if (me.tank.direction === digDir) { me.speak("开炮！！！"); me.fire(); }
+      else turnToward(me, digDir);
+    }, { reward: 26, risk: 15, tags: ['move'], reason: 'dig-wall' }));
+  }
+
+  // 生存兜底：安全徘徊
+  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
+  if (safeStep) {
+    proposals.push(buildProposal('safe-neighbor', function () {
+      moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets);
+    }, { reward: 28, risk: 20, step: safeStep, tags: ['move'], reason: 'safe-neighbor' }));
+  }
+
+  // 终极兜底：原地右转防挂机
+  proposals.push(buildProposal('turn-right', function () {
+    me.turn("right");
+  }, { reward: 40, risk: 40, tags: ['fallback'], reason: 'turn-right-fallback' }));
+
+  return proposals;
+}
+
+
+// ===== myth-tank.js =====
 /**
  * AgenTank 坦克对战 AI 脚本
  * 
@@ -2738,4 +3392,69 @@ function sign(n) {
   if (n > 0) return 1;
   if (n < 0) return -1;
   return 0;
+}
+
+
+// ===== decision-engine.js =====
+// ============================================================
+// decision-engine.js — 决策引擎入口
+//
+// 新版 onIdle：六层管线
+//   [1] 状态采集
+//   [2] 跨帧记忆更新
+//   [3] 硬状态拦截（冰冻/眩晕）
+//   [4] 生存硬闸门（子弹/传送逃生，直接执行，不参与打分）
+//   [5] 全候选提案采集 + 统一评分裁决
+//   [6] 执行最优提案
+//
+// 依赖加载顺序（build.js 或 _scenario_test.js 中保证）：
+//   state-store.js → scoring.js → action-proposals.js → myth-tank.js → decision-engine.js
+// ============================================================
+
+function onIdle(me, enemy, game) {
+  // ---- [1] 状态采集 ----
+  const myPos      = me.tank.position;
+  const enemyTank  = enemy && enemy.tank ? enemy.tank : null;
+  const enemyPos   = enemyTank ? enemyTank.position : null;
+  const enemyBullets = collectEnemyBullets(enemy);
+
+  // ---- [2] 跨帧记忆更新 ----
+  const state = getMatchState(game);
+  recordAssassinOutcome(state, enemy, enemyTank, game);
+  trackEnemy(state, enemyTank, myPos, game);
+  trackStuck(state, myPos);
+
+  // ---- [3] 硬状态拦截 ----
+  if (me.status && me.status.frozen) {
+    me.speak("我被冰冻了");
+    return;
+  }
+
+  // ---- [4] 生存硬闸门 ----
+  // 只要存在 hardGate=true 提案，立刻执行并返回，不进入打分流程。
+  const hardAction = collectHardSurvivalAction(
+    me, enemy, game, state, enemyBullets, enemyTank, enemyPos
+  );
+  if (hardAction) {
+    hardAction.exec();
+    return;
+  }
+
+  // ---- [5] 采集全部候选提案 ----
+  const ctx = buildScoringContext(
+    me, enemy, game, state, enemyBullets, enemyTank, enemyPos
+  );
+
+  const proposals = [].concat(
+    collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enemyTank, enemyPos),
+    collectAttackProposals      (me, enemy, game, state, enemyBullets, enemyTank, enemyPos),
+    collectTargetProposals      (me, enemy, game, state, enemyBullets, enemyTank, enemyPos),
+    collectMoveProposals        (me, enemy, game, state, enemyBullets, enemyTank, enemyPos)
+  );
+
+  // ---- [6] 打分裁决并执行 ----
+  const best = selectBestProposal(proposals, ctx);
+  if (best && best.exec) {
+    best.exec();
+  }
 }
