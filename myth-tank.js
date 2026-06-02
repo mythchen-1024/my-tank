@@ -367,7 +367,7 @@ let MATCH_STATE = null;
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
   if (!MATCH_STATE || frame < MATCH_STATE.lastFrame - 2) {
-    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, stuckFrames: 0, patrolTarget: null, lastEvadeAxis: undefined };
+    MATCH_STATE = { lastFrame: frame, assassinBanned: false, pendingAssassin: null, lastEnemyPos: null, lastEnemySeenFrame: -999, lastMyPos: null, lastMyPos2: null, stuckFrames: 0, patrolTarget: null, lastEvadeAxis: undefined };
   }
   MATCH_STATE.lastFrame = frame;
   return MATCH_STATE;
@@ -381,8 +381,12 @@ function trackStuck(state, myPos) {
   if (state.lastMyPos && samePos(state.lastMyPos, myPos)) {
     state.stuckFrames = (state.stuckFrames || 0) + 1;
   } else {
-    state.stuckFrames = 0;
+    // 检测"功能性卡住"：在 ≤2 格小区域内来回震荡（如 [12,12]↔[12,13] 来回跳，位置变但进展为0）
+    // 记录上上帧位置，若与当前相同（一步来一步回），也计入卡住
+    const osc = state.lastMyPos2 && samePos(state.lastMyPos2, myPos);
+    state.stuckFrames = osc ? (state.stuckFrames || 0) + 1 : 0;
   }
+  state.lastMyPos2 = state.lastMyPos ? state.lastMyPos.slice() : null;
   state.lastMyPos = myPos.slice();
 }
 
@@ -2312,14 +2316,39 @@ function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets) {
   const ahead = nextInDirection(myPos, me.tank.direction);
   if (safe(ahead)) { me.go(); return; }
 
-  // 否则按固定顺序找第一个可走且安全的方向转过去（确定性，避免再次左右横跳）
+  // 破墙优先：若有土块可打通"更远离敌人"的通道，优先破墙而非来回横跳
+  // （mat_BavjL：[12,12]↔[12,13]震荡，right=[13,12]是土块，打通后可真正逃离）
+  if (gunReady(me)) {
+    const digTarget = enemyPos
+      ? [myPos[0] * 2 - enemyPos[0], myPos[1] * 2 - enemyPos[1]] // 以我为中心、敌的对面方向
+      : nearestOpenToCenter(game);
+    const digDir = findDigDirection(myPos, game, digTarget);
+    if (digDir) {
+      // 只有破墙方向确实朝远离敌人时才破墙（避免乱打开洞送人头）
+      if (enemyPos) {
+        const after = nextInDirection(nextInDirection(myPos, digDir), digDir); // 打碎土块后的落脚点
+        if (manhattan(after, enemyPos) > manhattan(myPos, enemyPos)) {
+          if (me.tank.direction === digDir) { me.speak("破墙！"); me.fire(); }
+          else turnToward(me, digDir);
+          return;
+        }
+      } else {
+        if (me.tank.direction === digDir) { me.speak("破墙！"); me.fire(); }
+        else turnToward(me, digDir);
+        return;
+      }
+    }
+  }
+
+  // 找第一个可走且安全的方向转过去（确定性，避免左右横跳）
   let fallback = null;
   for (let i = 0; i < DIRS.length; i++) {
     const p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
     if (!isPassable(game, p, enemyPos)) continue;
-    if (fallback === null) fallback = DIRS[i].name; // 记一个纯可通行方向兜底
+    if (fallback === null) fallback = DIRS[i].name;
     if (safe(p)) { turnToward(me, DIRS[i].name); return; }
   }
+
   if (fallback) { turnToward(me, fallback); return; }
   me.turn("right"); // 四面皆墙，原地转
 }
