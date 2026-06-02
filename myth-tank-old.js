@@ -128,6 +128,7 @@ function onIdle(me, enemy, game) {
 
   // 跨帧状态：检测敌方是否曾躲过我方刺杀子弹，本局据此禁用刺杀
   const state = getMatchState(game);
+  // state 在帧间持久化：存刺杀禁用标记、敌人最后可见位置、卡住帧计数等，用来跨帧决策
   recordAssassinOutcome(state, enemy, enemyTank, game);
   trackEnemy(state, enemyTank, myPos, game);
   trackStuck(state, myPos);
@@ -1208,6 +1209,7 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
 function chooseStep(me, enemy, game, enemyPos, state, enemyBullets) {
   const myPos = me.tank.position;
   const standoff = safeStandoffDistance(enemy);
+  // fleeMode: 敌人连续背对逃跑达到阈值，追星判定会放宽（对纯跑分流不用再客气）
   const fleeMode = !!(state && state.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
 
   // 1. 追星：下一步不进死区/死胡同（星就在死格里则允许进入）
@@ -1877,7 +1879,7 @@ function findBulletDodge(me, enemy, game, enemyPos) {
   // 没有任何子弹威胁到我，就不躲
   if (!anyBulletThreatens(bullets, myPos, game)) return null;
 
-  // 最快多少帧子弹会命中我当前格
+  // 最快多少帧子弹会命中我当前格（含双弹推断），后续时序判断依赖这个窗口
   const incomingFrames = minBulletFramesTo(bullets, myPos, game);
   if (incomingFrames < 0) return null;
 
@@ -1901,7 +1903,7 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     // 不能顺着来袭子弹方向走（同向只会被追上，且这一步本就还在弹道行/列上）
     if (threatDirs[d.name]) continue;
 
-    // 时序校验：朝向即脱离方向本帧 go 离格(needFrames=1, incoming>=1即可)；
+    // 时序校验：朝向即脱离方向本帧 go 离格(needFrames=1, incoming>=1 即可)；
     // 需转向则本帧不动、下帧才走，要求 incoming>=3 才不会在转向帧被命中。
     const needTurn = d.name !== me.tank.direction;
     if (needTurn) {
@@ -2025,13 +2027,13 @@ function findTwoStepEscape(me, enemyBullets, game, enemyPos, enemyTank) {
     }
     if (isAlongThreat) continue;
 
-    // 到达 p 所需帧：当前朝向=1(直接go)，否则 turnDistance+1(先转再走)
+    // 到达 p 所需帧：当前朝向=1(直接 go)，否则 turnDistance+1(先转再走)
     const arriveFrames = (d.name === me.tank.direction) ? 1 : (turnDistance(me.tank.direction, d.name) + 1);
     // 该格被子弹威胁：必须在我到达之后才命中（留出落脚帧），否则走过去就被打
     const framesAtP = minBulletFramesTo(bullets, p, game);
     if (framesAtP >= 0 && framesAtP <= arriveFrames) continue;
 
-    // 从 p 出发能否再脱离：存在一个真正安全(不在任何弹道)的相邻格，且其到位帧早于威胁命中
+    // 二步模型关键：从 p 再迈一步能脱离所有弹道，且时间上能抢在威胁命中前完成
     let nextEscapeOk = false;
     for (let k = 0; k < DIRS.length; k++) {
       const q = [p[0] + DIRS[k].dx, p[1] + DIRS[k].dy];
@@ -2495,6 +2497,7 @@ function inferOverloadPairedBullet(enemy, bullets) {
   const horizontal = dir === "left" || dir === "right"; // 水平飞 -> 双弹分布在不同行(y)；竖直飞 -> 不同列(x)
   // 可见弹所在车道(水平飞看 y，竖直飞看 x)。双弹是相邻两条平行车道(差 1)：主弹在敌开火行/列，
   // 副弹恒在主弹 +1。给定可见弹，真实配对弹只可能在 visLane-1(可见的是副弹) 或 visLane+1(可见的是主弹)。
+  // 这里用“敌开火行/列”为锚点再镜像出对侧车道，保证无论敌在后续移动到哪，真实主/副弹都被覆盖到。
   const visLane = horizontal ? b.position[1] : b.position[0];
   const enemyLane = horizontal ? ep[1] : ep[0];
   // 关键修复(mat_8iF)：双弹车道在**开火瞬间**由敌位置决定且固定不变。敌开火后会移动——

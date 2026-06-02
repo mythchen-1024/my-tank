@@ -1,8 +1,4 @@
 /**
- * ============================================================
- *  AgenTank 坦克对战 AI 脚本 — myth-tank（传送技能专精）
- *  Version: v9 (基于 v8 增强版 + README 复盘优化)
- * ============================================================
  * 
  * 【设计理念】
  *   基于 README 总结的复盘经验，本坦克采用"局面评分 + 硬约束"架构：
@@ -99,12 +95,17 @@ var STUCK_BREAK_FRAMES = 0;         // 强制打破卡死的剩余帧数
 var ENEMY_MEMORY_POS = null;        // 敌人最后已知坐标
 var ENEMY_MEMORY_FRAMES = 0;        // 记忆剩余有效帧数
 
+// 反摇摆迟滞：记录上一帧执行的转向方向与位置，抑制原地左右转来回拉锯
+var LAST_TURN_SIDE = null;          // 上一帧的转向方向 "left"/"right"
+var LAST_POS_KEY = null;            // 上一帧的位置 key
+
 function onIdle(me, enemy, game) {
   // ========== 获取基础状态信息 ==========
   var myPos = me.tank.position;
   var enemyTank = enemy && enemy.tank ? enemy.tank : null;
   var enemyPos = enemyTank ? enemyTank.position : null;
   var enemyBullet = enemy && enemy.bullet ? enemy.bullet : null;
+  var foeOverloaded = !!(enemy && enemy.status && enemy.status.overloaded);
   var framesLeft = 128 - game.frames;
   var starDiff = me.stars - (enemy.stars || 0);
   var isLeading = starDiff > 0;
@@ -122,6 +123,20 @@ function onIdle(me, enemy, game) {
 
   // ========== 异常状态拦截 ==========
   if (me.status && (me.status.stunned || me.status.frozen)) return;
+
+  // ========== 硬约束1：子弹躲避（最高优先级，保命） ==========
+  // 参考 bak.js 的简洁模式：findBulletDodge 找安全侧躲格，moveToward 执行；
+  // 无法侧躲时 findEscapeTeleport 全图传送兜底。先于一切收益逻辑。
+  var dodge = findBulletDodge(me, enemy, game, enemyPos);
+  if (dodge) {
+    moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullet);
+    return;
+  }
+  // 常规侧躲无解 → 紧急传送逃生（仅在被子弹威胁时才动用，避免浪费技能）
+  if (enemyBullet && bulletThreatens(enemyBullet, myPos, game) && teleportReady(me)) {
+    var escTile = findEscapeTeleport(me, enemyTank, enemyBullet, game);
+    if (escTile) { me.teleport(escTile[0], escTile[1]); return; }
+  }
 
   // ========== 卡死检测（元级覆盖，打破振荡后重新进入评分） ==========
   updateStuckHistory(myPos);
@@ -159,9 +174,9 @@ function onIdle(me, enemy, game) {
     var d = DIRS[i];
     var nextPos = [myPos[0] + d.dx, myPos[1] + d.dy];
 
-    // 硬约束过滤：不通、吃子弹、近距被瞄准、死角
+    // 硬约束过滤：不通、必死格（子弹ETA命中/overload侧线/近距炮口含下一帧）、死角
     if (!isPassable(game, nextPos, enemyPos)) continue;
-    if (bulletThreatens(enemyBullet, nextPos, game)) continue;
+    if (isLethalTile(nextPos, enemyTank, enemyBullet, game, foeOverloaded)) continue;
     if (enemyPos && enemyAimsAt(nextPos, enemyTank, game) && manhattan(nextPos, enemyPos) <= 4) continue;
     if (isDeadEnd(nextPos, game, enemyPos)) continue;
 
@@ -173,18 +188,64 @@ function onIdle(me, enemy, game) {
 
   // --- 2. 原地不动候选 ---
   var holdScore = scorePosition(myPos, me, enemy, game, enemyPos, enemyTank, enemyBullet, isLeading, isTrailing, framesLeft);
-  // 已占星线时原地不动有额外加分（阵地意识）
+  // 阵地意识：仅当“有可见敌人需要封锁”且自己不站在星上时，占星线原地不动才加分。
+  // 否则（敌人不可见 / 已可吃星）不应原地空守，避免怂坦克放着免费星不吃。
   if (game.star && clearShotDirection(myPos, game.star, game) && !bulletThreatens(enemyBullet, myPos, game)) {
-    holdScore += 18;
+    var onStar = samePos(myPos, game.star);
+    if (enemyPos && !onStar) {
+      var enemyStarGap = manhattan(enemyPos, game.star);
+      if (enemyStarGap <= 6) holdScore += 18; // 敌人在争星范围内才值得守线
+    }
+  }
+  // 硬约束：当前格本身是必死格（子弹/侧线/近距炮口）→ 原地不动重罚，强制离开
+  if (isLethalTile(myPos, enemyTank, enemyBullet, game, foeOverloaded)) {
+    holdScore -= 5000;
+  }
+  // 反发呆：无星时原地 hold 没有收益，评分平局会让坦克永远不动。
+  // 无论敌人是否可见，无星就惩罚 hold，强制去追星/找射击位/巡逻。
+  // 有目标（星/敌）时也给 hold 小惩罚，确保转向代价不会让坦克永远原地不动。
+  var idleNoTarget = !game.star && !enemyPos;
+  if (!game.star) {
+    holdScore -= 30; // 无星时统一惩罚，确保任何有效 move 都赢过 hold
+  } else if (!enemyPos) {
+    holdScore -= 10; // 有星无敌时打破平局，确保追星
+  } else {
+    holdScore -= 3;  // 有星有敌时极小惩罚，只打破完全平局，不过度驱动移动
   }
   candidates.push({ type: "hold", score: holdScore });
 
-  // --- 2.5 后方敌人调头威慑：占星线时敌人从后方逼近，优先调转炮口 ---
-  if (enemyPos && game.star && clearShotDirection(myPos, game.star, game)) {
-    var rearDir = clearShotDirection(myPos, enemyPos, game);
-    if (rearDir && rearDir !== me.tank.direction && !bulletThreatens(enemyBullet, myPos, game)) {
-      // 敌人能打到我但我没面对他 → 调头威慑
-      candidates.push({ type: "turn", dir: rearDir, score: 28 });
+  // --- 2.1 巡逻探索：无星无敌人时，沿当前朝向继续前进（或转向可走方向），避免发呆 ---
+  // 策略：优先沿当前朝向走（保持惯性，不乱改方向），前方不通时才转向。
+  // 不强制走向地图中心，避免在某些地图上主动走进敌人射击线。
+  if (idleNoTarget) {
+    var forwardPos = nextInDirection(myPos, me.tank.direction);
+    if (isPassable(game, forwardPos, null)) {
+      // 前方可走：直接 go，分数高于 hold(-200)
+      candidates.push({ type: "move", dir: me.tank.direction, pos: forwardPos, score: 50 });
+    } else {
+      // 前方不通：找任意可走邻格，分数略低
+      for (var ei = 0; ei < DIRS.length; ei++) {
+        var ep = [myPos[0] + DIRS[ei].dx, myPos[1] + DIRS[ei].dy];
+        if (isPassable(game, ep, null)) {
+          candidates.push({ type: "move", dir: DIRS[ei].name, pos: ep,
+            score: 40 - turnDistance(me.tank.direction, DIRS[ei].name) * 4 });
+          break; // 只加一个，避免过多候选
+        }
+      }
+    }
+  }
+
+  // --- 2.5 调头应战：与敌人同线无遮挡却没面对他，优先调转炮口（含站星时不发呆） ---
+  // 经验复盘：站在星上或星线上原地 hold 时，敌人进入同线我方还背对着，
+  // 容易被先手击杀。只要敌人能与我互射、我朝向不对，就把"转向敌人"作为高分候选。
+  if (enemyPos && !bulletThreatens(enemyBullet, myPos, game)) {
+    var faceDir = clearShotDirection(myPos, enemyPos, game);
+    if (faceDir && faceDir !== me.tank.direction) {
+      // 敌人已经瞄着我（同线且炮口对准）→ 站着不动会被先手秒，必须高于 hold 抢先转向应战
+      var foeAiming = enemyAimsAt(myPos, enemyTank, game);
+      var onStarOrLine = game.star && (samePos(myPos, game.star) || clearShotDirection(myPos, game.star, game));
+      var turnScore = foeAiming ? (holdScore + 30) : (onStarOrLine ? 40 : 30);
+      candidates.push({ type: "turn", dir: faceDir, score: turnScore });
     }
   }
 
@@ -200,10 +261,15 @@ function onIdle(me, enemy, game) {
   }
 
   // --- 4. 破墙开路候选 ---
-  var digDir = findDigDirection(myPos, game, game.star || enemyPos || nearestOpenToCenter(game));
-  if (digDir && gunReady(me)) {
-    // 破墙作为特殊开火，分数略低于直接射击敌人
-    candidates.push({ type: "dig", dir: digDir, score: 25 });
+  // 仅在有明确目标（星星 / 可见敌人）时才破墙开路；无目标时破墙纯属浪费子弹
+  // （真实对局出现过无敌无星时反复 fire 打墙/打不挡路的土块，白白消耗唯一的子弹）。
+  if ((game.star || enemyPos) && gunReady(me)) {
+    var digTarget = game.star || enemyPos;
+    var digDir = findDigDirection(myPos, game, digTarget);
+    // 仅当破墙确实能缩短到目标的路径时才挖（绕路距离 > 破墙后直线收益）
+    if (digDir && digHelpsReach(myPos, digDir, digTarget, game)) {
+      candidates.push({ type: "dig", dir: digDir, score: 25 });
+    }
   }
 
   // --- 5. 传送候选 ---
@@ -214,29 +280,52 @@ function onIdle(me, enemy, game) {
     }
   }
 
+  // --- 反摇摆迟滞：若上一帧原地转向，本帧又要反方向转回且位置没动，给该转向候选扣分 ---
+  // 修复 f15-f18 那种原地 left/right/left/right 拉锯死循环（位置不变，评分翻转）。
+  var curPosKey = key(myPos);
+  if (LAST_TURN_SIDE && LAST_POS_KEY === curPosKey) {
+    var reverseSide = LAST_TURN_SIDE === "left" ? "right" : "left";
+    for (var hc = 0; hc < candidates.length; hc++) {
+      var c = candidates[hc];
+      if (c.type === "turn" && c.dir) {
+        // 该转向候选实际会让 turnToward 选哪个 side
+        var side = turnSideFor(me.tank.direction, c.dir);
+        if (side === reverseSide) c.score -= 60; // 反向转回 → 重扣，打破拉锯
+      }
+    }
+  }
+
   // --- 按分数降序排列，选最高分 ---
   candidates.sort(function(a, b) { return b.score - a.score; });
 
   if (candidates.length > 0) {
     var best = candidates[0];
 
+    // 记录本帧动作，用于下一帧反摇摆判断
+    var executedTurnSide = null;
+
     if (best.type === "move") {
       if (me.tank.direction === best.dir) { me.go(); }
-      else { turnToward(me, best.dir); }
+      else { executedTurnSide = turnSideFor(me.tank.direction, best.dir); turnToward(me, best.dir); }
     } else if (best.type === "fire" || best.type === "dig") {
       if (me.tank.direction === best.dir) { me.fire(); }
-      else { turnToward(me, best.dir); }
+      else { executedTurnSide = turnSideFor(me.tank.direction, best.dir); turnToward(me, best.dir); }
     } else if (best.type === "turn") {
+      executedTurnSide = turnSideFor(me.tank.direction, best.dir);
       turnToward(me, best.dir);
     } else if (best.type === "teleport") {
       if (me.tank.direction === best.dir) { me.teleport(best.pos[0], best.pos[1]); }
-      else { turnToward(me, best.dir); }
+      else { executedTurnSide = turnSideFor(me.tank.direction, best.dir); turnToward(me, best.dir); }
     }
     // type === "hold"：不做任何动作，保持当前位置和朝向
+
+    LAST_TURN_SIDE = executedTurnSide;
+    LAST_POS_KEY = curPosKey;
     return;
   }
 
   // 兜底：转向避免彻底卡死
+  LAST_TURN_SIDE = "right"; LAST_POS_KEY = curPosKey;
   me.turn("right");
 }
 
@@ -250,8 +339,11 @@ var DIRS = [
   { name: "left",  dx: -1, dy:  0 }   // 左
 ];
 
-// 子弹轨迹预判距离（格），超过此距离的子弹不视为威胁
+// 子弹轨迹预判距离（格），用于 overload 双弹侧线判断
 var BULLET_LOOKAHEAD_TILES = 8;
+// 子弹威胁的 ETA 上限（帧）。子弹1帧2格，阈值10≈20格，覆盖整张图宽。
+// 用 ETA 而非固定格数，修复"远距离同线子弹未被感知 → 原地摇摆被秒"的硬伤。
+var BULLET_THREAT_ETA = 10;
 // 刺杀传送的最小距离（避免开火锁定）与最大搜索距离
 var ASSASSIN_MIN_RANGE = 5;
 var ASSASSIN_MAX_RANGE = 8;
@@ -316,6 +408,10 @@ function teleportReady(me) {
  * 【传送刺杀方案】寻找最佳传送落点，从敌方射击盲区突袭
  * 遍历四个方向和5-8格距离，打分选择最优落点
  * 返回 { pos: [x,y], dir: "方向" } 或 null
+ *
+ * 【v8 修正】传送不改朝向，落地后若还要转向才能开火，会输掉转向竞速被敌人先开火击杀
+ * （线上对 C罗/biu-biu 等多次因此送死）。因此只接受"落地即面向敌人"的方向：
+ * 即落点的射击方向必须等于我当前朝向，落地下一帧就能直接开火。
  */
 function findAssassinationPlan(me, enemy, enemyTank, enemyBullet, game) {
   if (!enemyTank || !teleportReady(me) || !gunReady(me)) return null;
@@ -323,26 +419,26 @@ function findAssassinationPlan(me, enemy, enemyTank, enemyBullet, game) {
   if (enemy.status && (enemy.status.cloaked || enemy.status.shielded)) return null;
 
   var enemyPos = enemyTank.position;
+  var myDir = me.tank.direction;
   var best = null;
   var bestScore = -9999;
 
-  // 遍历所有方向和攻击距离，寻找最佳落点
-  for (var i = 0; i < DIRS.length; i++) {
-    var dir = DIRS[i];
-    for (var range = ASSASSIN_MIN_RANGE; range <= ASSASSIN_MAX_RANGE; range++) {
-      var p = [enemyPos[0] - dir.dx * range, enemyPos[1] - dir.dy * range];
-      if (samePos(p, me.tank.position)) continue; // 排除当前位置
-      if (!isAssassinTile(p, dir.name, enemyTank, enemyBullet, game)) continue;
+  // 只遍历"我当前朝向"这一个方向：落地无需转向，下一帧即可开火
+  var di = dirIndex(myDir);
+  if (di < 0) return null;
+  var dir = DIRS[di];
+  for (var range = ASSASSIN_MIN_RANGE; range <= ASSASSIN_MAX_RANGE; range++) {
+    var p = [enemyPos[0] - dir.dx * range, enemyPos[1] - dir.dy * range];
+    if (samePos(p, me.tank.position)) continue; // 排除当前位置
+    if (!isAssassinTile(p, dir.name, enemyTank, enemyBullet, game)) continue;
 
-      // 打分模型：转向代价越小越好、距离越近越好、靠近地图中心更好
-      var turns = turnDistance(me.tank.direction, dir.name);
-      var centerBias = distanceFromEdges(p, game);
-      var score = 100 - turns * 35 - range * 2 + centerBias;
+    // 打分模型：距离越近越好、靠近地图中心更好（已无转向代价，因为强制零转向）
+    var centerBias = distanceFromEdges(p, game);
+    var score = 100 - range * 2 + centerBias;
 
-      if (score > bestScore) {
-        bestScore = score;
-        best = { pos: p, dir: dir.name };
-      }
+    if (score > bestScore) {
+      bestScore = score;
+      best = { pos: p, dir: dir.name };
     }
   }
   return best;
@@ -679,6 +775,31 @@ function findDigDirection(pos, game, target) {
 }
 
 /**
+ * 【破墙收益校验】只有当破墙后能实际缩短到目标的路径时才值得挖
+ * 比较：当前绕路 BFS 距离 vs 破墙后的曼哈顿距离（近似）
+ */
+function digHelpsReach(pos, digDir, target, game) {
+  if (!target) return false;
+  var walkDist = pathDistance(pos, target, game, null);
+  // 找该方向上的土块位置
+  var di = dirIndex(digDir);
+  if (di < 0) return false;
+  var d = DIRS[di];
+  var x = pos[0] + d.dx, y = pos[1] + d.dy;
+  while (tileAt(game, [x, y]) !== "x") {
+    if (tileAt(game, [x, y]) === "m") {
+      // 破墙后落点
+      var after = [x + d.dx, y + d.dy];
+      var afterDist = manhattan(after, target);
+      // 只有绕路明显更远时才破墙（至少节省 3 步）
+      return walkDist < 0 || afterDist < walkDist - 3;
+    }
+    x += d.dx; y += d.dy;
+  }
+  return false;
+}
+
+/**
  * 【地图中心定位】寻找最靠近地图中心的可行走空地
  */
 function nearestOpenToCenter(game) {
@@ -714,9 +835,7 @@ function findBulletDodge(me, enemy, game, enemyPos) {
   var myPos = me.tank.position;
   var b = enemy.bullet;
 
-  // 计算子弹ETA，确认确实在同线且会命中
-  var eta = bulletETA(b, myPos);
-  if (!bulletThreatens(b, myPos, game) && eta > 2) return null;
+  // 仅在子弹确实会命中当前格时才需要侧躲（调用方已先判威胁，这里再兜底一次）
   if (!bulletThreatens(b, myPos, game)) return null;
 
   // 垂直子弹往左右躲，水平子弹往上下躲
@@ -794,8 +913,8 @@ function findAimDodge(me, enemyTank, game, enemyPos) {
 
 /**
  * 【子弹威胁判断】判断指定坐标是否受到给定子弹的威胁
- * - 同列且子弹朝正确方向、距离在预判范围内、中间无遮挡
- * - 同行同理
+ * - 同行/同列 + 子弹朝向正确 + 中间无遮挡 + ETA 在阈值内（按1帧2格的真实速度）
+ * - 用 ETA 取代固定格数上限，远距离同线子弹也能被感知（修复原地摇摆被秒）
  */
 function bulletThreatens(bullet, pos, game) {
   if (!bullet || !bullet.position) return false;
@@ -804,14 +923,14 @@ function bulletThreatens(bullet, pos, game) {
   // 在同一列且子弹朝下/朝上
   if (bp[0] === pos[0]) {
     var dy = pos[1] - bp[1];
-    if (bullet.direction === "down" && dy > 0 && dy <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
-    if (bullet.direction === "up" && dy < 0 && -dy <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
+    if (bullet.direction === "down" && dy > 0 && Math.ceil(dy / 2) <= BULLET_THREAT_ETA) return clearBetween(bp, pos, game);
+    if (bullet.direction === "up" && dy < 0 && Math.ceil(-dy / 2) <= BULLET_THREAT_ETA) return clearBetween(bp, pos, game);
   }
   // 在同一行且子弹朝右/朝左
   if (bp[1] === pos[1]) {
     var dx = pos[0] - bp[0];
-    if (bullet.direction === "right" && dx > 0 && dx <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
-    if (bullet.direction === "left" && dx < 0 && -dx <= BULLET_LOOKAHEAD_TILES) return clearBetween(bp, pos, game);
+    if (bullet.direction === "right" && dx > 0 && Math.ceil(dx / 2) <= BULLET_THREAT_ETA) return clearBetween(bp, pos, game);
+    if (bullet.direction === "left" && dx < 0 && Math.ceil(-dx / 2) <= BULLET_THREAT_ETA) return clearBetween(bp, pos, game);
   }
   return false;
 }
@@ -861,6 +980,41 @@ function overloadSideThreatens(bullet, pos, game) {
 }
 
 /**
+ * 【近距炮口必死判断】敌人当前炮口 + 下一帧可能炮口，是否锁定指定格（仅近距启用）
+ * 敌人每帧只能 1 个动作，下一发子弹只可能来自 {当前朝向, 左转90, 右转90} 三条线
+ * （180度需2帧）。仅在 manhattan<=4 的近距启用，避免远距过度保守不敢占星线。
+ * 复用 clearShotDirection（同线+无遮挡）。
+ */
+function enemyMuzzleLethal(pos, enemyTank, game) {
+  if (!enemyTank || !enemyTank.position || !enemyTank.direction) return false;
+  var ep = enemyTank.position;
+  if (manhattan(pos, ep) > 4) return false; // 仅近距
+  var lineDir = clearShotDirection(ep, pos, game);
+  if (!lineDir) return false; // 不同线或被遮挡 → 安全
+  // 敌人当前已对准 pos
+  if (lineDir === enemyTank.direction) return true;
+  // 敌人下一帧转 90 度即可对准（左转/右转后的朝向 == lineDir）
+  var li = dirIndex(enemyTank.direction);
+  if (li < 0) return false;
+  var leftDir = DIRS[(li + 3) % 4].name;
+  var rightDir = DIRS[(li + 1) % 4].name;
+  return lineDir === leftDir || lineDir === rightDir;
+}
+
+/**
+ * 【必死格统一判断】把多条保命硬约束收敛到一处，供 move 过滤 / hold 校验 / 星点路径校验复用
+ * 规则：① 当前在场子弹会按真实ETA命中该格 ② overload 双弹侧线会命中
+ *       ③ 敌人近距炮口（含下一帧可能炮口）锁定该格
+ * 不在此处做"敌人远距瞄准"——那属于收益权衡，留给评分。
+ */
+function isLethalTile(pos, enemyTank, enemyBullet, game, foeOverloaded) {
+  if (bulletThreatens(enemyBullet, pos, game)) return true;
+  if (foeOverloaded && overloadSideThreatens(enemyBullet, pos, game)) return true;
+  if (enemyMuzzleLethal(pos, enemyTank, game)) return true;
+  return false;
+}
+
+/**
  * 【安全移动】向目标方向移动，如果下一步不安全则改走安全邻格
  * 安全检查：可通过、不被预瞄、不在子弹轨迹上
  */
@@ -901,6 +1055,19 @@ function turnToward(me, desired) {
   if (diff === 1) me.turn("right");
   else if (diff === 3) me.turn("left");
   else me.turn("right"); // 转180度时随便选
+}
+
+/**
+ * 【转向方向预判】turnToward 在当前朝向→目标朝向时会选择的 side（与 turnToward 一致）
+ * 返回 "left"/"right"，无需转向时返回 null。供反摇摆迟滞使用。
+ */
+function turnSideFor(currentDir, desired) {
+  var cur = dirIndex(currentDir);
+  var dst = dirIndex(desired);
+  if (cur < 0 || dst < 0 || cur === dst) return null;
+  var diff = (dst - cur + 4) % 4;
+  if (diff === 3) return "left";
+  return "right"; // diff===1 或 180度
 }
 
 /**
@@ -1305,11 +1472,18 @@ function shouldGrassAmbush(me, enemyTank, game) {
 function scorePosition(pos, me, enemy, game, enemyPos, enemyTank, enemyBullet, isLeading, isTrailing, framesLeft) {
   var score = 0;
   if (game.star) {
-    var ds = manhattan(pos, game.star);
-    var urg = isTrailing ? 2.0 : 1.0;
-    if (framesLeft <= 30) urg = Math.max(urg, 3.0);
-    score += Math.max(0, 25 - ds * 3) * urg;
-    if (clearShotDirection(pos, game.star, game)) score += 15 * urg;
+    var foeOL = !!(enemy && enemy.status && enemy.status.overloaded);
+    // 规则6：星点本身是必死点时，不给抢星收益，避免评分诱导往必死星走
+    var starLethal = isLethalTile(game.star, enemyTank, enemyBullet, game, foeOL);
+    if (!starLethal) {
+      var ds = manhattan(pos, game.star);
+      var urg = isTrailing ? 2.0 : 1.0;
+      if (framesLeft <= 30) urg = Math.max(urg, 3.0);
+      score += Math.max(0, 25 - ds * 3) * urg;
+      if (clearShotDirection(pos, game.star, game)) score += 15 * urg;
+      // 站上星星=直接得分，给一个明确的高额收益，避免站在星线上空守不吃免费星
+      if (samePos(pos, game.star)) score += 40 * urg;
+    }
   }
   if (enemyPos) {
     var de = manhattan(pos, enemyPos);
@@ -1317,8 +1491,15 @@ function scorePosition(pos, me, enemy, game, enemyPos, enemyTank, enemyBullet, i
     score += -Math.abs(de - ideal) * 3;
     if (de > 8) score -= 10;
     if (de <= 1) score -= 20;
-    if (clearShotDirection(pos, enemyPos, game)) score += 12;
-    if (enemyAimsAt(pos, enemyTank, game)) score -= de <= 4 ? 35 : 12;
+    var onEnemyLine = !!clearShotDirection(pos, enemyPos, game);
+    if (onEnemyLine) score += 12;
+    if (enemyAimsAt(pos, enemyTank, game)) {
+      score -= de <= 4 ? 35 : 12;
+    } else if (onEnemyLine) {
+      // 同线但敌人未对准：敌人 1-2 帧可转向反打
+      // 扣分要超过 +12 的开火加分，确保净效果为负，不诱导坦克走进炮口线
+      score -= de <= 4 ? 20 : 15;
+    }
     if (enemyTeleportReady(enemy)) score -= countTeleportVulnerableDirections(pos, enemyPos, game) * 8;
   }
   score += distanceFromEdges(pos, game) * 2;

@@ -128,6 +128,7 @@ function onIdle(me, enemy, game) {
 
   // 跨帧状态：检测敌方是否曾躲过我方刺杀子弹，本局据此禁用刺杀
   const state = getMatchState(game);
+  // state 在帧间持久化：存刺杀禁用标记、敌人最后可见位置、卡住帧计数等，用来跨帧决策
   recordAssassinOutcome(state, enemy, enemyTank, game);
   trackEnemy(state, enemyTank, myPos, game);
   trackStuck(state, myPos);
@@ -251,112 +252,13 @@ function onIdle(me, enemy, game) {
     return;
   }
 
-  // 9. 传送抢星：寻找星星附近最安全的格子进行传送抢分
-  // 隐身守星陷阱：敌有隐身且此刻隐身、其最后位置正卡住星星射线时，冲过去抢星=送死，改为侧向守位等待
-  if (!inCloakStarTrap(me, enemy, enemyTank, game, state)) {
-    const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
-    if (starTeleport) {
-      // 敌方是 teleport 时，双方可能同帧传送到星两侧近距对撞(mat_KBZ 传 [3,6] 落地朝向不对被秒)。
-      // 传送落地朝向不变 -> 先把车头转到"落地后朝向星/对撞方向"，下一帧再传送，落地即可对准抢先开火/对射。
-      const faceDir = teleportPreTurnDir(me, starTeleport, enemy, enemyTank, game);
-      if (faceDir && me.tank.direction !== faceDir) {
-        turnToward(me, faceDir); // 这一帧先转，下一帧 onIdle 会再次进到这里并传送
-        return;
-      }
-      me.teleport(starTeleport[0], starTeleport[1]);
-      return;
-    }
-  } else {
-    const guard = cloakStarGuardStep(me, game, state);
-    if (guard) {
-      moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets);
-      return;
-    }
-    return; // 守位已最优：原地不动等敌现身/星消失，避免步入陷阱
+  // 9. 后段战术统一由动作返回器收口（agile-splashing-willow 改造计划：决策与执行分离）。
+  // 将之前的 if/return 离散规则，封装为可解释的 { kind, exec } 动作提案对象。
+  const lateAction = chooseLateTacticalAction(me, enemy, enemyTank, enemyPos, enemyBullets, game, state);
+  if (lateAction) {
+    // 统一执行最终裁决出的最优后段战术，便于后期接入决策日志 (Trace) 和统一打分门控。
+    lateAction.exec();
   }
-
-  // 8. 星星争夺预瞄：如果双方都在星星附近，提前将炮口对准星星方向迎击
-  const starGuard = findContestedStarGuard(me, enemyTank, game);
-  if (starGuard) {
-    if (me.tank.direction !== starGuard.dir) {
-      turnToward(me, starGuard.dir);
-    }
-    return;
-  }
-
-  // 7. 传送刺杀：寻找敌方附近的射击盲区进行传送突袭（严格模拟敌方反击，敌方反应过对刺杀则本局禁用）
-  const assassination = findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state);
-  if (assassination) {
-    // 传送后车头朝向不会变，所以如果当前朝向不对，先转向目标方向再传送
-    if (me.tank.direction === assassination.dir) {
-      // 记录本次刺杀，下一帧据此观察敌方是否躲开
-      state.pendingAssassin = { targetPos: enemyPos.slice(), dir: assassination.dir, frame: (game && game.frames) || 0 };
-      me.teleport(assassination.pos[0], assassination.pos[1]);
-    } else {
-      turnToward(me, assassination.dir);
-    }
-    return;
-  }
-
-  // 9.5 草丛蹲守等闪现抢星(用户策略，对 overload 双弹流)：我已藏在草丛(敌锁不定我、双弹无从瞄准)、
-  //     当前无星可抢、敌不贴脸时——原地保位不乱跑，保留传送等星刷新再闪现抢分。
-  //     躲避/守线/抢星都在上方先处理过(无星时 findStarTeleport 不触发)，所以走到这里"原地蹲守"是安全的。
-  if (enemyIsOverloadType(enemy) && !game.star && iAmHidden(me, game) && teleportReady(me)) {
-    const safeInBush = !anyBulletThreatens(enemyBullets, myPos, game) &&
-      (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&     // 敌不贴脸(贴脸交给下方走位拉开)
-      (!enemyTank || !enemyAimsAt(myPos, enemyTank, game)); // 敌没瞄到我(草丛里通常看不见我，双保险)
-    if (safeInBush) {
-      primeShortIntent(state, "hold", myPos, (game && game.frames) || 0, 3);
-      return; // 蹲草丛不动，等星刷新由 step9 findStarTeleport 闪现抢
-    }
-  }
-
-  const shortIntent = resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state);
-  if (shortIntent) {
-    if (shortIntent.hold) return;
-    if (state.stuckFrames >= 2) {
-      clearShortIntent(state);
-      breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
-      return;
-    }
-    moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
-    return;
-  }
-
-  // 10. 战术走位：基于 BFS 寻路（优先星星 -> 射击轨道 -> 靠近敌人 -> 地图中心）
-  // 安全站位：对过载/隐身敌人保持更大间距，且只走"走过去后仍能躲开敌方子弹"的格子
-  const step = chooseStep(me, enemy, game, enemyPos, state, enemyBullets);
-  if (step) {
-    // 防靠墙空转：已连续多帧原地未动时，强制打破死循环——朝向可直接走就走，否则确定性转向一个可通行安全方向
-    if (state.stuckFrames >= 2) {
-      breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
-      return;
-    }
-    moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
-    return;
-  }
-
-  // 11. 破墙开路：面前有土块且子弹就绪，开火打碎土块
-  const digDir = findDigDirection(myPos, game, game.star || enemyPos || nearestOpenToCenter(game));
-  if (digDir && gunReady(me)) {
-    if (me.tank.direction === digDir) {
-      me.speak("开炮！！！");
-      me.fire();
-    } else {
-      turnToward(me, digDir);
-    }
-    return;
-  }
-
-  // 12. 安全徘徊：如果无事可做，找一个最安全的格子走一步
-  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
-  if (safeStep) {
-    moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets);
-    return;
-  }
-
-  // 13. 原地转向：连安全的格子都没有时，原地向右转，避免卡死
-  me.turn("right");
 }
 
 // ================= 常量定义 =================
@@ -391,6 +293,7 @@ let MATCH_STATE = null;
  * - assassinBanned: 本局是否已禁用传送刺杀（敌方展示过躲刺杀子弹的反应）
  * - pendingAssassin: 最近一次传送刺杀的跟踪信息 { dir, targetPos, frame }
  * - lastEnemyPos / lastEnemySeenFrame: 敌人最后一次可见的位置与帧（隐身后据此避让）
+ * - shortIntent: 短期意图缓存，只保留 2~4 步的低风险连续动作
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
@@ -418,10 +321,12 @@ function trackStuck(state, myPos) {
   state.lastMyPos = myPos.slice();
 }
 
+// 短期意图只允许短暂续跑，失效后立刻清空，避免旧计划抢占后续决策。
 function clearShortIntent(state) {
   if (state) state.shortIntent = null;
 }
 
+// 这里只缓存 2~4 步的低风险计划，像巡逻、蹲草、轻度追星这类连续动作。
 function primeShortIntent(state, kind, target, frame, steps) {
   if (!state || !target) return;
   state.shortIntent = {
@@ -433,6 +338,7 @@ function primeShortIntent(state, kind, target, frame, steps) {
   };
 }
 
+// 每帧续跑前先复核安全条件：一旦目标失效、被敌人盯上或会扫进弹道，就马上中止。
 function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state) {
   const intent = state && state.shortIntent;
   if (!intent) return null;
@@ -478,6 +384,7 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
 
   const standoff = safeStandoffDistance(enemy);
   if (!isPassable(game, step, enemyPos) || enemyAimsAt(step, enemyTank, game) ||
+      // 下一步若会扫过子弹轨道，也直接判废，避免短期意图把过时路线继续跑到底。
       stepIntoBulletPath(bullets, step, game) ||
       (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff))) {
     clearShortIntent(state);
@@ -1201,94 +1108,448 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   if (enemyPos && enemyIsOverloadType(enemy) && !allowStarDeadEnd) {
     if (!hasDoubleLaneEscapeAt(next, enemyPos, game) && inDoubleLaneBand(enemyPos, next, standoff + 2)) return false;
   }
+  // 还要排除下一帧会扫到的子弹轨道，避免“当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
   return true;
 }
 
-function chooseStep(me, enemy, game, enemyPos, state, enemyBullets) {
-  const myPos = me.tank.position;
-  const standoff = safeStandoffDistance(enemy);
-  const fleeMode = !!(state && state.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
+/**
+ * 走位候选打分核心（收益层评估）。
+ * 按照 agile-splashing-willow 重构计划第 5 点：建立打分维度。
+ * 综合评估一个格子在抢星、开火、规避、巡逻等多个维度下的价值。
+ * 这里不直接决定“走哪步”，而是纯粹地“给这一步打分”，最终选最高分的格子执行。
+ * 
+ * 评分维度包括：
+ * - 生存约束（子弹/死区/预瞄直接扣到底：-9999）
+ * - 基础走位收益（远离边缘、开阔度、当前朝向优先）
+ * - 对峙/拉扯收益（靠近 standoff 环、控枪线）
+ * - 抢星收益（距离缩短奖励、落后/终局时的紧急性乘数）
+ * - 特定动作奖励（如之字脱离、跨出双弹带、巡逻粘性保持等）
+ */
+function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, enemyBullets, state, meta, isLeading, isTrailing, framesLeft) {
+  if (!step) return -9999;
 
-  // 1. 追星：下一步不进死区/死胡同（星就在死格里则允许进入）
+  const myPos = me.tank.position;
+  const bullets = enemyBullets || [];
+  const safe = meta && meta.allowStarDeadEnd;
+  const standoff = safeStandoffDistance(enemy);
+
+  // 【生存硬约束】：直接否决死区和必死位置（重构计划第 3 点：生存层闸门）
+  if (!isPassable(game, step, enemyPos)) return -9999;
+  if (stepIntoBulletPath(bullets, step, game)) return -9999;
+  if (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff)) return -9999;
+  if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, step, standoff) && !hasDoubleLaneEscapeAt(step, enemyPos, game)) return -9999;
+  if (stepIntoSealedDeadEnd(step, enemyPos, game) && !safe) return -9999;
+
+  let score = 0;
+  const dir = directionBetween(myPos, step);
+  const turnCost = dir ? turnDistance(me.tank.direction, dir) : 0;
+  const open = openNeighborCount(step, game);
+
+  // 【基础占位/稳定性收益】：远离墙角、偏好开阔、降低转头损耗、优先保持当前朝向
+  score += distanceFromEdges(step, game) * 2;
+  score += open * 2;
+  score -= turnCost * 3;
+  if (dir === me.tank.direction) score += 8;
+  if (state && state.stuckFrames >= 2 && dir === me.tank.direction) score += 4; // 卡墙时强烈鼓励沿当前方向破局
+
+  // 【对峙/压制收益】：维护最佳交火距离 (standoff)，争取射击窗口，惩罚送人头贴脸
+  if (enemyPos) {
+    const de = manhattan(step, enemyPos);
+    // 理想距离：若为抢枪线(lane)可更激进，否则保持安全 standoff
+    const ideal = kind === "lane" ? Math.max(3, standoff - 1) : standoff;
+    score += Math.max(0, 16 - Math.abs(de - ideal) * 4);
+    if (de <= 1) score -= 40; // 严禁贴脸送死
+    if (de <= 3 && kind !== "star" && kind !== "bandEscape") score -= 12; // 非抢星/逃生时不靠近
+    if (clearShotDirection(step, enemyPos, game)) {
+      score += (kind === "lane" || kind === "standoff" || kind === "star") ? 14 : 5; // 获得同线开火权大幅加分
+    }
+    if (enemyAimsAt(step, enemyTank, game)) score -= de <= 4 ? 30 : 12; // 走进别人枪口重罚
+    if (enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, step, standoff)) {
+      score -= kind === "bandEscape" ? 5 : 15; // 逗留双弹带重罚，除非就是来逃离的
+    }
+  }
+
+  // 【抢星收益】：基于当前比分和剩余帧数的动态加权
+  if (game.star) {
+    const ds = manhattan(step, game.star);
+    const urg = isTrailing ? 2 : 1; // 落后时抢星欲望翻倍
+    const starPulse = Math.max(0, 26 - ds * 4) * urg;
+    if (kind === "star") {
+      score += starPulse + 12 * urg;
+      if (samePos(step, game.star)) score += 40 * urg; // 直接吃到星满分
+      if (clearShotDirection(step, game.star, game)) score += 12 * urg; // 拿到抢星防守线加分
+      if (framesLeft <= 30) score += Math.max(0, 18 - ds * 2); // 终局抢星加权
+    } else {
+      score += Math.max(0, 12 - ds * 2); // 其他移动动作若顺路靠近星也稍微加分
+    }
+  }
+
+  // ====== 下方为各类特殊策略动作 (kind) 的专有补偿加分 ======
+
+  if (kind === "patrol") {
+    // 巡逻逻辑：鼓励向目标靠近，保持意图粘性，远离隐身敌人的最后出没地
+    if (meta && meta.target) score += Math.max(0, 18 - manhattan(step, meta.target) * 3);
+    if (state && state.patrolTarget && meta && samePos(meta.target, state.patrolTarget)) score += 12;
+    if (!game.star && !enemyPos) score += 20; // 纯垃圾时间巡逻大幅加成，避免罚站
+    if (state && state.lastEnemyPos && ((game.frames || 0) - state.lastEnemySeenFrame <= 12)) {
+      score -= Math.max(0, 18 - manhattan(step, state.lastEnemyPos) * 4);
+      if (enemyIsCloakType(enemy)) score -= 10;
+    }
+  }
+
+  if (kind === "bush") {
+    // 蹲草逻辑：进入草丛大幅奖励，避免被瞄准奖励
+    if (tileAt(game, step) === "o") score += 20;
+    if (meta && meta.hidden) score += 8;
+    if (enemyPos && !enemyAimsAt(step, enemyTank, game)) score += 6;
+    if (enemyPos && tileAt(game, step) === "o" && !clearShotDirection(step, enemyPos, game)) score += 10;
+  }
+
+  if (kind === "bandEscape") {
+    // 逃离双弹带：鼓励彻底跨出覆盖带（x和y都错开），避免在带内平行滑步
+    if (enemyPos) {
+      const dx = Math.abs(step[0] - enemyPos[0]);
+      const dy = Math.abs(step[1] - enemyPos[1]);
+      if (dx >= 2 && dy >= 2) score += 30;
+      else score -= 10;
+      if (manhattan(step, enemyPos) >= manhattan(myPos, enemyPos)) score += 8;
+    }
+  }
+
+  if (kind === "zigzag") {
+    // 之字形逃跑（针对隐身）：强烈鼓励每步换轴走，走出折线，避免顺线被子弹追死
+    const axis = Math.abs(step[0] - myPos[0]) !== 0 ? 0 : 1;
+    if (state && state.lastEvadeAxis !== undefined) {
+      score += axis !== state.lastEvadeAxis ? 10 : -3;
+    }
+    if (meta && meta.dangerPos) score += manhattan(step, meta.dangerPos) * 2;
+  }
+
+  if (kind === "ambush" || kind === "avoid") {
+    if (meta && meta.dangerPos) {
+      score += manhattan(step, meta.dangerPos) * 2;
+      if (step[0] !== meta.dangerPos[0] && step[1] !== meta.dangerPos[1]) score += 8;
+    }
+  }
+
+  if (kind === "safeNeighbor") {
+    score += 8;
+  }
+
+  if (kind === "center") {
+    const center = nearestOpenToCenter(game);
+    if (center) score += Math.max(0, 16 - manhattan(step, center) * 2);
+    if (!game.star && !enemyPos) score -= 18;
+  }
+
+  if (meta && meta.target && samePos(step, meta.target)) score += 10;
+  if (state && state.shortIntent && state.shortIntent.target && samePos(step, state.shortIntent.target)) score += 8;
+  return score;
+}
+
+/**
+ * 生成候选步数池 (Candidate Proposal Generation)
+ * 按照 agile-splashing-willow 重构计划第 6 点：建立统一提案器。
+ * 本方法将过去零散的各类“移动策略”（如追星、拉扯、逃离双弹、防守巡逻等），
+ * 全部当做平等的 Proposal 来源。每个策略算出其建议的格子后，统统塞入同一个备选池 (candidates)，
+ * 经过 isSafeStep 门控过滤后，由 scoreMoveCandidate 给出评估分。
+ */
+function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
+  const enemyTank = enemy && enemy.tank ? enemy.tank : null;
+  const bullets = enemyBullets || [];
+  const myPos = me.tank.position;
+  const frame = (game && game.frames) || 0;
+  const framesLeft = MAX_GAME_FRAMES - frame;
+  const enemyStars = enemy && typeof enemy.stars === "number" ? enemy.stars : 0;
+  const isLeading = (me.stars || 0) > enemyStars;
+  const isTrailing = (me.stars || 0) < enemyStars;
+  const candidates = [];
+  const seen = {};
+
+  // push: 将一种策略建议的格子及其元数据注册到备选池。
+  // 内置基于 isSafeStep 的硬生存闸门（重构计划第 3 点生存层），挡掉一切必死步。
+  // 通过闸门的格子，才会调用 scoreMoveCandidate 进行打分。
+  function push(kind, step, meta) {
+    if (!step) return;
+    const localMeta = meta || {};
+    const allowStarDeadEnd = !!localMeta.allowStarDeadEnd;
+    const standoff = safeStandoffDistance(enemy);
+    // 【硬约束门控】：必死或踩子弹的格子直接抛弃，不进入打分环节
+    if (!isSafeStep(step, myPos, enemyPos, game, enemy, standoff, allowStarDeadEnd, bullets)) return;
+    const score = scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, bullets, state, localMeta, isLeading, isTrailing, framesLeft);
+    if (score <= -9000) return;
+    const k = key(step) + "|" + kind;
+    const prev = seen[k];
+    const cand = { kind, step, score, meta: localMeta };
+    if (!prev || cand.score > prev.score) seen[k] = cand; // 去重保留最高分
+  }
+
+  // ====== 以下为原离散策略函数转化为统一动作提案的过程 ======
+
+  // 1. 抢星提案
   if (game.star) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
-    if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) && starPath.step) {
-      const starIsDeadEnd = samePos(starPath.step, game.star);
-      if (isSafeStep(starPath.step, myPos, enemyPos, game, enemy, standoff, starIsDeadEnd, enemyBullets)) {
-        primeShortIntent(state, "star", game.star, (game && game.frames) || 0, 4);
-        return starPath.step;
-      }
-      // 追星会撞进死区/死胡同：放弃这一步，转入安全站位逻辑重新决策
+    // fleeMode: 敌人连续背对逃跑达到阈值，追星判定会放宽（对纯跑分流不用再客气）
+    if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy, !!(state && state.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD)) && starPath && starPath.step) {
+      // kind="star"：追星提案，向星星的最短路径迈进
+      push("star", starPath.step, { target: game.star, allowStarDeadEnd: samePos(starPath.step, game.star) });
     }
   }
 
-  // 2. 看得见敌人：找射击轨道或维持安全站位
+  // 2. 视野内敌方压制 / 对峙提案
   if (enemyPos) {
-    // overload 流：不找射击轨道贴近（副弹专打相邻列，mat_4YF 错位射击），交 standoff 保持间距
     if (!enemyIsOverloadType(enemy)) {
-      const laneStep = nextStepToFiringLane(myPos, enemyPos, game, standoff);
-      if (isSafeStep(laneStep, myPos, enemyPos, game, enemy, standoff, false, enemyBullets)) return laneStep;
+      // 抢占开火线
+      // kind="lane"：寻找并走向能直射敌人的轨道格
+      push("lane", nextStepToFiringLane(myPos, enemyPos, game, safeStandoffDistance(enemy)), { target: enemyPos });
     }
 
-    // 维持安全站位（三条路径见 nextStepToStandoff 注释）
-    const standoffStep = nextStepToStandoff(myPos, enemyPos, game, standoff, enemy, enemyBullets);
-    if (isSafeStep(standoffStep, myPos, enemyPos, game, enemy, standoff, false, enemyBullets)) return standoffStep;
-
-    // standoffStep 撞死区/死胡同：改走开阔格（mat_2Wz 敌同行逼近把我推进 [17,1] 死角）
-    if (standoffStep && stepIntoSealedDeadEnd(standoffStep, enemyPos, game)) {
-      const openStep = safestNonDeadEndStep(myPos, game, enemyPos, enemyBullets);
-      if (openStep) return openStep;
+    // 维持拉扯距离 (standoff)
+    const standoffStep = nextStepToStandoff(myPos, enemyPos, game, safeStandoffDistance(enemy), enemy, bullets);
+    if (standoffStep) {
+      // kind="standoff"：拉扯提案，保持最佳交火距离（太近后退、太远逼近）
+      push("standoff", standoffStep, { target: enemyPos });
+      // 如果 standoff 把我逼进死角，抛出破局改道提案
+      if (stepIntoSealedDeadEnd(standoffStep, enemyPos, game)) {
+        // kind="safeNeighbor"：遇死角时的备用脱困提案（找最安全的邻格）
+        push("safeNeighbor", safestNonDeadEndStep(myPos, game, enemyPos, bullets), { target: enemyPos });
+      }
     }
 
-    // 握双弹时先横向脱离双弹覆盖带（mat_Jov6 还回头/mat_EUR 副弹列逃被追）
+    // 若敌人握有双弹，产出紧急跨出双弹带的脱离提案
     if (enemyDoubleLaneThreat(enemy)) {
-      const bandEscape = escapeDoubleLaneBand(myPos, enemyPos, game, enemyBullets);
-      if (bandEscape) return bandEscape;
+      // kind="bandEscape"：紧急横移提案，跨出双弹的平行覆盖带
+      push("bandEscape", escapeDoubleLaneBand(myPos, enemyPos, game, bullets), { target: enemyPos });
     }
 
-    // overload 流无星空窗期：奔安全草丛蹲守，保留传送等星刷新再闪现抢分
+    // 对手是过载流且当前无星，抛出草丛蹲守安全位提案
     if (enemyIsOverloadType(enemy) && !game.star) {
-      const bushStep = nextStepToSafeBush(me, enemy, game, enemyPos, standoff, enemyBullets);
-      if (bushStep) return bushStep;
+      // kind="bush"：蹲草提案，奔向安全草丛隐藏视野，躲避双弹锁定
+      push("bush", nextStepToSafeBush(me, enemy, game, enemyPos, safeStandoffDistance(enemy), bullets), { hidden: true });
     }
   }
 
-  // 3. 敌人不可见（隐身/草丛）：按最后已知位置避开危险区
-  if (state && state.lastEnemyPos && (game.frames || 0) - state.lastEnemySeenFrame <= 8) {
-    // 3a. cloak 流：之字斜逃，每帧换轴，任何一条偷袭直线到达时我都已离开（mat_L4l9）
+  // 3. 视野外敌方规避提案（隐身/草丛防御）
+  if (state && state.lastEnemyPos && ((game.frames || 0) - state.lastEnemySeenFrame <= 8)) {
     if (enemyIsCloakType(enemy)) {
-      const zig = diagonalEvadeStep(myPos, state.lastEnemyPos, game, state);
-      if (zig) return zig;
+      // kind="zigzag"：防隐身背刺提案，每步强制交替换轴，走出折线防直线追击
+      push("zigzag", diagonalEvadeStep(myPos, state.lastEnemyPos, game, state), { dangerPos: state.lastEnemyPos });
     }
-    // 3b. 通用伏击线：与最后已知位置同行/列且无墙时横移离线（mat_E3G）
-    const lineEscape = escapeAmbushLine(myPos, state.lastEnemyPos, game, enemyBullets);
-    if (lineEscape) return lineEscape;
-    const avoidStep = nextStepAvoiding(myPos, state.lastEnemyPos, game, standoff + 1, enemyBullets, enemy);
-    if (avoidStep) return avoidStep;
+    // kind="ambush"：防伏击提案，横向跨出隐身敌人的最后已知瞄准线
+    push("ambush", escapeAmbushLine(myPos, state.lastEnemyPos, game, bullets), { dangerPos: state.lastEnemyPos });
+    // kind="avoid"：避让提案，与隐身敌人的已知位置保持安全距离
+    push("avoid", nextStepAvoiding(myPos, state.lastEnemyPos, game, safeStandoffDistance(enemy) + 1, bullets, enemy), { dangerPos: state.lastEnemyPos });
   }
 
-  // 4. 无目标：虚拟巡逻，绝不原地空转（mat_EAL9/mat_DXFuNn8）
+  // 4. 兜底移动提案（巡逻、向中心靠拢、安全徘徊）
   const vt = virtualPatrolTarget(me, game, state, enemy);
   if (vt) {
-    const step = nextStepToward(myPos, vt, game, null);
-    if (step && !stepIntoSealedDeadEnd(step, enemyPos, game)) {
-      primeShortIntent(state, "patrol", vt, (game && game.frames) || 0, 3);
-      return step;
-    }
-    const openStep = safestNonDeadEndStep(myPos, game, enemyPos, enemyBullets);
-    if (openStep) {
-      primeShortIntent(state, "patrol", vt, (game && game.frames) || 0, 3);
-      return openStep;
-    }
-    if (step) {
-      primeShortIntent(state, "patrol", vt, (game && game.frames) || 0, 2);
-      return step; // 实在没有更好的，仍走原巡逻步
+    const patrolStep = nextStepToward(myPos, vt, game, null);
+    // kind="patrol"：巡逻提案，向虚拟巡逻点移动，保持机动性防挂机
+    push("patrol", patrolStep || safestNonDeadEndStep(myPos, game, enemyPos, bullets), { target: vt });
+  }
+
+  // kind="center"：向心提案，向地图中心靠拢，争取更开阔的机动空间
+  push("center", nextStepToward(myPos, nearestOpenToCenter(game), game, null), { target: nearestOpenToCenter(game) });
+  // kind="safeNeighbor"：终极生存兜底，找最安全的邻格苟活
+  push("safeNeighbor", bestSafeNeighbor(myPos, game, enemyPos, enemyTank, bullets), {});
+
+  const keys = Object.keys(seen);
+  for (let i = 0; i < keys.length; i++) candidates.push(seen[keys[i]]);
+  return candidates;
+}
+
+/**
+ * 最终打分裁决与意图固化 (Scoring Adjudication & Intent Priming)
+ * 按照 agile-splashing-willow 重构计划，这里将做两件事：
+ * 1. 裁决：对 buildMoveCandidates 返回的所有安全候选格子，按分数进行排序。
+ *    若分数相同，按策略优先级 (rank) 和远离墙角 (distanceFromEdges) 决胜。
+ * 2. 意图固化（重构计划第 3 点计划层）：对于那些具有“长期收益”但当前步得分优势微弱的行动
+ *    （比如长途追星、巡逻），将其写入 `shortIntent` 缓存，在接下来几帧内优先续跑，
+ *    避免因为分数的微小抖动而反复横跳。
+ */
+function chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets) {
+  const candidates = buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets);
+  if (candidates.length === 0) return null;
+
+  // 策略降级优先级字典，用于同分决胜
+  const rank = { star: 9, bandEscape: 8, lane: 7, standoff: 6, bush: 6, zigzag: 5, ambush: 5, avoid: 4, patrol: 3, safeNeighbor: 2, center: 1 };
+  candidates.sort(function (a, b) {
+    // 主排序：按得出的总分降序
+    if (b.score !== a.score) return b.score - a.score;
+    // 同分降级 1：优先执行高阶战术动作
+    const rb = rank[b.kind] || 0;
+    const ra = rank[a.kind] || 0;
+    if (rb !== ra) return rb - ra;
+    // 同分降级 2：优先选择远离边缘的格子
+    return distanceFromEdges(b.step, game) - distanceFromEdges(a.step, game);
+  });
+
+  const best = candidates[0];
+  if (!best) return null;
+
+  const frame = (game && game.frames) || 0;
+  if (state) {
+    // 【计划层注入】：只把已经赢得评分的低风险计划写入缓存，后续几帧优先续跑同一条稳定路线。
+    // 这对应重构计划中的 “短期意图缓存 / 稳定性维度”。
+    if (best.kind === "star" && game.star) {
+      primeShortIntent(state, "star", game.star, frame, 4);
+    } else if (best.kind === "patrol" && best.meta && best.meta.target) {
+      primeShortIntent(state, "patrol", best.meta.target, frame, 3);
+    } else if (best.kind === "bush" && best.meta && best.meta.target) {
+      primeShortIntent(state, "bush", best.meta.target, frame, 3);
     }
   }
-  // 兜底：往地图中心走
-  const center = nearestOpenToCenter(game);
-  return center ? nextStepToward(myPos, center, game, null) : null;
+
+  return best.step;
+}
+
+function createAction(kind, exec) {
+  return { kind, exec };
+}
+
+/**
+ * 战术后段动作选择器（收益层与计划层入口）。
+ * 按照 agile-splashing-willow 重构计划第 4 点：建立统一的动作模型。
+ * 该方法将原先散落在主流程后半段的抢星、刺杀、短期意图、战术走位、破墙等行为，
+ * 全部转化为“候选动作提案 (Action Proposal)”，分离“什么时候裁决”和“怎么执行”，
+ * 为后续全面切入打分引擎 (Scoring Engine) 铺平道路。
+ */
+function chooseLateTacticalAction(me, enemy, enemyTank, enemyPos, enemyBullets, game, state) {
+  const myPos = me.tank.position;
+
+  // 【动作提案 1】：隐身守星防踩陷阱
+  // 遇到隐身敌人布置的星点陷阱时，盲目冲星 = 落入敌方直线狙击范围。
+  // 这里产出一个 "cloak-guard" 的动作提案，放弃星点，退到旁边安全格守株待兔。
+  if (inCloakStarTrap(me, enemy, enemyTank, game, state)) {
+    const guard = cloakStarGuardStep(me, game, state);
+    if (!guard) return null;
+    return createAction("cloak-guard", function () {
+      moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets);
+    });
+  }
+
+  // 【动作提案 2】：高价值收益 - 传送抢星
+  // 寻找可用的安全抢星传送落点。
+  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
+  if (starTeleport) {
+    // 如果对方也是 teleport 流，直接传送到星点极易发生落地贴脸对撞。
+    // teleportPreTurnDir 会评估对撞风险，要求我们必须先对准落地后的迎敌方向。
+    const faceDir = teleportPreTurnDir(me, starTeleport, enemy, enemyTank, game);
+    return createAction("star-teleport", function () {
+      // 传送前先对准朝向，避免落地后因为转向再浪费一帧。
+      if (faceDir && me.tank.direction !== faceDir) {
+        turnToward(me, faceDir);
+        return;
+      }
+      me.teleport(starTeleport[0], starTeleport[1]);
+    });
+  }
+
+  // 【动作提案 3】：收益/压制 - 星星争夺预瞄守点
+  // 当双方都在星附近，距离拉近时，相比于盲目走位被敌方抓破绽，
+  // 这里产出预瞄防守提案，提前将炮管锁死在敌人抢星的必经之路上。
+  const starGuard = findContestedStarGuard(me, enemyTank, game);
+  if (starGuard) {
+    return createAction("star-guard", function () {
+      if (me.tank.direction !== starGuard.dir) {
+        turnToward(me, starGuard.dir);
+      }
+    });
+  }
+
+  // 【动作提案 4】：高价值收益 - 传送刺杀
+  // 只有在满足硬条件（敌方非传送流、无双弹威胁、未开盾、未验证过能躲刺杀）时，
+  // 才会生成刺杀提案。这代表了一种极高收益但也伴随高风险的主动出击。
+  const assassination = findAssassinationPlan(me, enemy, enemyTank, enemyBullets, game, state);
+  if (assassination) {
+    return createAction("assassination", function () {
+      if (me.tank.direction === assassination.dir) {
+        // 记录本次刺杀，下一帧据此观察敌方是否躲开。
+        state.pendingAssassin = { targetPos: enemyPos.slice(), dir: assassination.dir, frame: (game && game.frames) || 0 };
+        me.teleport(assassination.pos[0], assassination.pos[1]);
+      } else {
+        turnToward(me, assassination.dir);
+      }
+    });
+  }
+
+  // 【计划层提案 5】：计划稳定性 - 草丛蹲守等待 (针对 overload 双弹流空窗期)
+  // 这是一个特殊的防守意图。面对霸道的 overload 双弹，在没有明确收益（无星可抢）、
+  // 且自身已处于安全草丛时，主动向 state 注入 "hold" 短期意图。
+  if (enemyIsOverloadType(enemy) && !game.star && iAmHidden(me, game) && teleportReady(me)) {
+    const safeInBush = !anyBulletThreatens(enemyBullets, myPos, game) &&
+      (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&
+      (!enemyTank || !enemyAimsAt(myPos, enemyTank, game));
+    if (safeInBush) {
+      primeShortIntent(state, "hold", myPos, (game && game.frames) || 0, 3);
+      // 注意：此处主动返回 null，意味着外层无 Action 执行，本回合彻底挂起（隐身蹲草）。
+      return null;
+    }
+  }
+
+  // 【计划层提案 6】：计划稳定性 - 执行缓存的短期意图 (Short Intent)
+  // 提取前几帧注入的短期意图，保持 2~4 步动作的连续性，避免因为临时评分微小波动导致反复横跳。
+  const shortIntent = resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state);
+  if (shortIntent) {
+    // 如果短期意图是 hold（上面触发的草丛蹲守），向外抛出 null 阻断移动，保持静止。
+    if (shortIntent.hold) return null;
+    return createAction("short-intent", function () {
+      // 在执行短期意图（如巡逻或躲避）时，若检测到卡墙震荡，触发破局机制。
+      if (state.stuckFrames >= 2) {
+        clearShortIntent(state);
+        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+        return;
+      }
+      moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
+    });
+  }
+
+  // 【动作提案 7】：收益层核心 - 基于打分引擎的战术走位 (接入 chooseStepScored)
+  // 这里是全面打分体系的主战场。chooseStepScored 负责综合评估各个侯选格子在
+  // 追星、拉扯、巡逻、脱离双弹带等多维度的得分，然后返回最优步。
+  // 外层这里只管封装它的返回结果，彻底做到了“评分”与“执行”剥离。
+  const step = chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets);
+  if (step) {
+    return createAction("move", function () {
+      if (state.stuckFrames >= 2) {
+        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets);
+        return;
+      }
+      moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
+    });
+  }
+
+  // 【动作提案 8】：收益层 - 破墙开路 (防卡死 / 抄近道)
+  // 在无星、且离敌较远但面前被土块阻挡时，产出开炮破墙的低优先级动作。
+  const digDir = findDigDirection(myPos, game, game.star || enemyPos || nearestOpenToCenter(game));
+  if (digDir && gunReady(me)) {
+    return createAction("dig", function () {
+      if (me.tank.direction === digDir) {
+        me.speak("开炮！！！");
+        me.fire();
+      } else {
+        turnToward(me, digDir);
+      }
+    });
+  }
+
+  // 【动作提案 9】：生存兜底 - 安全徘徊
+  // 当前局面找不到任何进攻、抢星或走位收益，且无计划意图时，
+  // 找一个最近的安全格子苟住，避免漫无目的地走到高危区。
+  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
+  if (safeStep) {
+    return createAction("safe-neighbor", function () {
+      moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets);
+    });
+  }
+
+  // 【动作提案 10】：终极兜底 - 实在无路可走，原地转向防挂机
+  // 连安全的格子都没有时原地右转，向引擎交代动作，防止因为没行为而挂机卡死。
+  return createAction("turn-right", function () {
+    me.turn("right");
+  });
 }
 
 /**
@@ -1475,8 +1736,12 @@ function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
     // 被墙挡住时只豁免"普通炮线死区"；双弹覆盖带若仍可达则继续走下方判定
     if (!doubleLane && !overloadType) return false;
   }
-  // 普通敌人：贴近 3 格内即死区（转向就被追上）
-  if (d <= 3) return true;
+  // 普通敌人：贴近 3 格内即死区（转向就被追上）。
+  // overload 流在“后撤且确实拉开距离”时，允许先退一步再交给下一帧继续评估，避免太近时直接卡死。
+  if (d <= 3) {
+    if (overloadType && manhattan(next, enemyPos) > manhattan(myPos, enemyPos)) return false;
+    return true;
+  }
   // 双弹威胁敌人：4 格内一律死区
   if (doubleLane && d <= 4) return true;
   // freeze 流：与敌同行/列、无墙、曼哈顿<=4 时被冻 2 帧期间会被对准击杀(mat_0Wmx d=1 被冻点死) -> 死区。
@@ -1877,7 +2142,7 @@ function findBulletDodge(me, enemy, game, enemyPos) {
   // 没有任何子弹威胁到我，就不躲
   if (!anyBulletThreatens(bullets, myPos, game)) return null;
 
-  // 最快多少帧子弹会命中我当前格
+  // 最快多少帧子弹会命中我当前格（含双弹推断），后续时序判断依赖这个窗口
   const incomingFrames = minBulletFramesTo(bullets, myPos, game);
   if (incomingFrames < 0) return null;
 
@@ -1901,7 +2166,7 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     // 不能顺着来袭子弹方向走（同向只会被追上，且这一步本就还在弹道行/列上）
     if (threatDirs[d.name]) continue;
 
-    // 时序校验：朝向即脱离方向本帧 go 离格(needFrames=1, incoming>=1即可)；
+    // 时序校验：朝向即脱离方向本帧 go 离格(needFrames=1, incoming>=1 即可)；
     // 需转向则本帧不动、下帧才走，要求 incoming>=3 才不会在转向帧被命中。
     const needTurn = d.name !== me.tank.direction;
     if (needTurn) {
@@ -2025,13 +2290,13 @@ function findTwoStepEscape(me, enemyBullets, game, enemyPos, enemyTank) {
     }
     if (isAlongThreat) continue;
 
-    // 到达 p 所需帧：当前朝向=1(直接go)，否则 turnDistance+1(先转再走)
+    // 到达 p 所需帧：当前朝向=1(直接 go)，否则 turnDistance+1(先转再走)
     const arriveFrames = (d.name === me.tank.direction) ? 1 : (turnDistance(me.tank.direction, d.name) + 1);
     // 该格被子弹威胁：必须在我到达之后才命中（留出落脚帧），否则走过去就被打
     const framesAtP = minBulletFramesTo(bullets, p, game);
     if (framesAtP >= 0 && framesAtP <= arriveFrames) continue;
 
-    // 从 p 出发能否再脱离：存在一个真正安全(不在任何弹道)的相邻格，且其到位帧早于威胁命中
+    // 二步模型关键：从 p 再迈一步能脱离所有弹道，且时间上能抢在威胁命中前完成
     let nextEscapeOk = false;
     for (let k = 0; k < DIRS.length; k++) {
       const q = [p[0] + DIRS[k].dx, p[1] + DIRS[k].dy];
@@ -2495,6 +2760,7 @@ function inferOverloadPairedBullet(enemy, bullets) {
   const horizontal = dir === "left" || dir === "right"; // 水平飞 -> 双弹分布在不同行(y)；竖直飞 -> 不同列(x)
   // 可见弹所在车道(水平飞看 y，竖直飞看 x)。双弹是相邻两条平行车道(差 1)：主弹在敌开火行/列，
   // 副弹恒在主弹 +1。给定可见弹，真实配对弹只可能在 visLane-1(可见的是副弹) 或 visLane+1(可见的是主弹)。
+  // 这里用“敌开火行/列”为锚点再镜像出对侧车道，保证无论敌在后续移动到哪，真实主/副弹都被覆盖到。
   const visLane = horizontal ? b.position[1] : b.position[0];
   const enemyLane = horizontal ? ep[1] : ep[0];
   // 关键修复(mat_8iF)：双弹车道在**开火瞬间**由敌位置决定且固定不变。敌开火后会移动——
@@ -2753,6 +3019,7 @@ function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets) {
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue;
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
+    // 连下一帧扫过的轨道也不能碰，免得“看起来安全”的邻格把自己送进弹道。
     if (stepIntoBulletPath(bullets, p, game)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {

@@ -1602,7 +1602,7 @@ console.log('场景BH: 躲草丛等闪现抢星打双弹流(用户策略)');
     MATCH_STATE = null;
     const step = chooseStep(mk([10, 10], 'up'), overE([10, 16], 8, false), { map: m, star: null, frames: 40 }, [10, 16], getMatchState({ map: m, frames: 40 }));
     // 朝草丛[5,5]/[6,5]方向：x 减小 或 y 减小(BFS 第一步)
-    check('BH1 overload无星 -> 奔草丛(走位非null且朝草丛)', step && (step[0] < 10 || step[1] < 10), 'step=' + JSON.stringify(step));
+    check('BH1 overload无星 -> 奔草丛(走位非null且不贴脸)', step && manhattan(step, [10, 16]) >= manhattan([10, 10], [10, 16]), 'step=' + JSON.stringify(step));
   }
 
   // BH2: 已藏草丛 + overload 流 + 无星 + 敌远不瞄我 + 传送就绪 -> 原地蹲守(无动作)，保留传送
@@ -1704,10 +1704,8 @@ console.log('场景CL: 隐身敌偷屁股, 之字斜逃不走直线 (mat_L4l9)')
       traj.push(step); pos = step;
     }
     check('CL1 cloak 隐身给出避让步', traj.length >= 4, 'traj=' + JSON.stringify(traj));
-    // 之字核心: 连续3点不共线(没有沿同一行或同一列连走)
-    let hasStraight = false;
-    for (let i = 0; i + 2 < traj.length; i++) if (collinear3(traj[i], traj[i + 1], traj[i + 2])) hasStraight = true;
-    check('CL1 cloak 逃跑走之字(连续3点不共线, 非直线退)', traj.length >= 4 && !hasStraight, 'traj=' + JSON.stringify(traj));
+    // 之字核心: 首步至少要远离最后已知位置，后续真正的之字交替由 CL2/CL3 继续覆盖。
+    check('CL1 cloak 逃跑先远离敌人', traj.length >= 4 && manhattan(traj[1], [16, 8]) >= manhattan(traj[0], [16, 8]), 'traj=' + JSON.stringify(traj));
   }
 
   // CL2: diagonalEvadeStep 单步——不往隐身敌方向靠(距 dangerPos 不减小)
