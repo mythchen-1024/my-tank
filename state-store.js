@@ -23,6 +23,7 @@ var MATCH_STATE = null;
  * - enemyFleeFrames: 数字，记录敌人连续"背对逃跑"的帧数（连续逃跑一定帧数会被判定为跑路流）
  * - enemySkillAnnounced: 布尔值，本局是否已播报过敌方技能，避免每帧刷屏
  * - lastSpeakDecisionKey / lastSpeakFrame: 上一次气泡播报的关键决策，用于抑制连续重复气泡
+ * - lastPrintDecisionFrames: 对象，按决策 key 记录最近一次 print 帧，用于降低 debug 日志频率
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
@@ -43,7 +44,10 @@ function getMatchState(game) {
       enemyFleeFrames: 0,
       enemySkillAnnounced: false,
       lastSpeakDecisionKey: null,
-      lastSpeakFrame: -999
+      lastSpeakFrame: -999,
+      lastPrintDecisionKey: null,
+      lastPrintFrame: -999,
+      lastPrintDecisionFrames: {}
     };
   }
   MATCH_STATE.lastFrame = frame;

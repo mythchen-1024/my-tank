@@ -1,7 +1,7 @@
 // ============================================================
 // myth-tank.js — 自动生成，请勿手动编辑
 // 源文件: state-store.js, scoring.js, action-proposals.js, myth-tank.js, decision-engine.js
-// 构建时间: 2026-06-03T03:26:32.242Z
+// 构建时间: 2026-06-03T04:08:30.701Z
 // ============================================================
 // ===== state-store.js =====
 // ============================================================
@@ -29,6 +29,7 @@ var MATCH_STATE = null;
  * - enemyFleeFrames: 数字，记录敌人连续"背对逃跑"的帧数（连续逃跑一定帧数会被判定为跑路流）
  * - enemySkillAnnounced: 布尔值，本局是否已播报过敌方技能，避免每帧刷屏
  * - lastSpeakDecisionKey / lastSpeakFrame: 上一次气泡播报的关键决策，用于抑制连续重复气泡
+ * - lastPrintDecisionFrames: 对象，按决策 key 记录最近一次 print 帧，用于降低 debug 日志频率
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
@@ -49,7 +50,10 @@ function getMatchState(game) {
       enemyFleeFrames: 0,
       enemySkillAnnounced: false,
       lastSpeakDecisionKey: null,
-      lastSpeakFrame: -999
+      lastSpeakFrame: -999,
+      lastPrintDecisionKey: null,
+      lastPrintFrame: -999,
+      lastPrintDecisionFrames: {}
     };
   }
   MATCH_STATE.lastFrame = frame;
@@ -1342,6 +1346,9 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
     return game.star;
   }
 
+  const lateContestGrab = lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist);
+  if (lateContestGrab) return lateContestGrab;
+
   // 星星上不安全则传送到星星附近最安全的点
   return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0, enemy);
 }
@@ -1382,6 +1389,29 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
     }
   }
   return best;
+}
+
+/**
+ * 晚局比分胶着时，若直传星点会被敌炮线秒掉，但敌人又明显比我更快接星，
+ * 优先传到星的十字相邻安全格，而不是退到泛化安全落点的两三格外。
+ * 复盘来源：mat_12d26hXYXtTHzftkj，小强 f115-f118 星在 [14,6]。
+ */
+function lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist) {
+  if (!game.star || !enemyTank || !enemyTank.position) return null;
+  const frame = (game && game.frames) || 0;
+  const framesLeft = MAX_GAME_FRAMES - frame;
+  if (framesLeft > 20) return null;
+
+  const myStars = me && typeof me.stars === "number" ? me.stars : 0;
+  const enemyStars = enemy && typeof enemy.stars === "number" ? enemy.stars : 0;
+  if (myStars > enemyStars) return null;
+
+  const enemyDist = pathDistance(enemyTank.position, game.star, game, me.tank.position);
+  if (enemyDist < 0) return null;
+  if (enemyDist > Math.min(5, framesLeft)) return null;
+  if (walkDist >= 0 && walkDist <= enemyDist) return null;
+
+  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game);
 }
 
 
@@ -3625,7 +3655,8 @@ function sign(n) {
 //   state-store.js → scoring.js → action-proposals.js → myth-tank.js → decision-engine.js
 // ============================================================
 
-var DECISION_TRACE_PRINT = true; // print 记录每帧完整决策；speak 只播报关键决策，节省气泡额度。
+var DECISION_TRACE_PRINT = true; // print 只记录关键/变化决策；speak 只播报关键决策，节省气泡额度。
+var DECISION_PRINT_REPEAT_GAP = 16; // 同一类调试日志至少间隔 N 帧，避免 debug 日志拖慢 runTime。
 var DECISION_SPEAK_REPEAT_GAP = 4; // 同一关键决策连续出现时，至少间隔 N 帧才再次 speak。
 var ENEMY_SKILL_ANNOUNCE_FRAME = 5; // 开局第5帧后再播报敌方技能，避免出生瞬间气泡一闪而过。
 
@@ -3740,6 +3771,64 @@ function decisionSpeakKey(prefix, proposal) {
   return proposal.type + ":" + (proposal.reason || "");
 }
 
+function isKeyDecisionForPrint(prefix, proposal) {
+  if (prefix) return true;
+  if (!proposal) return false;
+  if (proposal.hardGate) return true;
+  const keyTypes = {
+    'counter-shoot': true,
+    'bullet-dodge': true,
+    'escape-teleport': true,
+    'two-step-escape': true,
+    'desperate-dodge': true,
+    'aim-dodge': true,
+    'line-duel-dodge': true,
+    'open-shot': true,
+    'fire-direct': true,
+    'guard-line': true,
+    'bush-shot': true,
+    'cloak-guard': true,
+    'cloak-trap-hold': true,
+    'star-teleport': true,
+    'star-guard': true,
+    'assassination': true,
+    'bush-hold': true,
+    'dig': true,
+    'safe-neighbor': true
+  };
+  if (keyTypes[proposal.type]) return true;
+
+  if (proposal.type === "scored-move" && proposal.reason) {
+    const kind = proposal.reason.replace("scored-move:", "");
+    return kind === "star" || kind === "bandEscape" || kind === "zigzag" ||
+      kind === "ambush" || kind === "avoid" || kind === "bush" || kind === "safeNeighbor";
+  }
+  return false;
+}
+
+function decisionPrintKey(prefix, proposal) {
+  if (prefix) return "opening:" + prefix;
+  if (!proposal) return "none";
+  return proposal.type + ":" + (proposal.reason || "");
+}
+
+function shouldPrintDecision(state, prefix, proposal) {
+  if (!DECISION_TRACE_PRINT || typeof print !== "function") return false;
+  if (!isKeyDecisionForPrint(prefix, proposal)) return false;
+  if (prefix || !state) return true;
+
+  const frame = state.lastFrame || 0;
+  const key = decisionPrintKey(prefix, proposal);
+  const framesByKey = state.lastPrintDecisionFrames || (state.lastPrintDecisionFrames = {});
+  const lastFrame = framesByKey[key];
+  if (lastFrame !== undefined && frame - lastFrame < DECISION_PRINT_REPEAT_GAP) return false;
+
+  framesByKey[key] = frame;
+  state.lastPrintDecisionKey = key;
+  state.lastPrintFrame = frame;
+  return true;
+}
+
 function shouldSpeakDecision(state, prefix, proposal) {
   if (!isKeyDecisionForSpeak(prefix, proposal)) return false;
   if (prefix) return true;
@@ -3759,7 +3848,7 @@ function shouldSpeakDecision(state, prefix, proposal) {
 function emitDecisionBubble(me, state, prefix, proposal) {
   const msg = formatDecisionBubble(prefix, proposal);
   if (!msg) return;
-  if (DECISION_TRACE_PRINT && typeof print === "function") print(msg);
+  if (shouldPrintDecision(state, prefix, proposal)) print(msg);
   if (shouldSpeakDecision(state, prefix, proposal) && me && typeof me.speak === "function") {
     me.speak(msg);
   }

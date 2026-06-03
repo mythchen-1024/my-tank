@@ -557,6 +557,9 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
     return game.star;
   }
 
+  const lateContestGrab = lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist);
+  if (lateContestGrab) return lateContestGrab;
+
   // 星星上不安全则传送到星星附近最安全的点
   return bestTeleportTile(me.tank.position, enemyTank, enemyBullets, game, game.star, false, 0, enemy);
 }
@@ -597,6 +600,29 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
     }
   }
   return best;
+}
+
+/**
+ * 晚局比分胶着时，若直传星点会被敌炮线秒掉，但敌人又明显比我更快接星，
+ * 优先传到星的十字相邻安全格，而不是退到泛化安全落点的两三格外。
+ * 复盘来源：mat_12d26hXYXtTHzftkj，小强 f115-f118 星在 [14,6]。
+ */
+function lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist) {
+  if (!game.star || !enemyTank || !enemyTank.position) return null;
+  const frame = (game && game.frames) || 0;
+  const framesLeft = MAX_GAME_FRAMES - frame;
+  if (framesLeft > 20) return null;
+
+  const myStars = me && typeof me.stars === "number" ? me.stars : 0;
+  const enemyStars = enemy && typeof enemy.stars === "number" ? enemy.stars : 0;
+  if (myStars > enemyStars) return null;
+
+  const enemyDist = pathDistance(enemyTank.position, game.star, game, me.tank.position);
+  if (enemyDist < 0) return null;
+  if (enemyDist > Math.min(5, framesLeft)) return null;
+  if (walkDist >= 0 && walkDist <= enemyDist) return null;
+
+  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game);
 }
 
 

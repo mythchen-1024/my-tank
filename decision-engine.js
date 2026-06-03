@@ -13,7 +13,8 @@
 //   state-store.js → scoring.js → action-proposals.js → myth-tank.js → decision-engine.js
 // ============================================================
 
-var DECISION_TRACE_PRINT = true; // print 记录每帧完整决策；speak 只播报关键决策，节省气泡额度。
+var DECISION_TRACE_PRINT = true; // print 只记录关键/变化决策；speak 只播报关键决策，节省气泡额度。
+var DECISION_PRINT_REPEAT_GAP = 16; // 同一类调试日志至少间隔 N 帧，避免 debug 日志拖慢 runTime。
 var DECISION_SPEAK_REPEAT_GAP = 4; // 同一关键决策连续出现时，至少间隔 N 帧才再次 speak。
 var ENEMY_SKILL_ANNOUNCE_FRAME = 5; // 开局第5帧后再播报敌方技能，避免出生瞬间气泡一闪而过。
 
@@ -128,6 +129,64 @@ function decisionSpeakKey(prefix, proposal) {
   return proposal.type + ":" + (proposal.reason || "");
 }
 
+function isKeyDecisionForPrint(prefix, proposal) {
+  if (prefix) return true;
+  if (!proposal) return false;
+  if (proposal.hardGate) return true;
+  const keyTypes = {
+    'counter-shoot': true,
+    'bullet-dodge': true,
+    'escape-teleport': true,
+    'two-step-escape': true,
+    'desperate-dodge': true,
+    'aim-dodge': true,
+    'line-duel-dodge': true,
+    'open-shot': true,
+    'fire-direct': true,
+    'guard-line': true,
+    'bush-shot': true,
+    'cloak-guard': true,
+    'cloak-trap-hold': true,
+    'star-teleport': true,
+    'star-guard': true,
+    'assassination': true,
+    'bush-hold': true,
+    'dig': true,
+    'safe-neighbor': true
+  };
+  if (keyTypes[proposal.type]) return true;
+
+  if (proposal.type === "scored-move" && proposal.reason) {
+    const kind = proposal.reason.replace("scored-move:", "");
+    return kind === "star" || kind === "bandEscape" || kind === "zigzag" ||
+      kind === "ambush" || kind === "avoid" || kind === "bush" || kind === "safeNeighbor";
+  }
+  return false;
+}
+
+function decisionPrintKey(prefix, proposal) {
+  if (prefix) return "opening:" + prefix;
+  if (!proposal) return "none";
+  return proposal.type + ":" + (proposal.reason || "");
+}
+
+function shouldPrintDecision(state, prefix, proposal) {
+  if (!DECISION_TRACE_PRINT || typeof print !== "function") return false;
+  if (!isKeyDecisionForPrint(prefix, proposal)) return false;
+  if (prefix || !state) return true;
+
+  const frame = state.lastFrame || 0;
+  const key = decisionPrintKey(prefix, proposal);
+  const framesByKey = state.lastPrintDecisionFrames || (state.lastPrintDecisionFrames = {});
+  const lastFrame = framesByKey[key];
+  if (lastFrame !== undefined && frame - lastFrame < DECISION_PRINT_REPEAT_GAP) return false;
+
+  framesByKey[key] = frame;
+  state.lastPrintDecisionKey = key;
+  state.lastPrintFrame = frame;
+  return true;
+}
+
 function shouldSpeakDecision(state, prefix, proposal) {
   if (!isKeyDecisionForSpeak(prefix, proposal)) return false;
   if (prefix) return true;
@@ -147,7 +206,7 @@ function shouldSpeakDecision(state, prefix, proposal) {
 function emitDecisionBubble(me, state, prefix, proposal) {
   const msg = formatDecisionBubble(prefix, proposal);
   if (!msg) return;
-  if (DECISION_TRACE_PRINT && typeof print === "function") print(msg);
+  if (shouldPrintDecision(state, prefix, proposal)) print(msg);
   if (shouldSpeakDecision(state, prefix, proposal) && me && typeof me.speak === "function") {
     me.speak(msg);
   }

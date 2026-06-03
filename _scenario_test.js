@@ -1445,6 +1445,15 @@ console.log('场景Y: 双teleport抢星对撞 -> 落星十字相邻(mat_JOj)');
   const meY5 = makeMe([2, 2], 'up');
   const preturn = teleportPreTurnDir(meY5, r1, enemyTP, enemyTP.tank, game);
   check('Y5 十字安全落点不预转(直接传，不浪费帧)', preturn === null, 'preturn=' + preturn);
+
+  // Y6: 小强尾盘复盘(mat_12d26hXYXtTHzftkj)。
+  // f115 星[14,6]、双方3:3、敌一两步内可吃；星点本身被敌炮线锁定时，不能退到两格外泛化安全点。
+  const meLate = makeMe([10, 9], 'right', { stars: 3, skill: { type: 'teleport', remainingCooldownFrames: 0 } });
+  const enemyLate = { tank: { id: 'e', position: [13, 6], direction: 'right', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 5 }, status: {}, stars: 3 };
+  const gameLate = { map: emptyMap(19, 15), star: [14, 6], frames: 116 };
+  const rLate = findStarTeleport(meLate, enemyLate, enemyLate.tank, [], gameLate);
+  check('Y6 胶着尾盘直传星点不安全', isTeleportSafe(gameLate.star, enemyLate.tank, [], gameLate, 0, enemyLate) === false);
+  check('Y6 胶着尾盘改贴星一格，不退到两格外', rLate && manhattan(rLate, gameLate.star) === 1, 'r=' + JSON.stringify(rLate));
 }
 
 // =========================================================
