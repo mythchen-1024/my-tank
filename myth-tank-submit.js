@@ -1,7 +1,7 @@
 // ============================================================
 // myth-tank.js — 自动生成，请勿手动编辑
 // 源文件: state-store.js, scoring.js, action-proposals.js, myth-tank.js, decision-engine.js
-// 构建时间: 2026-06-03T04:08:30.701Z
+// 构建时间: 2026-06-03T04:35:35.410Z
 // ============================================================
 // ===== state-store.js =====
 // ============================================================
@@ -558,6 +558,15 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
  */
 function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
   const proposals = [];
+
+  // 步骤 4.0：overload 已生效但子弹尚未出现时，提前脱离主弹/副弹车道。
+  const overloadLaneDodge = findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos);
+  if (overloadLaneDodge) {
+    proposals.push(buildProposal('aim-dodge', function () {
+      moveToward(me, game, overloadLaneDodge, enemyPos, enemyTank, enemyBullets);
+    }, { step: overloadLaneDodge, reason: 'overload-lane-dodge' }));
+    return proposals;
+  }
 
   // 步骤 4：防范敌方瞄准
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
@@ -1798,7 +1807,7 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
  */
 function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
   const enemyTank = enemy && enemy.tank ? enemy.tank : null;
-  const bullets = enemyBullets || [];
+  const bullets = enemyBullets !== undefined && enemyBullets !== null ? enemyBullets : collectEnemyBullets(enemy);
   const myPos = me.tank.position;
   const frame = (game && game.frames) || 0;
   const framesLeft = MAX_GAME_FRAMES - frame;
@@ -1911,7 +1920,8 @@ function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
  *    避免因为分数的微小抖动而反复横跳。
  */
 function chooseMoveCandidateScored(me, enemy, game, enemyPos, state, enemyBullets) {
-  const candidates = buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets);
+  const bullets = enemyBullets !== undefined && enemyBullets !== null ? enemyBullets : collectEnemyBullets(enemy);
+  const candidates = buildMoveCandidates(me, enemy, game, enemyPos, state, bullets);
   if (candidates.length === 0) return null;
 
   // 策略降级优先级字典，用于同分决胜
@@ -2800,6 +2810,71 @@ function advanceBullets(bullets, steps) {
 }
 
 /**
+ * 过载预判：overload 已生效但实弹尚未出现在 enemy.bullet 时，敌人下一次开火会覆盖
+ * 当前炮线 + 固定偏移副弹线。若我正站在这两条线的前方，提前按防瞄脱线。
+ *
+ * 复盘来源：
+ * - mat_1guaZzTITzy2DLjwn：敌 up 双弹覆盖 x=13/14，我在 x=14 线上继续走位被副弹命中。
+ * - mat_L2dcAhIU0ia3QghC6：敌 right 双弹覆盖 y=3/4，我在 y=4 线上横走被副弹命中。
+ */
+function predictedOverloadBullets(enemyTank) {
+  if (!enemyTank || !enemyTank.position || !enemyTank.direction) return [];
+  const ep = enemyTank.position;
+  const dir = enemyTank.direction;
+  const bullets = [{ position: [ep[0], ep[1]], direction: dir, _predictedOverload: true }];
+  if (dir === "left" || dir === "right") {
+    bullets.push({ position: [ep[0], ep[1] + 1], direction: dir, _predictedOverload: true });
+  } else {
+    bullets.push({ position: [ep[0] + 1, ep[1]], direction: dir, _predictedOverload: true });
+  }
+  return bullets;
+}
+
+function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
+  if (!me || !me.tank || !me.tank.position || !enemyTank) return null;
+  if (!(enemy && enemy.status && enemy.status.overloaded)) return null;
+  if (!enemyCanFireSoon(enemy)) return null;
+
+  const myPos = me.tank.position;
+  const predicted = predictedOverloadBullets(enemyTank);
+  if (!anyBulletThreatens(predicted, myPos, game)) return null;
+
+  const incomingFrames = minBulletFramesTo(predicted, myPos, game);
+  if (incomingFrames < 0) return null;
+
+  let best = null;
+  let bestScore = -9999;
+  for (let i = 0; i < DIRS.length; i++) {
+    const d = DIRS[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue;
+    if (anyBulletThreatens(predicted, p, game)) continue;
+    if (stepIntoBulletPath(predicted, p, game)) continue;
+
+    const needTurn = d.name !== me.tank.direction;
+    if (!needTurn) {
+      if (incomingFrames < 1) continue;
+    } else {
+      if (incomingFrames < 3) continue;
+      const predictedNext = advanceBullets(predicted, BULLET_SPEED);
+      if (stepIntoBulletPath(predictedNext, p, game) || anyBulletThreatens(predictedNext, p, game)) continue;
+    }
+
+    const facing = needTurn ? 0 : 100;
+    const exits = openNeighborCount(p, game);
+    const deadEndPenalty = exits <= 1 ? -150 : 0;
+    const score = facing + exits * 8 + distanceFromEdges(p, game) * 3 + deadEndPenalty +
+      (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+    if (score > bestScore) {
+      bestScore = score;
+      best = p;
+    }
+  }
+  return best;
+}
+
+/**
  * 防范敌方预瞄/预发射/守星：若敌人正瞄准我且本帧具备开火能力，提前移动脱离其炮线。
  *
  * 改进点：
@@ -3266,9 +3341,12 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
       else turnToward(me, edir);
       return;
     }
-    // 实在没有更优安全格：保持朝向直走（若前方可走）打破"原地转向"死循环，否则才转向
+    // 实在没有更优安全格：只有当前前方也安全时才直走；否则宁可原地转向也不能踩进子弹。
+    // No.1 复盘(mat_FPf/mat_8aY)：旧兜底只检查可通行，会把我从 [1,12] 推进 [2,12] 接下行弹。
     const ahead = nextInDirection(myPos, me.tank.direction);
-    if (isPassable(game, ahead, enemyPos)) me.go();
+    if (isPassable(game, ahead, enemyPos) &&
+        !enemyAimsAt(ahead, enemyTank, game) &&
+        !stepIntoBulletPath(bullets, ahead, game)) me.go();
     else me.turn("right");
     return;
   }

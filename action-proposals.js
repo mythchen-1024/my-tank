@@ -68,7 +68,7 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
       }, { hardGate: true, reason: 'counter-shoot-then-dodge' });
     }
     return buildProposal('bullet-dodge', function () {
-      moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { hardGate: true, step: dodge, reason: 'bullet-dodge' });
   }
 
@@ -94,7 +94,7 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
   const desperate = findDesperateDodge(me, enemyBullets, game, enemyPos, enemyTank);
   if (desperate) {
     return buildProposal('desperate-dodge', function () {
-      moveToward(me, game, desperate, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, desperate, enemyPos, enemyTank, enemyBullets, enemy);
     }, { hardGate: true, step: desperate, reason: 'desperate-dodge' });
   }
 
@@ -114,7 +114,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   const overloadLaneDodge = findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos);
   if (overloadLaneDodge) {
     proposals.push(buildProposal('aim-dodge', function () {
-      moveToward(me, game, overloadLaneDodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, overloadLaneDodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: overloadLaneDodge, reason: 'overload-lane-dodge' }));
     return proposals;
   }
@@ -123,7 +123,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     proposals.push(buildProposal('aim-dodge', function () {
-      moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: aimDodge, reason: 'aim-dodge' }));
     return proposals; // aim-dodge 命中则 line-duel 不再评估（优先级更高）
   }
@@ -132,7 +132,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   const lineDodge = findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (lineDodge) {
     proposals.push(buildProposal('line-duel-dodge', function () {
-      moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: lineDodge, reason: 'line-duel-dodge' }));
   }
 
@@ -208,7 +208,7 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
     const guard = cloakStarGuardStep(me, game, state);
     if (guard) {
       proposals.push(buildProposal('cloak-guard', function () {
-        moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets);
+        moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets, enemy);
       }, { step: guard, reason: 'cloak-star-trap' }));
     } else {
       // 有陷阱但找不到安全格，原地不动（高分阻断追星）
@@ -291,10 +291,10 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
       proposals.push(buildProposal('short-intent', function () {
         if (state.stuckFrames >= 2) {
           clearShortIntent(state);
-          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
+          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2, enemy);
           return;
         }
-        moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
+        moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets, enemy);
       }, { step: shortIntent.step, reason: 'short-intent' }));
     }
     return proposals; // 短期意图命中时不再叠加走位提案
@@ -306,10 +306,10 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
     const step = moveCandidate.step;
     proposals.push(buildProposal('scored-move', function () {
       if (state.stuckFrames >= 2) {
-        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
+        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2, enemy);
         return;
       }
-      moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, step, enemyPos, enemyTank, enemyBullets, enemy);
     }, {
       step: step,
       tags: tagsForMoveCandidate(moveCandidate.kind),
@@ -330,10 +330,10 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
   }
 
   // 生存兜底：安全徘徊
-  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
+  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets, enemy);
   if (safeStep) {
     proposals.push(buildProposal('safe-neighbor', function () {
-      moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: safeStep, reason: 'safe-neighbor' }));
   }
 

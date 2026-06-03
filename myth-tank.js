@@ -796,6 +796,7 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist, enemy) {
   if (enemyPos && manhattan(p, enemyPos) <= 4 && clearShotDirection(enemyPos, p, game)) return false;
   // 过载敌人：落点不能进双弹覆盖带(敌同行/列 或 相邻±1 行/列且近距)——副弹走相邻列，严格同线判定会漏(mat_EHR 传 [17,10] 距敌3格相邻列被秒)
   if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, p, 6)) return false;
+  if (predictedOverloadThreatens(enemy, p, game)) return false;
   return true;
 }
 
@@ -820,6 +821,7 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   }
   // 还要排除下一帧会扫到的子弹轨道，避免“当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
+  if (predictedOverloadThreatens(enemy, next, game)) return false;
   return true;
 }
 
@@ -847,6 +849,7 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   // 【生存硬约束】：直接否决死区和必死位置（重构计划第 3 点：生存层闸门）
   if (!isPassable(game, step, enemyPos)) return -9999;
   if (stepIntoBulletPath(bullets, step, game)) return -9999;
+  if (predictedOverloadThreatens(enemy, step, game)) return -9999;
   if (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff)) return -9999;
   if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, step, standoff) && !hasDoubleLaneEscapeAt(step, enemyPos, game)) return -9999;
   if (stepIntoSealedDeadEnd(step, enemyPos, game) && !safe) return -9999;
@@ -1105,7 +1108,7 @@ function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
   // kind="center"：向心提案，向地图中心靠拢，争取更开阔的机动空间
   push("center", nextStepToward(myPos, nearestOpenToCenter(game), game, null), { target: nearestOpenToCenter(game) });
   // kind="safeNeighbor"：终极生存兜底，找最安全的邻格苟活
-  push("safeNeighbor", bestSafeNeighbor(myPos, game, enemyPos, enemyTank, bullets), {});
+  push("safeNeighbor", bestSafeNeighbor(myPos, game, enemyPos, enemyTank, bullets, enemy), {});
 
   const keys = Object.keys(seen);
   for (let i = 0; i < keys.length; i++) candidates.push(seen[keys[i]]);
@@ -2032,9 +2035,17 @@ function predictedOverloadBullets(enemyTank) {
   return bullets;
 }
 
+function predictedOverloadThreatens(enemy, pos, game) {
+  if (!enemy || !pos) return false;
+  if (!enemyDoubleLaneThreat(enemy)) return false;
+  if (!enemyCanFireSoon(enemy)) return false;
+  const predicted = predictedOverloadBullets(enemy.tank);
+  return anyBulletThreatens(predicted, pos, game) || stepIntoBulletPath(predicted, pos, game);
+}
+
 function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
   if (!me || !me.tank || !me.tank.position || !enemyTank) return null;
-  if (!(enemy && enemy.status && enemy.status.overloaded)) return null;
+  if (!enemyDoubleLaneThreat(enemy)) return null;
   if (!enemyCanFireSoon(enemy)) return null;
 
   const myPos = me.tank.position;
@@ -2529,13 +2540,16 @@ function minBulletFramesTo(bullets, pos, game) {
 /**
  * 寻路移动助手。如果下一步不安全，就改走最快脱离的安全方向（避免转向→撞墙→转回的死循环）。
  */
-function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
+function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets, enemy) {
   const myPos = me.tank.position;
   const bullets = enemyBullets || [];
 
   // 危险校验：不通、被预瞄、会接子弹(含子弹下一帧扫过该格) -> 改用最快脱离逻辑
-  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || stepIntoBulletPath(bullets, next, game)) {
-    const escape = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets);
+  if (!isPassable(game, next, enemyPos) ||
+      enemyAimsAt(next, enemyTank, game) ||
+      stepIntoBulletPath(bullets, next, game) ||
+      predictedOverloadThreatens(enemy, next, game)) {
+    const escape = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy);
     if (escape) {
       const edir = directionBetween(myPos, escape);
       // 当前朝向即脱离方向 -> 立刻前进（不浪费一帧转向）；否则转向它
@@ -2548,7 +2562,8 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
     const ahead = nextInDirection(myPos, me.tank.direction);
     if (isPassable(game, ahead, enemyPos) &&
         !enemyAimsAt(ahead, enemyTank, game) &&
-        !stepIntoBulletPath(bullets, ahead, game)) me.go();
+        !stepIntoBulletPath(bullets, ahead, game) &&
+        !predictedOverloadThreatens(enemy, ahead, game)) me.go();
     else me.turn("right");
     return;
   }
@@ -2572,11 +2587,15 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
  *  - 都不安全：挑第一个可走方向转过去（至少打破原地空转）。
  * "安全"= 可通行、不在敌方炮线、不在子弹弹道。
  */
-function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos) {
+function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos, enemy) {
   const myPos = me.tank.position;
   const bullets = enemyBullets || [];
   // prevPos: 上上帧的坐标（lastMyPos2），排除"回头格"，防止 A↔B 乒乓震荡
-  const safe = (p) => isPassable(game, p, enemyPos) && !enemyAimsAt(p, enemyTank, game) && !anyBulletThreatens(bullets, p, game) && !(prevPos && samePos(p, prevPos));
+  const safe = (p) => isPassable(game, p, enemyPos) &&
+    !enemyAimsAt(p, enemyTank, game) &&
+    !anyBulletThreatens(bullets, p, game) &&
+    !predictedOverloadThreatens(enemy, p, game) &&
+    !(prevPos && samePos(p, prevPos));
 
   // 当前朝向可直接走且安全 -> 立刻前进
   const ahead = nextInDirection(myPos, me.tank.direction);
@@ -2613,7 +2632,7 @@ function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos) {
  * 评分核心：脱离总耗时 = 转向帧(当前朝向=0,否则1) + 前进帧(1)，越小越优；
  * 同耗时再比远离边缘。当前朝向方向享有优先级，确保跨帧决策稳定、不横跳。
  */
-function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets) {
+function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy) {
   const myPos = me.tank.position;
   let best = null;
   let bestCost = 99;
@@ -2623,6 +2642,7 @@ function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets) {
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (stepIntoBulletPath(bullets, p, game)) continue; // 脱离格不能在弹道上，也不能被子弹下一帧扫到
+    if (predictedOverloadThreatens(enemy, p, game)) continue; // 过载就绪时，预判双弹车道也不能作为逃生格
     if (enemyAimsAt(p, enemyTank, game)) continue;       // 也不能撞进敌方炮线
 
     const turnFrames = d.name === me.tank.direction ? 0 : 1;
@@ -2731,7 +2751,7 @@ function pathDistance(start, target, game, blockPos) {
 /**
  * 寻找当前位置周围最安全的一个可行走邻接格子
  */
-function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets) {
+function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
   let best = null;
   let bestScore = -9999;
   const bullets = enemyBullets || [];
@@ -2742,6 +2762,7 @@ function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets) {
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
     // 连下一帧扫过的轨道也不能碰，免得“看起来安全”的邻格把自己送进弹道。
     if (stepIntoBulletPath(bullets, p, game)) continue;
+    if (predictedOverloadThreatens(enemy, p, game)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;

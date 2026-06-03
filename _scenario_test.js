@@ -1880,6 +1880,38 @@ console.log('场景PBL: 过载开火前预判副弹车道');
 }
 
 // =========================================================
+// 场景 BOLUN：overload 冷却就绪但尚未开技能，也要预判下一枪双弹车道
+// mat_0lBghuLJy88BdOAki：敌 [16,7] 朝 down，下一次过载会覆盖 x=16/x=17；我在 [16,13] 不应右走进副弹列。
+// =========================================================
+console.log('场景BOLUN: overload冷却就绪时预判双弹车道(mat_0lBgh)');
+{
+  MATCH_STATE = null;
+  const gameB = { map: emptyMap(19, 15), star: [16, 6], frames: 65 };
+  const meB = makeMe([16, 13], 'right');
+  const enemyB = {
+    tank: { id: 'e', position: [16, 7], direction: 'down', crashed: false },
+    bullet: null,
+    skill: { type: 'overload', remainingCooldownFrames: 0 },
+    status: {},
+    stars: 0
+  };
+  const sideLane = [17, 13];
+  const dodgeB = findOverloadLaneDodge(meB, enemyB, enemyB.tank, gameB, enemyB.tank.position);
+  const candB = chooseMoveCandidateScored(meB, enemyB, gameB, enemyB.tank.position, getMatchState(gameB), []);
+  const meExecB = makeMe([16, 13], 'right');
+  moveToward(meExecB, gameB, sideLane, enemyB.tank.position, enemyB.tank, [], enemyB);
+
+  check('BOLUN1 技能未开但冷却就绪 -> [17,13]按副弹危险处理', predictedOverloadThreatens(enemyB, sideLane, gameB),
+    'predicted=' + JSON.stringify(predictedOverloadBullets(enemyB.tank)));
+  check('BOLUN2 提前脱离x=16/x=17双弹车道', dodgeB && dodgeB[0] < 16 && !predictedOverloadThreatens(enemyB, dodgeB, gameB),
+    'dodge=' + JSON.stringify(dodgeB));
+  check('BOLUN3 评分候选不落入预判副弹车道', !candB || !predictedOverloadThreatens(enemyB, candB.step, gameB),
+    'cand=' + JSON.stringify(candB));
+  check('BOLUN4 执行器不直接go进[17,13]', !meExecB._actions.some(a => a[0] === 'go'),
+    JSON.stringify(meExecB._actions));
+}
+
+// =========================================================
 // 场景 NO1：No.1 复盘，moveToward/chooseStep 不把我推进已知弹道
 // mat_FPfRkRE3xUlCAASdH：我传到 [1,12] 吃星后，旧兜底把我推到 [2,12] 接下行弹。
 // mat_8aYBkMG8jBgDwwiyf：敌左射弹在 [4,2]，旧兜底可能继续朝右走进子弹。
@@ -1913,6 +1945,54 @@ console.log('场景NO1: 不用兜底go接子弹(No.1复盘)');
   const stepN3 = chooseStepScored(meN3, enemyN3, { map: mapNO1, star: null, frames: 6 }, enemyTankN1.position, {});
   check('NO1-3 chooseStepScored默认收集enemy.bullet，不返回弹道格', !stepN3 || !stepIntoBulletPath(collectEnemyBullets(enemyN3), stepN3, { map: mapNO1 }),
     'step=' + JSON.stringify(stepN3));
+
+  const meN4 = makeMe([4, 6], 'down');
+  const enemyN4 = {
+    tank: { id: 'e', position: [14, 6], direction: 'up', crashed: false },
+    bullet: { position: [8, 7], direction: 'left' },
+    skill: { type: 'overload', remainingCooldownFrames: 8 },
+    status: {},
+    stars: 0
+  };
+  const gameN4 = { map: mapNO1, star: [8, 9], frames: 16 };
+  const bulletsN4 = collectEnemyBullets(enemyN4);
+  const stateN4 = { shortIntent: { type: 'star', target: [8, 9], expires: 20, created: 15 }, stuckFrames: 0, lastMyPos2: [4, 5] };
+  const intentN4 = resolveShortIntentStep(meN4, enemyN4, enemyN4.tank, bulletsN4, gameN4, stateN4);
+  const stepN4 = chooseStepScored(meN4, enemyN4, gameN4, enemyN4.tank.position, stateN4, bulletsN4);
+  check('NO1-4 追星短意图遇横向弹 -> 不续跑进[4,7](mat_Hvjd)', intentN4 === null && stepN4 && !samePos(stepN4, [4, 7]),
+    'intent=' + JSON.stringify(intentN4) + ' step=' + JSON.stringify(stepN4));
+
+  const meN5 = makeMe([7, 2], 'up');
+  const enemyN5 = {
+    tank: { id: 'e', position: [17, 1], direction: 'left', crashed: false },
+    bullet: { position: [11, 1], direction: 'left' },
+    skill: { type: 'teleport', remainingCooldownFrames: 8 },
+    status: {},
+    stars: 1
+  };
+  const gameN5 = { map: mapNO1, star: [10, 1], frames: 118 };
+  const bulletsN5 = collectEnemyBullets(enemyN5);
+  const stateN5 = { shortIntent: { type: 'star', target: [10, 1], expires: 122, created: 112 }, stuckFrames: 0, lastMyPos2: [7, 3] };
+  const intentN5 = resolveShortIntentStep(meN5, enemyN5, enemyN5.tank, bulletsN5, gameN5, stateN5);
+  const stepN5 = chooseStepScored(meN5, enemyN5, gameN5, enemyN5.tank.position, stateN5, bulletsN5);
+  check('NO1-5 顶边追星遇左飞弹 -> 不续跑进[7,1](mat_3b8)', intentN5 === null && stepN5 && !samePos(stepN5, [7, 1]),
+    'intent=' + JSON.stringify(intentN5) + ' step=' + JSON.stringify(stepN5));
+
+  const meN6 = makeMe([6, 9], 'down');
+  const enemyN6 = {
+    tank: { id: 'e', position: [14, 10], direction: 'left', crashed: false },
+    bullet: { position: [10, 10], direction: 'left' },
+    skill: { type: 'teleport', remainingCooldownFrames: 8 },
+    status: {},
+    stars: 0
+  };
+  const gameN6 = { map: mapNO1, star: [2, 12], frames: 36 };
+  const bulletsN6 = collectEnemyBullets(enemyN6);
+  const stateN6 = { shortIntent: { type: 'star', target: [2, 12], expires: 40, created: 31 }, stuckFrames: 0, lastMyPos2: [6, 8] };
+  const intentN6 = resolveShortIntentStep(meN6, enemyN6, enemyN6.tank, bulletsN6, gameN6, stateN6);
+  const stepN6 = chooseStepScored(meN6, enemyN6, gameN6, enemyN6.tank.position, stateN6, bulletsN6);
+  check('NO1-6 横向追星遇左飞弹 -> 不续跑进[6,10](mat_98)', intentN6 === null && stepN6 && !samePos(stepN6, [6, 10]),
+    'intent=' + JSON.stringify(intentN6) + ' step=' + JSON.stringify(stepN6));
 }
 
 // =========================================================
