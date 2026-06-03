@@ -591,6 +591,26 @@ console.log('场景K4: 敌无隐身技能 -> 非陷阱');
 //  L1: 敌过载+同线+近距+传送就绪 -> 提前传送拉开(即使还没子弹)
 //  L2: 敌过载但远距(>6) -> 不预警传送
 // =========================================================
+console.log('场景K5: 隐身敌可能卡星线 -> 传星改落最后隐身点两格内(mat_G8OG)');
+{
+  const map = emptyMap(19, 15);
+  // 复刻 mat_G8 星点附近关键障碍：把隐身威胁收窄到真实的 [3,4] 星线守位。
+  map[4][3] = 'm';
+  map[5][2] = 'x';
+  map[6][3] = 'x';
+  map[6][4] = 'x';
+  const me = makeMe([6, 2], 'up', { skill: { type: 'teleport', remainingCooldownFrames: 0 } });
+  const enemy = { tank: null, bullet: null, skill: { type: 'cloak', remainingCooldownFrames: 5 }, status: {} };
+  const game = { map: map, star: [3, 3], frames: 42 };
+  const state = { lastEnemyPos: [5, 4], lastEnemySeenFrame: 40 };
+  const threats = hiddenCloakStarThreatPositions(enemy, null, game, state);
+  const tp = findStarTeleport(me, enemy, null, [], game, state);
+  check('K5-1 隐身两步预测能覆盖星点列/行', threats.some(p => clearShotDirection(p, game.star, game)), 'threats=' + JSON.stringify(threats));
+  check('K5-2 不再直传星点[3,3]', tp && !samePos(tp, game.star), 'tp=' + JSON.stringify(tp));
+  check('K5-3 改传最后隐身格两格内的安全压迫位', tp && manhattan(tp, state.lastEnemyPos) <= 2 && !snipedByHiddenCloakPositions(tp, threats, game),
+    'tp=' + JSON.stringify(tp) + ' threats=' + JSON.stringify(threats));
+}
+
 console.log('场景L1: 过载同线近距 -> 预警传送');
 {
   const map = emptyMap(20, 20);
@@ -614,6 +634,28 @@ console.log('场景L2: 过载但远距 -> 不预警传送');
 // =========================================================
 // 场景 M：全方位远离逃跑检测（验证刚修改的 trackEnemy 逻辑）
 // =========================================================
+console.log('场景L3: 近距已瞄准且当帧横移被堵 -> 传送逃生(mat_4C5)');
+{
+  const map = emptyMap(19, 15);
+  map[4][3] = 'x'; // 当前朝向 right 被堵，左移需先转身，敌弹会先到
+  const me = makeMe([3, 3], 'right', { skill: { type: 'teleport', remainingCooldownFrames: 0 } });
+  const enemy = { tank: { id: 'e', position: [3, 1], direction: 'down', crashed: false }, bullet: null, skill: { type: 'shield', remainingCooldownFrames: 0 }, status: {} };
+  const game = { map: map, star: null, frames: 51 };
+  const esc = findEscapeTeleport(me, enemy, enemy.tank, [], game);
+  check('L3 敌距2且已对准，我不能当帧横移 -> 给出传送点', esc !== null && !clearShotDirection(enemy.tank.position, esc, game),
+    'esc=' + JSON.stringify(esc));
+}
+
+console.log('场景L4: 近距已瞄准但当前朝向可横移 -> 不浪费传送');
+{
+  const map = emptyMap(19, 15);
+  const me = makeMe([3, 3], 'right', { skill: { type: 'teleport', remainingCooldownFrames: 0 } });
+  const enemy = { tank: { id: 'e', position: [3, 1], direction: 'down', crashed: false }, bullet: null, skill: { type: 'shield', remainingCooldownFrames: 0 }, status: {} };
+  const game = { map: map, star: null, frames: 51 };
+  const esc = findEscapeTeleport(me, enemy, enemy.tank, [], game);
+  check('L4 右侧可直接go离线 -> 不触发传送', esc === null, 'esc=' + JSON.stringify(esc));
+}
+
 console.log('场景M1: 敌人非同线，但正在远离 -> 逃跑帧数累加');
 {
   const map = emptyMap(20, 20);
@@ -1461,6 +1503,19 @@ console.log('场景Y: 双teleport抢星对撞 -> 落星十字相邻(mat_JOj)');
 // f29 双方同帧开火，f30 敌开盾吃掉我的子弹，我的子弹打墙，敌弹命中我。
 // 根因：直线开火分支对 shield 流敌人没有"打完能不能躲"的验算，白送一发再被回敬击毁。
 // =========================================================
+console.log('场景XQ: 学习小强贴星进攻性 -> 星点危险时传十字相邻(mat_7m1)');
+{
+  const map = emptyMap(19, 15);
+  const star = [6, 1];
+  // 参考小强进攻节奏：星点被敌炮线锁死时，贴星一格比远处安全传送更有抢星压力。
+  const me = makeMe([15, 12], 'up', { skill: { type: 'teleport', remainingCooldownFrames: 0 } });
+  const enemy = { tank: { id: 'e', position: [6, 5], direction: 'up', crashed: false }, bullet: null, skill: { type: 'shield', remainingCooldownFrames: 0 }, status: {} };
+  const game = { map: map, star: star, frames: 98 };
+  const tp = findStarTeleport(me, enemy, enemy.tank, [], game);
+  check('XQ1 星点被敌炮线锁死 -> 不直传星点', tp && !samePos(tp, star), 'tp=' + JSON.stringify(tp));
+  check('XQ2 改传贴星一格，下一帧保持抢星节奏', tp && manhattan(tp, star) === 1, 'tp=' + JSON.stringify(tp));
+}
+
 console.log('场景Z: 护盾流敌人对射前先验算能否脱线(mat_EFOl)');
 {
   const map = emptyMap(19, 15);

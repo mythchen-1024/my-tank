@@ -1,7 +1,7 @@
 // ============================================================
 // myth-tank.js — 自动生成，请勿手动编辑
 // 源文件: state-store.js, scoring.js, action-proposals.js, myth-tank.js, decision-engine.js
-// 构建时间: 2026-06-03T04:35:35.410Z
+// 构建时间: 2026-06-03T05:29:38.664Z
 // ============================================================
 // ===== state-store.js =====
 // ============================================================
@@ -517,7 +517,7 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
       }, { hardGate: true, reason: 'counter-shoot-then-dodge' });
     }
     return buildProposal('bullet-dodge', function () {
-      moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { hardGate: true, step: dodge, reason: 'bullet-dodge' });
   }
 
@@ -543,7 +543,7 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
   const desperate = findDesperateDodge(me, enemyBullets, game, enemyPos, enemyTank);
   if (desperate) {
     return buildProposal('desperate-dodge', function () {
-      moveToward(me, game, desperate, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, desperate, enemyPos, enemyTank, enemyBullets, enemy);
     }, { hardGate: true, step: desperate, reason: 'desperate-dodge' });
   }
 
@@ -563,7 +563,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   const overloadLaneDodge = findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos);
   if (overloadLaneDodge) {
     proposals.push(buildProposal('aim-dodge', function () {
-      moveToward(me, game, overloadLaneDodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, overloadLaneDodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: overloadLaneDodge, reason: 'overload-lane-dodge' }));
     return proposals;
   }
@@ -572,7 +572,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
     proposals.push(buildProposal('aim-dodge', function () {
-      moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: aimDodge, reason: 'aim-dodge' }));
     return proposals; // aim-dodge 命中则 line-duel 不再评估（优先级更高）
   }
@@ -581,7 +581,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   const lineDodge = findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (lineDodge) {
     proposals.push(buildProposal('line-duel-dodge', function () {
-      moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: lineDodge, reason: 'line-duel-dodge' }));
   }
 
@@ -657,7 +657,7 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
     const guard = cloakStarGuardStep(me, game, state);
     if (guard) {
       proposals.push(buildProposal('cloak-guard', function () {
-        moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets);
+        moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets, enemy);
       }, { step: guard, reason: 'cloak-star-trap' }));
     } else {
       // 有陷阱但找不到安全格，原地不动（高分阻断追星）
@@ -669,7 +669,7 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
   }
 
   // 提案 2：传送抢星（终局加分）
-  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
+  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state);
   if (starTeleport) {
     const faceDir = teleportPreTurnDir(me, starTeleport, enemy, enemyTank, game);
     proposals.push(buildProposal('star-teleport', function () {
@@ -740,10 +740,10 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
       proposals.push(buildProposal('short-intent', function () {
         if (state.stuckFrames >= 2) {
           clearShortIntent(state);
-          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
+          breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2, enemy);
           return;
         }
-        moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
+        moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets, enemy);
       }, { step: shortIntent.step, reason: 'short-intent' }));
     }
     return proposals; // 短期意图命中时不再叠加走位提案
@@ -755,10 +755,10 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
     const step = moveCandidate.step;
     proposals.push(buildProposal('scored-move', function () {
       if (state.stuckFrames >= 2) {
-        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
+        breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2, enemy);
         return;
       }
-      moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, step, enemyPos, enemyTank, enemyBullets, enemy);
     }, {
       step: step,
       tags: tagsForMoveCandidate(moveCandidate.kind),
@@ -779,10 +779,10 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
   }
 
   // 生存兜底：安全徘徊
-  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets);
+  const safeStep = bestSafeNeighbor(myPos, game, enemyPos, enemyTank, enemyBullets, enemy);
   if (safeStep) {
     proposals.push(buildProposal('safe-neighbor', function () {
-      moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets);
+      moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets, enemy);
     }, { step: safeStep, reason: 'safe-neighbor' }));
   }
 
@@ -1294,6 +1294,124 @@ function cloakStarGuardStep(me, game, state) {
   return best;
 }
 
+function hiddenCloakPositions(enemy, enemyTank, game, state) {
+  if (!game || !game.star) return [];
+  if (enemyTank) return [];
+  if (!enemyIsCloakType(enemy)) return [];
+  if (!state || !state.lastEnemyPos) return [];
+  const age = (game.frames || 0) - state.lastEnemySeenFrame;
+  if (age < 0 || age > 6) return [];
+
+  const maxSteps = Math.min(6, age);
+  const start = state.lastEnemyPos;
+  const queue = [start];
+  const dist = {};
+  const seen = {};
+  dist[key(start)] = 0;
+  seen[key(start)] = true;
+
+  for (let qi = 0; qi < queue.length; qi++) {
+    const p = queue[qi];
+    const pd = dist[key(p)];
+    if (pd >= maxSteps) continue;
+    for (let i = 0; i < DIRS.length; i++) {
+      const n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
+      const nk = key(n);
+      if (seen[nk]) continue;
+      if (!isPassable(game, n, null)) continue;
+      seen[nk] = true;
+      dist[nk] = pd + 1;
+      queue.push(n);
+    }
+  }
+  return queue;
+}
+
+function hiddenCloakStarThreatPositions(enemy, enemyTank, game, state) {
+  const positions = hiddenCloakPositions(enemy, enemyTank, game, state);
+  const threats = [];
+  for (let i = 0; i < positions.length; i++) {
+    const p = positions[i];
+    if (clearShotDirection(p, game.star, game) && manhattan(p, game.star) <= 8) {
+      threats.push(p);
+    }
+  }
+  return threats;
+}
+
+function snipedByHiddenCloakPositions(p, threats, game) {
+  for (let i = 0; i < threats.length; i++) {
+    const t = threats[i];
+    if (clearShotDirection(t, p, game) && manhattan(t, p) <= 8) return true;
+  }
+  return false;
+}
+
+function minDistanceToPositions(p, positions) {
+  let best = 999;
+  for (let i = 0; i < positions.length; i++) {
+    const d = manhattan(p, positions[i]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+function hiddenCloakStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
+  const threats = hiddenCloakStarThreatPositions(enemy, enemyTank, game, state);
+  if (threats.length === 0) return null;
+
+  const myPos = me.tank.position;
+  let best = null;
+  let bestScore = -9999;
+
+  for (let x = 0; x < game.map.length; x++) {
+    for (let y = 0; y < game.map[x].length; y++) {
+      const p = [x, y];
+      if (samePos(p, myPos) || samePos(p, game.star)) continue;
+      if (!isPassable(game, p, null)) continue;
+      if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
+      if (stepIntoBulletPath(enemyBullets || [], p, game)) continue;
+      if (samePos(p, state.lastEnemyPos)) continue; // 别直踩最后隐身格
+      if (minDistanceToPositions(p, threats) === 0) continue; // 别踩到能卡星线的高危隐身格
+      if (snipedByHiddenCloakPositions(p, threats, game)) continue;
+
+      const nearThreat = minDistanceToPositions(p, threats);
+      const nearLast = manhattan(p, state.lastEnemyPos);
+      if (nearLast > 2) continue; // 贴最后隐身格两格内，保留压迫感且不直送星点
+
+      const starDist = pathDistance(p, game.star, game, null);
+      if (starDist < 0 || starDist > 4) continue;
+
+      const score = -starDist * 12 - nearThreat * 3 - nearLast + distanceFromEdges(p, game);
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+  }
+  return best;
+}
+
+function hasImmediatePerpEscapeFromAim(me, enemyTank, enemyBullets, game, enemyPos, enemy) {
+  if (!enemyTank || !enemyTank.position) return true;
+  const myPos = me.tank.position;
+  const lineDir = clearShotDirection(enemyTank.position, myPos, game);
+  if (!lineDir || enemyTank.direction !== lineDir) return true;
+  const verticalShot = lineDir === "up" || lineDir === "down";
+  const d = DIRS[dirIndex(me.tank.direction)];
+  if (!d) return false;
+  const movingVertical = d.name === "up" || d.name === "down";
+  if (verticalShot === movingVertical) return false; // 当前朝向仍沿弹道轴，不能本帧离线
+
+  const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+  if (!isPassable(game, p, enemyPos)) return false;
+  if (enemyAimsAt(p, enemyTank, game)) return false;
+  if (anyBulletThreatens(enemyBullets || [], p, game)) return false;
+  if (stepIntoBulletPath(enemyBullets || [], p, game)) return false;
+  if (predictedOverloadThreatens(enemy, p, game)) return false;
+  return true;
+}
+
 /**
  * 寻找紧急逃生传送点。
  * 触发条件：传送就绪，且当前位置被任意敌方子弹威胁、或常规躲避来不及（隐身/过载场景由调用方先行判断）。
@@ -1308,15 +1426,19 @@ function findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game) {
   const overloadAmbush = overloadEnemy && enemyTank && enemyTank.position &&
     !!clearShotDirection(enemyTank.position, myPos, game) &&
     manhattan(enemyTank.position, myPos) <= 6;
-  if (!threatened && !overloadAmbush) return null;
+  const pointBlankAimLock = enemyTank && enemyTank.position && enemyCanFireSoon(enemy) &&
+    enemyAimsAt(myPos, enemyTank, game) &&
+    manhattan(enemyTank.position, myPos) <= 4 &&
+    !hasImmediatePerpEscapeFromAim(me, enemyTank, enemyBullets, game, enemyTank.position, enemy);
+  if (!threatened && !overloadAmbush && !pointBlankAimLock) return null;
   // 过载敌人弹道更密，逃生落点额外拉开距离
-  return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, overloadEnemy ? 6 : 4, enemy);
+  return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, (overloadEnemy || pointBlankAimLock) ? 6 : 4, enemy);
 }
 
 /**
  * 寻找抢夺星星的传送点
  */
-function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
+function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!teleportReady(me) || !game.star) return null;
   const enemyPos = enemyTank ? enemyTank.position : null;
   const walkDist = pathDistance(me.tank.position, game.star, game, enemyPos);
@@ -1332,6 +1454,10 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   // 守星陷阱：敌握双弹且星在其覆盖带内时放弃传送（与 shouldChaseStar 走路判断用同一函数）
   if (isStarGuardTrap(enemyPos, enemy, game.star)) return null;
 
+  const hiddenCloakGrab = hiddenCloakStarTeleport(me, enemy, enemyTank, enemyBullets, game, state);
+  if (hiddenCloakGrab) return hiddenCloakGrab;
+  if (hiddenCloakStarThreatPositions(enemy, enemyTank, game, state).length > 0) return null;
+
   // 丢失视野时，估算敌人老家位置，避开可能的危险区域传送
   if (!enemyTank) {
     const enemyGuess = estimateEnemyHome(me.tank.position, game);
@@ -1344,7 +1470,7 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   // 敌一跳到 [15,4] 同行右射 2格/帧瞬达把我秒)。星点同时暴露在"行+列"两条线，对方传到任一条线即可命中。
   // 改传星十字相邻一格(只暴露行或列之一、对方猜不到我落哪个十字格)，下一帧再走上去补吃；找不到安全相邻格再退回原逻辑。
   if (enemyTeleportReady(enemy)) {
-    const crossGrab = crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game);
+    const crossGrab = crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
     if (crossGrab) return crossGrab;
   }
 
@@ -1354,6 +1480,9 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
       !starLandingDeadly(game.star, me, enemyTank, enemy, game)) {
     return game.star;
   }
+
+  const adjacentUnsafeStarGrab = unsafeStarAdjacentTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist);
+  if (adjacentUnsafeStarGrab) return adjacentUnsafeStarGrab;
 
   const lateContestGrab = lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist);
   if (lateContestGrab) return lateContestGrab;
@@ -1374,7 +1503,7 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
  * 双重过滤(不卡墙、不在现有子弹/炮线、对射不吃亏)，选离敌最远、最不易被狙的那个。
  * 下一帧 onIdle 会走 1 步上去吃星(走路 1 格/帧)。找不到任何安全十字格则返回 null，退回原直传逻辑。
  */
-function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
+function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
   const star = game.star;
   if (!star) return null;
   const myPos = me.tank.position;
@@ -1385,8 +1514,8 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
     const c = [star[0] + DIRS[i].dx, star[1] + DIRS[i].dy];
     if (samePos(c, myPos)) continue;
     // 落点必须能站、不在子弹/炮线上、对射不吃亏
-    if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, null)) continue;
-    if (starLandingDeadly(c, me, enemyTank, null, game)) continue;
+    if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, enemy || null)) continue;
+    if (starLandingDeadly(c, me, enemyTank, enemy || null, game)) continue;
     // 必须能从该格一步走到星(中间无墙/相邻)——十字相邻天然满足，但星可能贴墙导致某向不可达，复检
     if (!isPassable(game, star, enemyPos)) return null; // 星点本身不可站则无意义
     // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)
@@ -1398,6 +1527,15 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
     }
   }
   return best;
+}
+
+function unsafeStarAdjacentTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist) {
+  if (!game.star || !enemyTank || !enemyTank.position) return null;
+  if (walkDist >= 0 && walkDist <= 5) return null;
+  const starSafe = isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0, enemy) &&
+    !starLandingDeadly(game.star, me, enemyTank, enemy, game);
+  if (starSafe) return null;
+  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
 }
 
 /**
@@ -1420,7 +1558,7 @@ function lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, g
   if (enemyDist > Math.min(5, framesLeft)) return null;
   if (walkDist >= 0 && walkDist <= enemyDist) return null;
 
-  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game);
+  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
 }
 
 
@@ -1594,6 +1732,7 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist, enemy) {
   if (enemyPos && manhattan(p, enemyPos) <= 4 && clearShotDirection(enemyPos, p, game)) return false;
   // 过载敌人：落点不能进双弹覆盖带(敌同行/列 或 相邻±1 行/列且近距)——副弹走相邻列，严格同线判定会漏(mat_EHR 传 [17,10] 距敌3格相邻列被秒)
   if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, p, 6)) return false;
+  if (predictedOverloadThreatens(enemy, p, game)) return false;
   return true;
 }
 
@@ -1618,6 +1757,7 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   }
   // 还要排除下一帧会扫到的子弹轨道，避免“当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
+  if (predictedOverloadThreatens(enemy, next, game)) return false;
   return true;
 }
 
@@ -1645,6 +1785,7 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   // 【生存硬约束】：直接否决死区和必死位置（重构计划第 3 点：生存层闸门）
   if (!isPassable(game, step, enemyPos)) return -9999;
   if (stepIntoBulletPath(bullets, step, game)) return -9999;
+  if (predictedOverloadThreatens(enemy, step, game)) return -9999;
   if (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff)) return -9999;
   if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, step, standoff) && !hasDoubleLaneEscapeAt(step, enemyPos, game)) return -9999;
   if (stepIntoSealedDeadEnd(step, enemyPos, game) && !safe) return -9999;
@@ -1903,7 +2044,7 @@ function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
   // kind="center"：向心提案，向地图中心靠拢，争取更开阔的机动空间
   push("center", nextStepToward(myPos, nearestOpenToCenter(game), game, null), { target: nearestOpenToCenter(game) });
   // kind="safeNeighbor"：终极生存兜底，找最安全的邻格苟活
-  push("safeNeighbor", bestSafeNeighbor(myPos, game, enemyPos, enemyTank, bullets), {});
+  push("safeNeighbor", bestSafeNeighbor(myPos, game, enemyPos, enemyTank, bullets, enemy), {});
 
   const keys = Object.keys(seen);
   for (let i = 0; i < keys.length; i++) candidates.push(seen[keys[i]]);
@@ -2830,9 +2971,17 @@ function predictedOverloadBullets(enemyTank) {
   return bullets;
 }
 
+function predictedOverloadThreatens(enemy, pos, game) {
+  if (!enemy || !pos) return false;
+  if (!enemyDoubleLaneThreat(enemy)) return false;
+  if (!enemyCanFireSoon(enemy)) return false;
+  const predicted = predictedOverloadBullets(enemy.tank);
+  return anyBulletThreatens(predicted, pos, game) || stepIntoBulletPath(predicted, pos, game);
+}
+
 function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
   if (!me || !me.tank || !me.tank.position || !enemyTank) return null;
-  if (!(enemy && enemy.status && enemy.status.overloaded)) return null;
+  if (!enemyDoubleLaneThreat(enemy)) return null;
   if (!enemyCanFireSoon(enemy)) return null;
 
   const myPos = me.tank.position;
@@ -3327,13 +3476,16 @@ function minBulletFramesTo(bullets, pos, game) {
 /**
  * 寻路移动助手。如果下一步不安全，就改走最快脱离的安全方向（避免转向→撞墙→转回的死循环）。
  */
-function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
+function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets, enemy) {
   const myPos = me.tank.position;
   const bullets = enemyBullets || [];
 
   // 危险校验：不通、被预瞄、会接子弹(含子弹下一帧扫过该格) -> 改用最快脱离逻辑
-  if (!isPassable(game, next, enemyPos) || enemyAimsAt(next, enemyTank, game) || stepIntoBulletPath(bullets, next, game)) {
-    const escape = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets);
+  if (!isPassable(game, next, enemyPos) ||
+      enemyAimsAt(next, enemyTank, game) ||
+      stepIntoBulletPath(bullets, next, game) ||
+      predictedOverloadThreatens(enemy, next, game)) {
+    const escape = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy);
     if (escape) {
       const edir = directionBetween(myPos, escape);
       // 当前朝向即脱离方向 -> 立刻前进（不浪费一帧转向）；否则转向它
@@ -3346,7 +3498,8 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
     const ahead = nextInDirection(myPos, me.tank.direction);
     if (isPassable(game, ahead, enemyPos) &&
         !enemyAimsAt(ahead, enemyTank, game) &&
-        !stepIntoBulletPath(bullets, ahead, game)) me.go();
+        !stepIntoBulletPath(bullets, ahead, game) &&
+        !predictedOverloadThreatens(enemy, ahead, game)) me.go();
     else me.turn("right");
     return;
   }
@@ -3370,11 +3523,15 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets) {
  *  - 都不安全：挑第一个可走方向转过去（至少打破原地空转）。
  * "安全"= 可通行、不在敌方炮线、不在子弹弹道。
  */
-function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos) {
+function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos, enemy) {
   const myPos = me.tank.position;
   const bullets = enemyBullets || [];
   // prevPos: 上上帧的坐标（lastMyPos2），排除"回头格"，防止 A↔B 乒乓震荡
-  const safe = (p) => isPassable(game, p, enemyPos) && !enemyAimsAt(p, enemyTank, game) && !anyBulletThreatens(bullets, p, game) && !(prevPos && samePos(p, prevPos));
+  const safe = (p) => isPassable(game, p, enemyPos) &&
+    !enemyAimsAt(p, enemyTank, game) &&
+    !anyBulletThreatens(bullets, p, game) &&
+    !predictedOverloadThreatens(enemy, p, game) &&
+    !(prevPos && samePos(p, prevPos));
 
   // 当前朝向可直接走且安全 -> 立刻前进
   const ahead = nextInDirection(myPos, me.tank.direction);
@@ -3411,7 +3568,7 @@ function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos) {
  * 评分核心：脱离总耗时 = 转向帧(当前朝向=0,否则1) + 前进帧(1)，越小越优；
  * 同耗时再比远离边缘。当前朝向方向享有优先级，确保跨帧决策稳定、不横跳。
  */
-function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets) {
+function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy) {
   const myPos = me.tank.position;
   let best = null;
   let bestCost = 99;
@@ -3421,6 +3578,7 @@ function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets) {
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (stepIntoBulletPath(bullets, p, game)) continue; // 脱离格不能在弹道上，也不能被子弹下一帧扫到
+    if (predictedOverloadThreatens(enemy, p, game)) continue; // 过载就绪时，预判双弹车道也不能作为逃生格
     if (enemyAimsAt(p, enemyTank, game)) continue;       // 也不能撞进敌方炮线
 
     const turnFrames = d.name === me.tank.direction ? 0 : 1;
@@ -3529,7 +3687,7 @@ function pathDistance(start, target, game, blockPos) {
 /**
  * 寻找当前位置周围最安全的一个可行走邻接格子
  */
-function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets) {
+function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
   let best = null;
   let bestScore = -9999;
   const bullets = enemyBullets || [];
@@ -3540,6 +3698,7 @@ function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets) {
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
     // 连下一帧扫过的轨道也不能碰，免得“看起来安全”的邻格把自己送进弹道。
     if (stepIntoBulletPath(bullets, p, game)) continue;
+    if (predictedOverloadThreatens(enemy, p, game)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;

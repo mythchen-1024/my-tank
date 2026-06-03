@@ -220,7 +220,8 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
   }
 
   // 提案 2：传送抢星（终局加分）
-  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game);
+  // 传入 state：让传星提案能读取 lastEnemyPos / lastEnemySeenFrame，识别隐身守星陷阱。
+  const starTeleport = findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state);
   if (starTeleport) {
     const faceDir = teleportPreTurnDir(me, starTeleport, enemy, enemyTank, game);
     proposals.push(buildProposal('star-teleport', function () {

@@ -497,6 +497,140 @@ function cloakStarGuardStep(me, game, state) {
 }
 
 /**
+ * 隐身敌刚消失后，用最后可见位置 + 消失帧数做 BFS 预测可达格。
+ * 这里不假设敌人一定在某格，只用于识别“敌可能隐身卡星点枪线”的高危区域。
+ */
+function hiddenCloakPositions(enemy, enemyTank, game, state) {
+  if (!game || !game.star) return [];
+  if (enemyTank) return [];
+  if (!enemyIsCloakType(enemy)) return [];
+  if (!state || !state.lastEnemyPos) return [];
+  const age = (game.frames || 0) - state.lastEnemySeenFrame;
+  if (age < 0 || age > 6) return [];
+
+  const maxSteps = Math.min(6, age);
+  const start = state.lastEnemyPos;
+  const queue = [start];
+  const dist = {};
+  const seen = {};
+  dist[key(start)] = 0;
+  seen[key(start)] = true;
+
+  for (let qi = 0; qi < queue.length; qi++) {
+    const p = queue[qi];
+    const pd = dist[key(p)];
+    if (pd >= maxSteps) continue;
+    for (let i = 0; i < DIRS.length; i++) {
+      const n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
+      const nk = key(n);
+      if (seen[nk]) continue;
+      if (!isPassable(game, n, null)) continue;
+      seen[nk] = true;
+      dist[nk] = pd + 1;
+      queue.push(n);
+    }
+  }
+  return queue;
+}
+
+/**
+ * 从隐身可达格里筛出能直接打到星点的位置。
+ * 复盘来源：mat_G8，敌在星点同行/同列隐身守枪线，我方直传星点后被下一枪收掉。
+ */
+function hiddenCloakStarThreatPositions(enemy, enemyTank, game, state) {
+  const positions = hiddenCloakPositions(enemy, enemyTank, game, state);
+  const threats = [];
+  for (let i = 0; i < positions.length; i++) {
+    const p = positions[i];
+    if (clearShotDirection(p, game.star, game) && manhattan(p, game.star) <= 8) {
+      threats.push(p);
+    }
+  }
+  return threats;
+}
+
+function snipedByHiddenCloakPositions(p, threats, game) {
+  for (let i = 0; i < threats.length; i++) {
+    const t = threats[i];
+    if (clearShotDirection(t, p, game) && manhattan(t, p) <= 8) return true;
+  }
+  return false;
+}
+
+function minDistanceToPositions(p, positions) {
+  let best = 999;
+  for (let i = 0; i < positions.length; i++) {
+    const d = manhattan(p, positions[i]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/**
+ * 隐身守星反制传送：星点可能被隐身枪线守住时，不直传星。
+ * 优先落到最后隐身格 2 格内、离星不远、且不会被预测枪线直射的压迫位。
+ */
+function hiddenCloakStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
+  const threats = hiddenCloakStarThreatPositions(enemy, enemyTank, game, state);
+  if (threats.length === 0) return null;
+
+  const myPos = me.tank.position;
+  let best = null;
+  let bestScore = -9999;
+
+  for (let x = 0; x < game.map.length; x++) {
+    for (let y = 0; y < game.map[x].length; y++) {
+      const p = [x, y];
+      if (samePos(p, myPos) || samePos(p, game.star)) continue;
+      if (!isPassable(game, p, null)) continue;
+      if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
+      if (stepIntoBulletPath(enemyBullets || [], p, game)) continue;
+      if (samePos(p, state.lastEnemyPos)) continue; // 别直踩最后隐身格，避免撞上真实敌人
+      if (minDistanceToPositions(p, threats) === 0) continue; // 别踩到能卡星线的高危隐身格
+      if (snipedByHiddenCloakPositions(p, threats, game)) continue;
+
+      const nearThreat = minDistanceToPositions(p, threats);
+      const nearLast = manhattan(p, state.lastEnemyPos);
+      if (nearLast > 2) continue; // 贴最后隐身格两格内，保留压迫感且不直送星点
+
+      const starDist = pathDistance(p, game.star, game, null);
+      if (starDist < 0 || starDist > 4) continue;
+
+      const score = -starDist * 12 - nearThreat * 3 - nearLast + distanceFromEdges(p, game);
+      if (score > bestScore) {
+        bestScore = score;
+        best = p;
+      }
+    }
+  }
+  return best;
+}
+
+/**
+ * 判断当前朝向能否本帧横移离开敌方瞄准线。
+ * 若需要先转向才可脱线，近距枪线下通常会慢一拍，应该交给硬传逃生。
+ */
+function hasImmediatePerpEscapeFromAim(me, enemyTank, enemyBullets, game, enemyPos, enemy) {
+  if (!enemyTank || !enemyTank.position) return true;
+  const myPos = me.tank.position;
+  const lineDir = clearShotDirection(enemyTank.position, myPos, game);
+  if (!lineDir || enemyTank.direction !== lineDir) return true;
+  const verticalShot = lineDir === "up" || lineDir === "down";
+  const d = DIRS[dirIndex(me.tank.direction)];
+  if (!d) return false;
+  const movingVertical = d.name === "up" || d.name === "down";
+  if (verticalShot === movingVertical) return false; // 当前朝向仍沿弹道轴，不能本帧离线
+
+  const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+  if (!isPassable(game, p, enemyPos)) return false;
+  if (enemyAimsAt(p, enemyTank, game)) return false;
+  if (anyBulletThreatens(enemyBullets || [], p, game)) return false;
+  if (stepIntoBulletPath(enemyBullets || [], p, game)) return false;
+  if (predictedOverloadThreatens(enemy, p, game)) return false;
+  return true;
+}
+
+/**
  * 寻找紧急逃生传送点。
  * 触发条件：传送就绪，且当前位置被任意敌方子弹威胁、或常规躲避来不及（隐身/过载场景由调用方先行判断）。
  * 落点要求：远离所有子弹弹道、远离敌人（避免传送后立刻被开火锁定或对射）。
@@ -510,15 +644,20 @@ function findEscapeTeleport(me, enemy, enemyTank, enemyBullets, game) {
   const overloadAmbush = overloadEnemy && enemyTank && enemyTank.position &&
     !!clearShotDirection(enemyTank.position, myPos, game) &&
     manhattan(enemyTank.position, myPos) <= 6;
-  if (!threatened && !overloadAmbush) return null;
+  // 近距硬锁：像 mat_4C5，敌已瞄准且我当前朝向无法立刻横移，转向会来不及。
+  const pointBlankAimLock = enemyTank && enemyTank.position && enemyCanFireSoon(enemy) &&
+    enemyAimsAt(myPos, enemyTank, game) &&
+    manhattan(enemyTank.position, myPos) <= 4 &&
+    !hasImmediatePerpEscapeFromAim(me, enemyTank, enemyBullets, game, enemyTank.position, enemy);
+  if (!threatened && !overloadAmbush && !pointBlankAimLock) return null;
   // 过载敌人弹道更密，逃生落点额外拉开距离
-  return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, overloadEnemy ? 6 : 4, enemy);
+  return bestTeleportTile(myPos, enemyTank, enemyBullets, game, game.star, true, (overloadEnemy || pointBlankAimLock) ? 6 : 4, enemy);
 }
 
 /**
  * 寻找抢夺星星的传送点
  */
-function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
+function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!teleportReady(me) || !game.star) return null;
   const enemyPos = enemyTank ? enemyTank.position : null;
   const walkDist = pathDistance(me.tank.position, game.star, game, enemyPos);
@@ -534,6 +673,11 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   // 守星陷阱：敌握双弹且星在其覆盖带内时放弃传送（与 shouldChaseStar 走路判断用同一函数）
   if (isStarGuardTrap(enemyPos, enemy, game.star)) return null;
 
+  // 隐身守星：先找贴最后隐身格的安全压迫位；找不到则放弃传星，避免直送星点。
+  const hiddenCloakGrab = hiddenCloakStarTeleport(me, enemy, enemyTank, enemyBullets, game, state);
+  if (hiddenCloakGrab) return hiddenCloakGrab;
+  if (hiddenCloakStarThreatPositions(enemy, enemyTank, game, state).length > 0) return null;
+
   // 丢失视野时，估算敌人老家位置，避开可能的危险区域传送
   if (!enemyTank) {
     const enemyGuess = estimateEnemyHome(me.tank.position, game);
@@ -546,7 +690,7 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
   // 敌一跳到 [15,4] 同行右射 2格/帧瞬达把我秒)。星点同时暴露在"行+列"两条线，对方传到任一条线即可命中。
   // 改传星十字相邻一格(只暴露行或列之一、对方猜不到我落哪个十字格)，下一帧再走上去补吃；找不到安全相邻格再退回原逻辑。
   if (enemyTeleportReady(enemy)) {
-    const crossGrab = crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game);
+    const crossGrab = crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
     if (crossGrab) return crossGrab;
   }
 
@@ -556,6 +700,9 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
       !starLandingDeadly(game.star, me, enemyTank, enemy, game)) {
     return game.star;
   }
+
+  const adjacentUnsafeStarGrab = unsafeStarAdjacentTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist);
+  if (adjacentUnsafeStarGrab) return adjacentUnsafeStarGrab;
 
   const lateContestGrab = lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist);
   if (lateContestGrab) return lateContestGrab;
@@ -576,7 +723,7 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game) {
  * 双重过滤(不卡墙、不在现有子弹/炮线、对射不吃亏)，选离敌最远、最不易被狙的那个。
  * 下一帧 onIdle 会走 1 步上去吃星(走路 1 格/帧)。找不到任何安全十字格则返回 null，退回原直传逻辑。
  */
-function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
+function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
   const star = game.star;
   if (!star) return null;
   const myPos = me.tank.position;
@@ -587,8 +734,8 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
     const c = [star[0] + DIRS[i].dx, star[1] + DIRS[i].dy];
     if (samePos(c, myPos)) continue;
     // 落点必须能站、不在子弹/炮线上、对射不吃亏
-    if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, null)) continue;
-    if (starLandingDeadly(c, me, enemyTank, null, game)) continue;
+    if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, enemy || null)) continue;
+    if (starLandingDeadly(c, me, enemyTank, enemy || null, game)) continue;
     // 必须能从该格一步走到星(中间无墙/相邻)——十字相邻天然满足，但星可能贴墙导致某向不可达，复检
     if (!isPassable(game, star, enemyPos)) return null; // 星点本身不可站则无意义
     // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)
@@ -600,6 +747,19 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game) {
     }
   }
   return best;
+}
+
+/**
+ * 星点本身落地即死时的进攻型补偿。
+ * 参考小强 mat_7m1：直接上星不安全就贴星一格，保留下一帧抢星节奏。
+ */
+function unsafeStarAdjacentTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist) {
+  if (!game.star || !enemyTank || !enemyTank.position) return null;
+  if (walkDist >= 0 && walkDist <= 5) return null;
+  const starSafe = isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0, enemy) &&
+    !starLandingDeadly(game.star, me, enemyTank, enemy, game);
+  if (starSafe) return null;
+  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
 }
 
 /**
@@ -622,7 +782,7 @@ function lateContestedAdjacentStarTeleport(me, enemy, enemyTank, enemyBullets, g
   if (enemyDist > Math.min(5, framesLeft)) return null;
   if (walkDist >= 0 && walkDist <= enemyDist) return null;
 
-  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game);
+  return crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
 }
 
 
