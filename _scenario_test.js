@@ -958,6 +958,19 @@ console.log('场景P8: 非隐身敌空地看不见(如绕墙后) -> 不滥射');
   const r = findBushLineShot(me, enemy, null, [], game, null, st);
   check('非隐身敌空地 -> 不预射(null)', r === null, 'r=' + JSON.stringify(r));
 }
+console.log('场景P9: cloak刚隐身可能切入炮线 -> 预射/预转(mat_C3Rd)');
+{
+  const map = emptyMap(19, 15);
+  const enemy = { tank: null, bullet: null, skill: { type: 'cloak', remainingCooldownFrames: 35 }, status: {} };
+  const game = { map: map, star: null, frames: 66 };
+  const state = { lastEnemyPos: [9, 9], lastEnemySeenFrame: 65 };
+  const me = makeMe([8, 7], 'right');
+  const r = findCloakPreFireShot(me, enemy, null, [], game, state);
+  check('C3Rd 敌可一步切入我同列 -> 先转向down预射线', r && r.dir === 'down' && !r.fire, 'r=' + JSON.stringify(r));
+  const meReady = makeMe([8, 7], 'down');
+  const rReady = findCloakPreFireShot(meReady, enemy, null, [], game, state);
+  check('已朝预测伏击线 -> 直接开炮', rReady && rReady.fire === true && rReady.dir === 'down', 'r=' + JSON.stringify(rReady));
+}
 
 // =========================================================
 // 场景 Q：走位防撞子弹 + 以守为攻放宽（mat_1BN/mat_KkKOc/mat_6uoE）
@@ -1496,6 +1509,14 @@ console.log('场景Y: 双teleport抢星对撞 -> 落星十字相邻(mat_JOj)');
   const rLate = findStarTeleport(meLate, enemyLate, enemyLate.tank, [], gameLate);
   check('Y6 胶着尾盘直传星点不安全', isTeleportSafe(gameLate.star, enemyLate.tank, [], gameLate, 0, enemyLate) === false);
   check('Y6 胶着尾盘改贴星一格，不退到两格外', rLate && manhattan(rLate, gameLate.star) === 1, 'r=' + JSON.stringify(rLate));
+
+  // Y7: C28 开局中心星，敌 teleport 直接踩星；贴星一格会变成我方落后星数后贴脸换命。
+  const c28Star = [10, 5];
+  const meC28 = makeMe([2, 2], 'up', { skill: { type: 'teleport', remainingCooldownFrames: 0 } });
+  const enemyC28 = { tank: { id: 'e', position: [16, 12], direction: 'down', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 0 }, status: {} };
+  const gameC28 = { map: emptyMap(19, 15), star: c28Star, frames: 0 };
+  const rC28 = findStarTeleport(meC28, enemyC28, enemyC28.tank, [], gameC28);
+  check('Y7 中心星双传送 -> 直接竞星，不贴星一格送近距换命(mat_C28)', rC28 && samePos(rC28, c28Star), 'r=' + JSON.stringify(rC28));
 }
 
 // =========================================================

@@ -47,6 +47,7 @@ var SCORE_WEIGHTS = {
 // - aim-dodge：软生存防瞄；敌方炮口/预瞄威胁下提前离线。
 // - line-duel-dodge：软生存近距对射规避；近距同线且我不占先手时侧移。
 // - open-shot：攻击空窗期反击；敌方炮管被场上子弹占用时抢开火窗口。
+// - cloak-prefire：攻击隐身预射；敌 cloak 刚消失且可能进入我炮口/伏击线时提前开火。
 // - fire-direct：攻击直射；同线无遮挡且可开火时直接射击或转向。
 // - guard-line：攻击守线；提前把炮口对准敌/星可能进入的路线。
 // - bush-shot：攻击草丛；预射草丛伏击线或我方草丛伏击。
@@ -76,6 +77,7 @@ var SCORE_PRESETS = {
 
   // 第三梯队：主动攻击。攻击不直接得分，所以整体低于软生存，但高于普通走位。
   'open-shot':         { reward: 79, risk: 20, stability: 0, tags: ['attack'] },
+  'cloak-prefire':     { reward: 76, risk: 18, stability: 0, tags: ['attack'] },
   'fire-direct':       { reward: 75, risk: 25, stability: 0, tags: ['attack'] },
   'guard-line':        { reward: 65, risk: 20, stability: 0, tags: ['attack', 'hold-line'] },
   'bush-shot':         { reward: 60, risk: 15, stability: 0, tags: ['attack'] },

@@ -501,7 +501,7 @@ function cloakStarGuardStep(me, game, state) {
  * 这里不假设敌人一定在某格，只用于识别“敌可能隐身卡星点枪线”的高危区域。
  */
 function hiddenCloakPositions(enemy, enemyTank, game, state) {
-  if (!game || !game.star) return [];
+  if (!game || !game.map) return [];
   if (enemyTank) return [];
   if (!enemyIsCloakType(enemy)) return [];
   if (!state || !state.lastEnemyPos) return [];
@@ -686,6 +686,9 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
     }
   }
 
+  const centralContestGrab = centralTeleportStarContest(me, enemy, enemyTank, enemyBullets, game);
+  if (centralContestGrab) return centralContestGrab;
+
   // 双 teleport 抢星对撞：敌方传送也就绪时，直传星点 = 站在对方能预判的靶位上送死(mat_JOj 直传 [17,4]，
   // 敌一跳到 [15,4] 同行右射 2格/帧瞬达把我秒)。星点同时暴露在"行+列"两条线，对方传到任一条线即可命中。
   // 改传星十字相邻一格(只暴露行或列之一、对方猜不到我落哪个十字格)，下一帧再走上去补吃；找不到安全相邻格再退回原逻辑。
@@ -747,6 +750,22 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
     }
   }
   return best;
+}
+
+/**
+ * 中央星点的双 teleport 竞星：若星点在开阔中心、敌当前炮线并未锁星，
+ * 贴星一格会让敌直接踩星后形成我方 fireLocked 的近距劣势（mat_C28）。
+ * 此时优先直传星点抢分；边角星仍走 crossAdjacent，保留 mat_JOj / mat_KBZ 的避狙逻辑。
+ */
+function centralTeleportStarContest(me, enemy, enemyTank, enemyBullets, game) {
+  if (!game.star || !enemyTeleportReady(enemy) || !enemyTank || !enemyTank.position) return null;
+  const frame = (game && game.frames) || 0;
+  if (frame > 8) return null; // 只处理开局/早局的同帧抢第一颗星，避免中后期过度冒险
+  if (distanceFromEdges(game.star, game) < 4) return null; // 边角星被瞬移狙击概率高，继续用十字相邻
+  if (clearShotDirection(enemyTank.position, game.star, game)) return null; // 敌当前已锁星线，不直送炮口
+  if (!isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0, enemy)) return null;
+  if (starLandingDeadly(game.star, me, enemyTank, enemy, game)) return null;
+  return game.star;
 }
 
 /**
@@ -2539,6 +2558,49 @@ function findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, st
     }
   }
   return null;
+}
+
+/**
+ * 隐身炮口预射（mat_C3Rd）：敌 cloak 刚消失、最后位置在我炮口前方或可能一步切入我的同行/同列时，
+ * 主动朝当前炮口/预测伏击线打一发。它比普通草丛预射更宽：不要求 lastEnemyPos 已经与我同线，
+ * 而是用 hiddenCloakPositions 预测 1~4 帧内的可达格，找近距离、无遮挡的射击线。
+ */
+function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
+  if (!canShoot(me, enemy)) return null;
+  if (enemyTank) return null; // 敌可见时交给直射/守线
+  if (!enemyIsCloakType(enemy)) return null;
+  if (!state || !state.lastEnemyPos) return null;
+  const age = ((game && game.frames) || 0) - state.lastEnemySeenFrame;
+  if (age < 0 || age > 4) return null; // 只打刚隐身的短窗口，避免凭旧记忆乱射
+
+  const myPos = me.tank.position;
+  if (anyBulletThreatens(enemyBullets || [], myPos, game)) return null;
+
+  const positions = hiddenCloakPositions(enemy, enemyTank, game, state);
+  if (positions.length === 0) positions.push(state.lastEnemyPos);
+
+  let bestDir = null;
+  let bestScore = -9999;
+  for (let i = 0; i < positions.length; i++) {
+    const p = positions[i];
+    if (samePos(p, myPos)) continue;
+    const dir = clearShotDirection(myPos, p, game);
+    if (!dir) continue;
+    const dist = manhattan(myPos, p);
+    if (dist > 5) continue; // 隐身盲射只覆盖贴近伏击区
+
+    // 当前炮口方向命中优先：符合“敌最后隐身前在我炮口方向，就朝当前方向开炮”。
+    const facingBonus = dir === me.tank.direction ? 120 : 0;
+    const lastBias = manhattan(p, state.lastEnemyPos) <= 1 ? 12 : 0;
+    const score = facingBonus + lastBias - dist * 5 - age * 4;
+    if (score > bestScore) {
+      bestScore = score;
+      bestDir = dir;
+    }
+  }
+
+  if (!bestDir) return null;
+  return me.tank.direction === bestDir ? { fire: true, dir: bestDir } : { dir: bestDir };
 }
 
 /**

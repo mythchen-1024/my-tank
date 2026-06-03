@@ -12,6 +12,7 @@
 //   survival soft  aim-dodge   r=82 risk=10  s=0  ~70
 //   survival soft  line-duel   r=83 risk=15  s=0  ~65
 //   attack         open-shot   r=79 risk=20  s=0  ~55  (敌炮管空窗期)
+//   attack         cloak-pref  r=76 risk=18  s=0  ~54  (刚隐身炮口预射)
 //   target         star-tele   r=80 risk=25  s=5  ~50  (星=直接得分)
 //   attack         fire-direct r=75 risk=25  s=0  ~45  (战略价值)
 //   attack         guard-line  r=65 risk=20  s=0  ~41
@@ -155,6 +156,15 @@ function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank,
       if (me.tank.direction === openShot) { me.speak("开炮！！！"); me.fire(); }
       else turnToward(me, openShot);
     }, { reason: 'open-shot-window' }));
+  }
+
+  // 步骤 5.6：敌方刚隐身且可能沿我炮口/预测伏击线贴近 -> 预射压制
+  const cloakPreFire = findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state);
+  if (cloakPreFire) {
+    proposals.push(buildProposal('cloak-prefire', function () {
+      if (cloakPreFire.fire) { me.speak("开炮！！！"); me.fire(); }
+      else turnToward(me, cloakPreFire.dir);
+    }, { reason: 'cloak-prefire' }));
   }
 
   // 步骤 6：同线无障碍直接开火
