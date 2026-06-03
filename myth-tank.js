@@ -1754,13 +1754,22 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     // 不能顺着来袭子弹方向走（同向只会被追上，且这一步本就还在弹道行/列上）
     if (threatDirs[d.name]) continue;
 
-    // 时序校验：朝向即脱离方向本帧 go 离格(needFrames=1, incoming>=1 即可)；
-    // 需转向则本帧不动、下帧才走，要求 incoming>=3 才不会在转向帧被命中。
     const needTurn = d.name !== me.tank.direction;
-    if (needTurn) {
-      if (incomingFrames < 3) continue;
-    } else {
+    // 时序校验：
+    // 1. 如果不用转向直接能走，1帧脱离。前面已经校验过 p 目前不在弹道上，所以直接通过。
+    if (!needTurn) {
       if (incomingFrames < 1) continue;
+    } else {
+      // 2. 如果需要转向，移动需要 2 帧（第 1 帧转身，第 2 帧离开）。
+      // 致命漏洞修复：转身帧必须保证我不死！
+      if (incomingFrames < 2) continue;
+      
+      // 预演子弹再飞 1 帧（模拟完成转身，即将进行 go 的那个帧）
+      // 必须保证那帧里，目标格子 p 不会被子弹扫过或占领
+      const bulletsNext = advanceBullets(bullets, BULLET_SPEED);
+      if (stepIntoBulletPath(bulletsNext, p, game) || anyBulletThreatens(bulletsNext, p, game)) {
+        continue;
+      }
     }
 
     // 打分：当前朝向就能走 > 逃生开口数 > 远离边缘 > 靠近星星
@@ -2468,27 +2477,16 @@ function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos) {
   const ahead = nextInDirection(myPos, me.tank.direction);
   if (safe(ahead)) { me.go(); return; }
 
-  // 破墙优先：若有土块可打通"更远离敌人"的通道，优先破墙而非来回横跳
+  // 破墙优先：若有土块可打通通道，优先破墙而非来回横跳
   // （mat_BavjL：[12,12]↔[12,13]震荡，right=[13,12]是土块，打通后可真正逃离）
   if (gunReady(me)) {
-    const digTarget = enemyPos
-      ? [myPos[0] * 2 - enemyPos[0], myPos[1] * 2 - enemyPos[1]] // 以我为中心、敌的对面方向
-      : nearestOpenToCenter(game);
+    // 只要被卡住了，就尽量往地图中心方向破墙逃生，不要管是不是离敌人更远了（被卡死必输）
+    const digTarget = nearestOpenToCenter(game);
     const digDir = findDigDirection(myPos, game, digTarget);
     if (digDir) {
-      // 只有破墙方向确实朝远离敌人时才破墙（避免乱打开洞送人头）
-      if (enemyPos) {
-        const after = nextInDirection(nextInDirection(myPos, digDir), digDir); // 打碎土块后的落脚点
-        if (manhattan(after, enemyPos) > manhattan(myPos, enemyPos)) {
-          if (me.tank.direction === digDir) { me.speak("破墙！"); me.fire(); }
-          else turnToward(me, digDir);
-          return;
-        }
-      } else {
-        if (me.tank.direction === digDir) { me.speak("破墙！"); me.fire(); }
-        else turnToward(me, digDir);
-        return;
-      }
+      if (me.tank.direction === digDir) { me.speak("破墙！"); me.fire(); }
+      else turnToward(me, digDir);
+      return;
     }
   }
 
