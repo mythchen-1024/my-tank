@@ -1095,7 +1095,7 @@ function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
  *    （比如长途追星、巡逻），将其写入 `shortIntent` 缓存，在接下来几帧内优先续跑，
  *    避免因为分数的微小抖动而反复横跳。
  */
-function chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets) {
+function chooseMoveCandidateScored(me, enemy, game, enemyPos, state, enemyBullets) {
   const candidates = buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets);
   if (candidates.length === 0) return null;
 
@@ -1137,7 +1137,17 @@ function chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets) {
     }
   }
 
-  return best.step;
+  return best;
+}
+
+function chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets) {
+  const best = chooseMoveCandidateScored(me, enemy, game, enemyPos, state, enemyBullets);
+  return best ? best.step : null;
+}
+
+// 兼容旧测试与旧调用入口：新版实现仍走统一评分裁决。
+function chooseStep(me, enemy, game, enemyPos, state, enemyBullets) {
+  return chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets);
 }
 
 /**
@@ -1762,7 +1772,7 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     } else {
       // 2. 如果需要转向，移动需要 2 帧（第 1 帧转身，第 2 帧离开）。
       // 致命漏洞修复：转身帧必须保证我不死！
-      if (incomingFrames < 2) continue;
+      if (incomingFrames < 3) continue;
       
       // 预演子弹再飞 1 帧（模拟完成转身，即将进行 go 的那个帧）
       // 必须保证那帧里，目标格子 p 不会被子弹扫过或占领
@@ -1823,7 +1833,7 @@ function hasTimedDodge(myPos, myDir, bullets, game, enemyPos, enemyTank) {
     // 如果需要转向，移动需要 2 帧（第 1 帧转身，第 2 帧离开）。
     // 【致命漏洞修复】：由于第 1 帧（转身帧）仍停留在当前格子 myPos，
     // 我们必须保证预演的这批 bullets（此时正处于转身帧开始时刻）不会在这一帧内命中 myPos！
-    if (incoming < 2) continue; // 子弹距离不足2帧，转身时就会被直接打死在原地
+    if (incoming < 3) continue; // 子弹距离不足3帧，转身帧/移动帧会被追上
     
     // 预演子弹再飞 1 帧（模拟完成转身，即将进行 go 的那个帧）
     const bulletsNext = advanceBullets(list, BULLET_SPEED);

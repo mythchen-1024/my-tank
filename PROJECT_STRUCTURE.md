@@ -68,11 +68,12 @@ decision-engine.js  ← 入口 onIdle，依赖所有上层
 
 ### `scoring.js` — 评分引擎
 
-统一的提案打分公式与硬约束校验。**所有权重集中在此文件，校准时只改这里。**
+统一的提案打分公式、提案基准分与硬约束校验。**顶层提案的 reward / risk / stability 基准集中在此文件，校准时优先改这里。**
 
 | 函数 / 变量 | 说明 |
 |------------|------|
 | `SCORE_WEIGHTS` | 权重配置：`{ reward:1.0, risk:1.2, stability:0.3 }` |
+| `SCORE_PRESETS` | 各类提案基准分与默认标签，例如 `aim-dodge`、`star-teleport`、`scored-move` |
 | `buildProposal(type, exec, opts)` | 构造候选提案对象（统一数据结构） |
 | `buildScoringContext(...)` | 构建含 `isLosing / isWinning / isEndgame / framesLeft` 的评分上下文 |
 | `braveBonus(proposal, ctx)` | 勇敢基线：落后/终局时提升抢星动力，领先时提升生存权重 |
@@ -86,10 +87,10 @@ decision-engine.js  ← 入口 onIdle，依赖所有上层
 |------|--------|------|
 | `aim-dodge` | ~70 | 软生存最高优先 |
 | `open-shot` | ~55 | 敌炮管空窗期进攻 |
-| `star-teleport` | ~50 | 星星 = 唯一得分，高于直接开火 |
+| `star-teleport` | ~52 | 星星 = 唯一得分，高于直接开火 |
 | `fire-direct` | ~45 | 有战略价值但不直接得分 |
-| `guard-line` | ~41 | 守线预瞄 |
-| `scored-move` | ~14 | 评分走位 |
+| `guard-line` | ~49 | 守线预瞄（含 `hold-line` 稳定加成） |
+| `scored-move` | ~14 | 评分走位；会携带内部候选标签（如 `star` / `survival` / `plan`）参与勇敢基线 |
 | `turn-right` | ~-8 | 兜底最低分 |
 
 **勇敢基线规则**：
@@ -125,7 +126,7 @@ decision-engine.js  ← 入口 onIdle，依赖所有上层
 | 射击判断 | `canShoot`, `gunReady`, `clearShotDirection` |
 | 子弹预测 | `findBulletDodge`, `stepIntoBulletPath`, `collectEnemyBullets` |
 | 传送逃生 | `findEscapeTeleport`, `isTeleportSafe` |
-| 走位评分 | `chooseStepScored`, `moveToward`, `bestSafeNeighbor` |
+| 走位评分 | `chooseMoveCandidateScored`, `chooseStepScored`, `chooseStep`, `moveToward`, `bestSafeNeighbor` |
 | 刺杀系统 | `findAssassinationPlan`, `assassinIsSafe`, `isAssassinTile` |
 | 草丛 / 隐身 | `iAmHidden`, `findBushLineShot`, `inCloakStarTrap`, `cloakStarGuardStep` |
 | 地图工具 | `manhattan`, `isDeadEnd`, `stepIntoSealedDeadEnd`, `isWall` |
@@ -183,7 +184,7 @@ onIdle(me, enemy, game)
    *基准分低 (~-8-26分)，无仗可打时的行为排期。*
    - `bush-hold` (~26)
    - `short-intent` (~20)
-   - `scored-move` (~14)
+   - `scored-move` (~14，按内部候选补充 `star` / `survival` / `plan` 标签)
    - `dig-wall` (~8)
    - `safe-neighbor` (~4)
    - `turn-right` (~-8，防挂机)
@@ -229,7 +230,7 @@ node my-tank/build.js
 
 ```bash
 node my-tank/_scenario_test.js
-# 当前状态：235 passed / 11 failed（11 个为 chooseStepScored 预存 bug）
+# 当前状态：247 passed / 0 failed
 ```
 
 按模块加载顺序依次 `eval` 所有文件，可直接测试工具函数和完整 `onIdle` 管线。

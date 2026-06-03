@@ -27,6 +27,26 @@
 //   move           turn-right  r=40 risk=40  s=0  ~-8
 // ============================================================
 
+// scored-move 是移动层内部二次裁决后的顶层提案。它默认只有 move 标签，
+// 这里根据内部 kind 补充语义标签，让 braveBonus 能识别“步行抢星/脱险/进攻走位/计划走位”。
+// 动态映射：
+// - star -> star：步行抢星，允许落后/终局勇敢提权。
+// - bandEscape / zigzag / ambush / avoid / safeNeighbor -> survival：逃离双弹带、隐身伏击线或危险格。
+// - lane / standoff -> attack：走位服务于获得枪线或维持交火距离。
+// - patrol / bush / center -> plan：巡逻、奔草、向心走位属于跨帧计划/机动性。
+// - 其他 kind 保留 move：普通移动候选，不额外触发 braveBonus。
+function tagsForMoveCandidate(kind) {
+  const tags = ['move'];
+  if (kind === 'star') tags.push('star');
+  if (kind === 'bandEscape' || kind === 'zigzag' || kind === 'ambush' ||
+      kind === 'avoid' || kind === 'safeNeighbor') {
+    tags.push('survival');
+  }
+  if (kind === 'lane' || kind === 'standoff') tags.push('attack');
+  if (kind === 'patrol' || kind === 'bush' || kind === 'center') tags.push('plan');
+  return tags;
+}
+
 // ---- 硬闸门层（步骤 2–3.5，直接返回单个提案或 null，不进入打分） ----
 
 /**
@@ -45,11 +65,11 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
       return buildProposal('counter-shoot', function () {
         me.speak("开炮！！！");
         me.fire();
-      }, { reward: 79, risk: 10, hardGate: true, tags: ['attack', 'survival'], reason: 'counter-shoot-then-dodge' });
+      }, { hardGate: true, reason: 'counter-shoot-then-dodge' });
     }
     return buildProposal('bullet-dodge', function () {
       moveToward(me, game, dodge, enemyPos, enemyTank, enemyBullets);
-    }, { reward: 88, risk: 8, hardGate: true, step: dodge, tags: ['survival'], reason: 'bullet-dodge' });
+    }, { hardGate: true, step: dodge, reason: 'bullet-dodge' });
   }
 
   // 步骤 3：紧急传送逃生
@@ -57,7 +77,7 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
   if (escapeTeleport) {
     return buildProposal('escape-teleport', function () {
       me.teleport(escapeTeleport[0], escapeTeleport[1]);
-    }, { reward: 90, risk: 5, hardGate: true, tags: ['survival'], reason: 'escape-teleport' });
+    }, { hardGate: true, step: escapeTeleport, reason: 'escape-teleport' });
   }
 
   // 步骤 3.4：两步脱困（双弹夹击）
@@ -67,7 +87,7 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
       const tdir = directionBetween(myPos, twoStep);
       if (tdir === me.tank.direction) me.go();
       else if (tdir) turnToward(me, tdir);
-    }, { reward: 85, risk: 10, hardGate: true, tags: ['survival'], reason: 'two-step-escape' });
+    }, { hardGate: true, step: twoStep, reason: 'two-step-escape' });
   }
 
   // 步骤 3.5：绝境横移
@@ -75,7 +95,7 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
   if (desperate) {
     return buildProposal('desperate-dodge', function () {
       moveToward(me, game, desperate, enemyPos, enemyTank, enemyBullets);
-    }, { reward: 80, risk: 12, hardGate: true, step: desperate, tags: ['survival'], reason: 'desperate-dodge' });
+    }, { hardGate: true, step: desperate, reason: 'desperate-dodge' });
   }
 
   return null;
@@ -95,7 +115,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   if (aimDodge) {
     proposals.push(buildProposal('aim-dodge', function () {
       moveToward(me, game, aimDodge, enemyPos, enemyTank, enemyBullets);
-    }, { reward: 82, risk: 10, step: aimDodge, tags: ['survival'], reason: 'aim-dodge' }));
+    }, { step: aimDodge, reason: 'aim-dodge' }));
     return proposals; // aim-dodge 命中则 line-duel 不再评估（优先级更高）
   }
 
@@ -104,7 +124,7 @@ function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enem
   if (lineDodge) {
     proposals.push(buildProposal('line-duel-dodge', function () {
       moveToward(me, game, lineDodge, enemyPos, enemyTank, enemyBullets);
-    }, { reward: 83, risk: 15, step: lineDodge, tags: ['survival'], reason: 'line-duel-dodge' }));
+    }, { step: lineDodge, reason: 'line-duel-dodge' }));
   }
 
   return proposals;
@@ -125,7 +145,7 @@ function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank,
     proposals.push(buildProposal('open-shot', function () {
       if (me.tank.direction === openShot) { me.speak("开炮！！！"); me.fire(); }
       else turnToward(me, openShot);
-    }, { reward: 79, risk: 20, tags: ['attack'], reason: 'open-shot-window' }));
+    }, { reason: 'open-shot-window' }));
   }
 
   // 步骤 6：同线无障碍直接开火
@@ -139,7 +159,7 @@ function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank,
       proposals.push(buildProposal('fire-direct', function () {
         if (me.tank.direction === shotDir) { me.speak("开炮！！！"); me.fire(); }
         else turnToward(me, shotDir);
-      }, { reward: 75, risk: 25, tags: ['attack'], reason: 'fire-direct' }));
+      }, { reason: 'fire-direct' }));
     }
   }
 
@@ -149,7 +169,7 @@ function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank,
     proposals.push(buildProposal('guard-line', function () {
       if (guardShot.fire) { me.speak("开炮！！！"); me.fire(); }
       else turnToward(me, guardShot.dir);
-    }, { reward: 65, risk: 20, tags: ['attack', 'hold-line'], reason: 'guard-line-shot' }));
+    }, { reason: 'guard-line-shot' }));
   }
 
   // 步骤 6.6：草丛攻防（预射打草惊蛇 / 草丛伏击）
@@ -158,7 +178,7 @@ function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank,
     proposals.push(buildProposal('bush-shot', function () {
       if (bushShot.fire) { me.speak("开炮！！！"); me.fire(); }
       else turnToward(me, bushShot.dir);
-    }, { reward: 60, risk: 15, tags: ['attack'], reason: 'bush-shot' }));
+    }, { reason: 'bush-shot' }));
   }
 
   return proposals;
@@ -180,11 +200,11 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
     if (guard) {
       proposals.push(buildProposal('cloak-guard', function () {
         moveToward(me, game, guard, enemyPos, enemyTank, enemyBullets);
-      }, { reward: 56, risk: 15, step: guard, tags: ['survival', 'star'], reason: 'cloak-star-trap' }));
+      }, { step: guard, reason: 'cloak-star-trap' }));
     } else {
       // 有陷阱但找不到安全格，原地不动（高分阻断追星）
       proposals.push(buildProposal('cloak-trap-hold', function () {}, {
-        reward: 58, risk: 12, tags: ['survival'], reason: 'cloak-trap-no-guard',
+        reason: 'cloak-trap-no-guard',
       }));
     }
     return proposals; // 陷阱状态下不评估其他目标提案
@@ -197,7 +217,7 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
     proposals.push(buildProposal('star-teleport', function () {
       if (faceDir && me.tank.direction !== faceDir) { turnToward(me, faceDir); return; }
       me.teleport(starTeleport[0], starTeleport[1]);
-    }, { reward: 80, risk: 25, stability: 5, tags: ['star'], reason: 'star-teleport' }));
+    }, { step: starTeleport, reason: 'star-teleport' }));
   }
 
   // 提案 3：星星争夺预瞄守点
@@ -205,7 +225,7 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
   if (starGuard) {
     proposals.push(buildProposal('star-guard', function () {
       if (me.tank.direction !== starGuard.dir) turnToward(me, starGuard.dir);
-    }, { reward: 50, risk: 15, tags: ['star', 'hold-line'], reason: 'contested-star-guard' }));
+    }, { reason: 'contested-star-guard' }));
   }
 
   // 提案 4：传送刺杀
@@ -222,7 +242,7 @@ function collectTargetProposals(me, enemy, game, state, enemyBullets, enemyTank,
       } else {
         turnToward(me, assassination.dir);
       }
-    }, { reward: 70, risk: 35, tags: ['attack'], reason: 'assassination' }));
+    }, { step: assassination.pos, reason: 'assassination' }));
   }
 
   return proposals;
@@ -246,7 +266,7 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
       primeShortIntent(state, "hold", myPos, (game && game.frames) || 0, 3);
       proposals.push(buildProposal('bush-hold', function () {
         // 静止即行动：原地隐身等待
-      }, { reward: 34, risk: 10, stability: 15, tags: ['survival', 'plan'], reason: 'overload-bush-hold' }));
+      }, { reason: 'overload-bush-hold' }));
       return proposals;
     }
   }
@@ -256,7 +276,7 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
   if (shortIntent) {
     if (shortIntent.hold) {
       proposals.push(buildProposal('short-intent-hold', function () {}, {
-        reward: 36, risk: 10, tags: ['plan'], reason: 'short-intent-hold',
+        reason: 'short-intent-hold',
       }));
     } else {
       proposals.push(buildProposal('short-intent', function () {
@@ -266,21 +286,28 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
           return;
         }
         moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets);
-      }, { reward: 38, risk: 17, stability: 10, step: shortIntent.step, tags: ['plan'], reason: 'short-intent' }));
+      }, { step: shortIntent.step, reason: 'short-intent' }));
     }
     return proposals; // 短期意图命中时不再叠加走位提案
   }
 
   // 收益核心：评分走位 chooseStepScored
-  const step = chooseStepScored(me, enemy, game, enemyPos, state, enemyBullets);
-  if (step) {
+  const moveCandidate = chooseMoveCandidateScored(me, enemy, game, enemyPos, state, enemyBullets);
+  if (moveCandidate && moveCandidate.step) {
+    const step = moveCandidate.step;
     proposals.push(buildProposal('scored-move', function () {
       if (state.stuckFrames >= 2) {
         breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2);
         return;
       }
       moveToward(me, game, step, enemyPos, enemyTank, enemyBullets);
-    }, { reward: 35, risk: 18, stability: 3, step: step, tags: ['move'], reason: 'scored-move' }));
+    }, {
+      step: step,
+      tags: tagsForMoveCandidate(moveCandidate.kind),
+      reason: 'scored-move:' + moveCandidate.kind,
+      meta: moveCandidate.meta,
+      detailScore: moveCandidate.score
+    }));
   }
 
   // 破墙开路
@@ -290,7 +317,7 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
     proposals.push(buildProposal('dig', function () {
       if (me.tank.direction === digDir) { me.speak("开炮！！！"); me.fire(); }
       else turnToward(me, digDir);
-    }, { reward: 26, risk: 15, tags: ['move'], reason: 'dig-wall' }));
+    }, { reason: 'dig-wall' }));
   }
 
   // 生存兜底：安全徘徊
@@ -298,13 +325,13 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
   if (safeStep) {
     proposals.push(buildProposal('safe-neighbor', function () {
       moveToward(me, game, safeStep, enemyPos, enemyTank, enemyBullets);
-    }, { reward: 28, risk: 20, step: safeStep, tags: ['move'], reason: 'safe-neighbor' }));
+    }, { step: safeStep, reason: 'safe-neighbor' }));
   }
 
   // 终极兜底：原地右转防挂机
   proposals.push(buildProposal('turn-right', function () {
     me.turn("right");
-  }, { reward: 40, risk: 40, tags: ['fallback'], reason: 'turn-right-fallback' }));
+  }, { reason: 'turn-right-fallback' }));
 
   return proposals;
 }

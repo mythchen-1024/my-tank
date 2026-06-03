@@ -21,6 +21,8 @@ var MATCH_STATE = null;
  * - shortIntent: 对象或 null，短期意图缓存，用于保留 2~4 步的低风险连续动作（例如 { kind, target, createdFrame, expireFrame, stepsLeft }）
  * - lastEvadeAxis: 字符串 "x" 或 "y"，或 undefined，记录上一次躲避移动所在的轴，防止在角落被封死时反复无意义同轴移动
  * - enemyFleeFrames: 数字，记录敌人连续"背对逃跑"的帧数（连续逃跑一定帧数会被判定为跑路流）
+ * - enemySkillAnnounced: 布尔值，本局是否已播报过敌方技能，避免每帧刷屏
+ * - lastSpeakDecisionKey / lastSpeakFrame: 上一次气泡播报的关键决策，用于抑制连续重复气泡
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
@@ -38,7 +40,10 @@ function getMatchState(game) {
       patrolTarget: null,
       shortIntent: null,
       lastEvadeAxis: undefined,
-      enemyFleeFrames: 0
+      enemyFleeFrames: 0,
+      enemySkillAnnounced: false,
+      lastSpeakDecisionKey: null,
+      lastSpeakFrame: -999
     };
   }
   MATCH_STATE.lastFrame = frame;
