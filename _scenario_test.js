@@ -1846,6 +1846,73 @@ console.log('场景PB: 双弹配对弹锚点修复(敌移动后不漏判)');
   // PB5 防过头: 非overload敌完全不补
   const e5 = { tank: { id: 'e', position: [10, 8] }, bullet: { position: [5, 8], direction: 'left' }, skill: { type: 'shield' }, status: {} };
   check('PB5 非overload敌不补配对弹', collectEnemyBullets(e5).length === 1);
+
+  // PB6(mat_1gua): 只露出主弹 x=13 时，也要补出 x=14 副弹，避免继续沿 x=14 上行被秒。
+  const gamePB6 = { map: emptyMap(19, 15), star: null, frames: 105 };
+  const mePB6 = makeMe([14, 4], 'up');
+  const e6 = over1([13, 10], [13, 9], 'up');
+  const dodgePB6 = findBulletDodge(mePB6, e6, gamePB6, e6.tank.position);
+  check('PB6 可见主弹时补副弹 -> 躲离x=14车道(mat_1gua)', dodgePB6 && dodgePB6[0] !== 14,
+    'dodge=' + JSON.stringify(dodgePB6) + ' bullets=' + JSON.stringify(collectEnemyBullets(e6)));
+}
+
+// =========================================================
+// 场景 PBL：overload 生效但子弹尚未生成时，提前脱离副弹车道
+// mat_L2dcAhIU0ia3QghC6：敌 [10,3] 朝 right，过载会覆盖 y=3/y=4；我在 [15,4] 若继续横走会被副弹命中。
+// =========================================================
+console.log('场景PBL: 过载开火前预判副弹车道');
+{
+  const gamePBL = { map: emptyMap(19, 15), star: [11, 8], frames: 68 };
+  const mePBL = makeMe([15, 4], 'left');
+  const enemyPBL = {
+    tank: { id: 'e', position: [10, 3], direction: 'right', crashed: false },
+    bullet: null,
+    skill: { type: 'overload', remainingCooldownFrames: 0 },
+    status: { overloaded: true },
+    stars: 1
+  };
+  const predicted = predictedOverloadBullets(enemyPBL.tank);
+  const dodgePBL = findOverloadLaneDodge(mePBL, enemyPBL, enemyPBL.tank, gamePBL, enemyPBL.tank.position);
+  check('PBL1 过载副弹预判 -> 脱离y=4车道(mat_L2dc)', dodgePBL && dodgePBL[1] !== 4,
+    'dodge=' + JSON.stringify(dodgePBL) + ' predicted=' + JSON.stringify(predicted));
+  check('PBL2 预判落点不在双弹弹道', dodgePBL && !anyBulletThreatens(predicted, dodgePBL, gamePBL),
+    'dodge=' + JSON.stringify(dodgePBL));
+}
+
+// =========================================================
+// 场景 NO1：No.1 复盘，moveToward/chooseStep 不把我推进已知弹道
+// mat_FPfRkRE3xUlCAASdH：我传到 [1,12] 吃星后，旧兜底把我推到 [2,12] 接下行弹。
+// mat_8aYBkMG8jBgDwwiyf：敌左射弹在 [4,2]，旧兜底可能继续朝右走进子弹。
+// =========================================================
+console.log('场景NO1: 不用兜底go接子弹(No.1复盘)');
+{
+  const mapNO1 = emptyMap(19, 15);
+
+  const meN1 = makeMe([1, 12], 'right');
+  const enemyTankN1 = { id: 'e', position: [1, 2], direction: 'down', crashed: false };
+  const bulletN1 = { position: [2, 10], direction: 'down' };
+  moveToward(meN1, { map: mapNO1, star: null, frames: 6 }, [2, 12], enemyTankN1.position, enemyTankN1, [bulletN1]);
+  check('NO1-1 moveToward目标格在弹道上 -> 不直接go进[2,12]', !meN1._actions.some(a => a[0] === 'go'),
+    JSON.stringify(meN1._actions));
+
+  const meN2 = makeMe([3, 2], 'right');
+  const enemyTankN2 = { id: 'e', position: [6, 2], direction: 'left', crashed: false };
+  const bulletN2 = { position: [4, 2], direction: 'left' };
+  moveToward(meN2, { map: mapNO1, star: null, frames: 80 }, [4, 2], enemyTankN2.position, enemyTankN2, [bulletN2]);
+  check('NO1-2 moveToward前方就是来弹 -> 不直接go接弹', !meN2._actions.some(a => a[0] === 'go'),
+    JSON.stringify(meN2._actions));
+
+  const meN3 = makeMe([1, 12], 'right');
+  const enemyN3 = {
+    tank: enemyTankN1,
+    bullet: bulletN1,
+    skill: { type: 'overload', remainingCooldownFrames: 8 },
+    status: {},
+    stars: 0
+  };
+  const stepN3 = chooseStepScored(meN3, enemyN3, { map: mapNO1, star: null, frames: 6 }, enemyTankN1.position, {});
+  check('NO1-3 chooseStepScored默认收集enemy.bullet，不返回弹道格', !stepN3 || !stepIntoBulletPath(collectEnemyBullets(enemyN3), stepN3, { map: mapNO1 }),
+    'step=' + JSON.stringify(stepN3));
 }
 
 // =========================================================

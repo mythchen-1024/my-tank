@@ -110,6 +110,15 @@ function collectHardSurvivalAction(me, enemy, game, state, enemyBullets, enemyTa
 function collectSoftSurvivalProposals(me, enemy, game, state, enemyBullets, enemyTank, enemyPos) {
   const proposals = [];
 
+  // 步骤 4.0：overload 已生效但子弹尚未出现时，提前脱离主弹/副弹车道。
+  const overloadLaneDodge = findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos);
+  if (overloadLaneDodge) {
+    proposals.push(buildProposal('aim-dodge', function () {
+      moveToward(me, game, overloadLaneDodge, enemyPos, enemyTank, enemyBullets);
+    }, { step: overloadLaneDodge, reason: 'overload-lane-dodge' }));
+    return proposals;
+  }
+
   // 步骤 4：防范敌方瞄准
   const aimDodge = findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos);
   if (aimDodge) {
