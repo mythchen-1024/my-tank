@@ -138,6 +138,14 @@ function buildScoringContext(me, enemy, game, state, enemyBullets, enemyTank, en
   const myStars   = (me && me.stars)            || 0;
   const enmStars  = (enemy && enemy.stars)      || 0;
   const framesLeft = MAX_GAME_FRAMES - frame;
+  // 抢星热门：我到星步数 +1(转向缓冲) 仍严格小于敌人 = 这颗星“该我吃”。
+  // 与 buildMoveCandidates 的 favorite 判定同源，靠 shortestPathInfo 每帧缓存避免重复 BFS。
+  let isStarFavorite = false;
+  if (game && game.star && enemyPos && me && me.tank) {
+    const myStarDist  = pathDistance(me.tank.position, game.star, game, enemyPos);
+    const enmStarDist = pathDistance(enemyPos, game.star, game, me.tank.position);
+    if (myStarDist >= 0) isStarFavorite = enmStarDist < 0 || myStarDist + 1 < enmStarDist;
+  }
   return {
     me, enemy, game, state,
     enemyBullets: enemyBullets || [],
@@ -150,6 +158,7 @@ function buildScoringContext(me, enemy, game, state, enemyBullets, enemyTank, en
     isEndgame:  framesLeft <= 20,
     isLosing:   myStars < enmStars,
     isWinning:  myStars > enmStars,
+    isStarFavorite,
   };
 }
 
@@ -179,6 +188,9 @@ function braveBonus(proposal, ctx) {
     if (tags.indexOf('survival') >= 0) bonus += 5; // 领先时更积极躲避
     if (tags.indexOf('star')     >= 0) bonus += 8; // 领先时仍追星，但幅度小
   }
+
+  // ── 抢星热门：这颗星明显该我吃(我比敌近)，无论输赢都加码，别让外圈巡逻/绕圈惯性压过(mat_2Bc f104)
+  if (ctx.isStarFavorite && tags.indexOf('star') >= 0) bonus += 18;
 
   // ── 持线稳定性：守在己方星线附近
   if (tags.indexOf('hold-line') >= 0) bonus += 8;

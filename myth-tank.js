@@ -701,9 +701,18 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
   // 双 teleport 抢星对撞：敌方传送也就绪时，直传星点 = 站在对方能预判的靶位上送死(mat_JOj 直传 [17,4]，
   // 敌一跳到 [15,4] 同行右射 2格/帧瞬达把我秒)。星点同时暴露在"行+列"两条线，对方传到任一条线即可命中。
   // 改传星十字相邻一格(只暴露行或列之一、对方猜不到我落哪个十字格)，下一帧再走上去补吃；找不到安全相邻格再退回原逻辑。
+  //
+  // 门控(mat_FH69 复盘)：十字相邻避狙的前提是"对手也得靠瞬移到星线来抢这颗星"。若对手走路就能到星
+  // (foeWalk 近)，它会直接走过去吃，不会瞬移狙我——此时我传旁边一格反而吃不到星、还可能因补吃格贴敌被
+  // 死区拦下而丢星(mat_FH69 f51 星[3,5]、敌走路 d=3，我传[4,5]没吃到、补吃[3,5]贴敌 d=1 被拦，丢星+废传送)。
+  // 仅当对手走路够不到星(foeWalk 远，会被迫传送瞬移)时才用十字相邻避狙；否则直传星点抢分。
   if (enemyTeleportReady(enemy)) {
-    const crossGrab = crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
-    if (crossGrab) return crossGrab;
+    const foeWalk = enemyPos ? pathDistance(enemyPos, game.star, game, me.tank.position) : -1;
+    const foeMustTeleport = foeWalk < 0 || foeWalk > 5; // 对手走路够不到(或不可达) -> 才会瞬移狙星线
+    if (foeMustTeleport) {
+      const crossGrab = crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy);
+      if (crossGrab) return crossGrab;
+    }
   }
 
   // 优先直接传送到星星上（但要排除"落地即被敌方开火打死、又躲不掉"的死亡陷阱）
@@ -1118,7 +1127,9 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   // 【抢星收益】：基于当前比分和剩余帧数的动态加权
   if (game.star) {
     const ds = manhattan(step, game.star);
-    const urg = isTrailing ? 2 : 1; // 落后时抢星欲望翻倍
+    // 落后时抢星欲望翻倍；领先但我是这颗星的“热门”(明显比敌近)时同样翻倍——该我吃的星别让。
+    const isFavorite = !!(meta && meta.favorite);
+    const urg = (isTrailing || isFavorite) ? 2 : 1;
     // 拉远感知距离：原 26-ds*4 在 ds>6 时归零，外圈巡逻分数反而更高，导致不追远星。
     // 改为 28-ds*3：感知半径扩至 9 格，平局时远星也有牵引力，不再只靠落后时的 urg 加权。
     const starPulse = Math.max(0, 28 - ds * 3) * urg;
@@ -1132,8 +1143,9 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
       if (myStarDist <= 4) score += Math.max(0, 16 - myStarDist * 3) * urg;
       // 与 scoring.js braveBonus 同步：把外层提案评分的落后/终局加权，
       // 下沉到内部走位竞争，让追星候选能在 chooseMoveCandidateScored 里直接打赢外圈巡逻。
-      if (isTrailing) score += 20;
-      if (isTrailing && framesLeft <= 20) score += 25;
+      // 热门星(isFavorite)等同落后处理：领先时也要赢下绕圈/巡逻惯性(mat_2Bc f104 让星复盘)。
+      if (isTrailing || isFavorite) score += 20;
+      if ((isTrailing || isFavorite) && framesLeft <= 20) score += 25;
       if (framesLeft <= 10) score += 20;
     } else {
       score += Math.max(0, 12 - ds * 2); // 其他移动动作若顺路靠近星也稍微加分
@@ -1207,7 +1219,6 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   }
 
   if (meta && meta.target && samePos(step, meta.target)) score += 10;
-  if (state && state.shortIntent && state.shortIntent.target && samePos(step, state.shortIntent.target)) score += 8;
   return score;
 }
 
@@ -1255,8 +1266,12 @@ function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
     const starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
     // fleeMode: 敌人连续背对逃跑达到阈值，追星判定会放宽（对纯跑分流不用再客气）
     if (shouldChaseStar(myPos, enemyPos, game, starPath, enemy, !!(state && state.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD)) && starPath && starPath.step) {
+      // 抢星热门判定：我到星的步数 +1(留转向缓冲) 仍严格小于敌人 = 这颗星“该我吃”，
+      // 评分时等同落后欲望，避免领先时被 overload 绕圈/巡逻惯性压过让出热门星(mat_2Bc f104)。
+      const enemyStarDist = enemyPos ? pathDistance(enemyPos, game.star, game, myPos) : -1;
+      const iAmStarFavorite = enemyStarDist < 0 || starPath.dist + 1 < enemyStarDist;
       // kind="star"：追星提案，向星星的最短路径迈进
-      push("star", starPath.step, { target: game.star, allowStarDeadEnd: samePos(starPath.step, game.star) });
+      push("star", starPath.step, { target: game.star, allowStarDeadEnd: samePos(starPath.step, game.star), favorite: iAmStarFavorite });
     }
   }
 
@@ -1281,9 +1296,16 @@ function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
     }
 
     // 若敌人握有双弹，产出紧急跨出双弹带的脱离提案
+    // 门控：只在真正危险时触发——已激活过载(d<=6)，或冷却就绪但我已在带内(d<=4)
     if (enemyDoubleLaneThreat(enemy)) {
-      // kind="bandEscape"：紧急横移提案，跨出双弹的平行覆盖带
-      push("bandEscape", escapeDoubleLaneBand(myPos, enemyPos, game, bullets), { target: enemyPos });
+      const distToEnemy = manhattan(myPos, enemyPos);
+      const activeOverload = enemy && enemy.status && enemy.status.overloaded;
+      const shouldEscape = activeOverload
+        ? (distToEnemy <= 6 && inDoubleLaneBand(enemyPos, myPos, 6))
+        : (distToEnemy <= 4 && inDoubleLaneBand(enemyPos, myPos, 4));
+      if (shouldEscape) {
+        push("bandEscape", escapeDoubleLaneBand(myPos, enemyPos, game, bullets), { target: enemyPos });
+      }
     }
 
     // 对手是过载流且当前无星，抛出草丛蹲守安全位提案
@@ -1359,21 +1381,6 @@ function chooseMoveCandidateScored(me, enemy, game, enemyPos, state, enemyBullet
   const best = candidates[0];
   if (!best) return null;
 
-  const frame = (game && game.frames) || 0;
-  if (state) {
-    // 【计划层注入】：只把已经赢得评分的低风险计划写入缓存，后续几帧优先续跑同一条稳定路线。
-    // 这对应重构计划中的 “短期意图缓存 / 稳定性维度”。
-    if (best.kind === "star" && game.star) {
-      // 抢星降为3帧，防止头铁跑过头
-      primeShortIntent(state, "star", game.star, frame, 3);
-    } else if (best.kind === "patrol" && best.meta && best.meta.target) {
-      // 巡逻降为2帧，更灵活
-      primeShortIntent(state, "patrol", best.meta.target, frame, 2);
-    } else if (best.kind === "bush" && best.meta && best.meta.target) {
-       // 蹲草降为2帧
-      primeShortIntent(state, "bush", best.meta.target, frame, 2);
-    }
-  }
 
   return best;
 }
@@ -1742,15 +1749,20 @@ function nextStepToStandoff(myPos, enemyPos, game, standoff, enemy, enemyBullets
   }
 
   // 路径 B：已在安全环带内 → 找射击轨道（在此停留，不贴近）
-  // overload 流：路径 B 调 nextStepToFiringLane 会选"走过去对准"的格，可能往敌正列方向逼近（副弹陷阱）。
-  // 对 overload 流同样禁止路径 B，交给上层 bandEscape/bushStep 保持机动（与路径 C 一致）。
+  // overload 流 CD 充裕(>5帧)时压上开炮；CD 快好或已过载则保守交上层。
   if (curD <= standoff + 2) {
-    if (enemyIsOverloadType(enemy)) return null;
+    if (enemyIsOverloadType(enemy)) {
+      const cd = enemy.skill && enemy.skill.remainingCooldownFrames;
+      if (enemyDoubleLaneThreat(enemy) || (cd !== undefined && cd <= 5)) return null;
+    }
     return nextStepToFiringLane(myPos, enemyPos, game, standoff);
   }
 
-  // 路径 C：太远 → 逼近到 standoff 环（overload 流禁止逼近，交上层巡逻）
-  if (enemyIsOverloadType(enemy)) return null;
+  // 路径 C：太远 → 逼近到 standoff 环（overload 流 CD 快好时禁止逼近，交上层巡逻）
+  if (enemyIsOverloadType(enemy)) {
+    const cd = enemy.skill && enemy.skill.remainingCooldownFrames;
+    if (enemyDoubleLaneThreat(enemy) || (cd !== undefined && cd <= 5)) return null;
+  }
   return nextStepToGoal(myPos, game, enemyPos, function (p) {
     const d = manhattan(p, enemyPos);
     return d >= standoff && d <= standoff + 1;
@@ -2500,9 +2512,11 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     // 能否在中弹前离线：朝向即侧向可本帧直接 go 离线(必活)；需先转向(2帧)则要求敌命中更晚。
     const safe = escapeFrames === 1 || escapeFrames < enemyDuel;
     if (!safe) continue; // 来不及离线，侧移反而白送（应转为对射/换血）
-    // 偏好当前朝向就能直接走的方向（1 帧脱离），其次远离敌人、远离边缘
+    // 偏好当前朝向就能直接走的方向（1 帧脱离），其次保持反击角度，再次远离边缘
     const facing = d.name === me.tank.direction ? 100 : 0;
-    const score = facing + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    // 侧移后仍能直射敌人(如侧方恰好同行/列)→ 保留反击机会，不白跑
+    const counterLine = clearShotDirection(p, enemyPos, game) ? 15 : 0;
+    const score = facing + counterLine + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
     if (score > bestScore) {
       bestScore = score;
       best = p;
@@ -2563,18 +2577,36 @@ function findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemy
 }
 
 
+function canPreemptiveShot(myPos, myDir, enemyTank, game) {
+  if (!enemyTank) return null;
+  const d = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[enemyTank.direction];
+  if (!d) return null;
+  const epNext = [enemyTank.position[0] + d[0], enemyTank.position[1] + d[1]];
+  if (manhattan(myPos, epNext) > 2) return null;
+  const shotDir = clearShotDirection(myPos, epNext, game);
+  if (!shotDir) return null;
+  if (turnDistance(myDir, shotDir) > 1) return null;
+  return shotDir;
+}
+
 function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
-  // 过载流门控分两段：
-  // - 已同线时用 enemyDoubleLaneThreat（握弹才怂，和主开火分支保持一致：”没双弹刚”）
-  // - 预转/尚未同线时用 enemyIsOverloadType（有技能就关）——预转会把我主动摆到覆盖带附近，风险真实
+  // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支“没双弹就刚”一致：
+  // overload 流但 CD 充裕(手里没双弹)时，同线开火与未同线预转都照常——只在真握弹(已过载/cd<=1)时全关。
   const shieldEnemy = enemyHasShieldSkill(enemy);
   if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
-  // 放宽：”即将同线”也备战——距离<=4 就考虑(原<=3过严，常来不及转炮口)。
-  if (manhattan(me.tank.position, enemyPos) > 4) return null;
+  // 距离门控：拉到 safeStandoffDistance（overload 流=5）才不备战——在安全环带就开始预瞄转炮口，
+  // 不必贴到 4 格才守线（mat_2Bc fired=0：守线距离门只有4，整局没机会预瞄）。握双弹时同样按 standoff 退。
+  const guardDist = safeStandoffDistance(enemy);
+  if (manhattan(me.tank.position, enemyPos) > guardDist) return null;
 
   const myPos = me.tank.position;
+  // 预判开炮：敌人朝我走且1帧后进入炮线（仅非双弹威胁时）
+  if (!enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy)) {
+    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
+    if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
+  }
   // 已在同行/同列且视线清晰：能打就打/对准
   const lineDir = clearShotDirection(myPos, enemyPos, game);
   if (lineDir) {
@@ -2586,9 +2618,10 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     return { dir: lineDir };
   }
 
-  // 尚未同线——预转风险更高（主动凑进覆盖带），对 overload 流整体关闭
+  // 尚未同线——预转风险更高（主动凑进覆盖带）
+  // 已过载或握双弹(cd<=1)时关闭；overload 流但 CD 充裕(手里没双弹)允许预转压制，与主开火“没双弹就刚”一致。
   if (enemy.status && enemy.status.overloaded) return null;
-  if (enemyIsOverloadType(enemy)) return null;
+  if (enemyDoubleLaneThreat(enemy)) return null;
   // shield 流敌人不做近距守线预转，避免主动把自己摆进无收益对枪。
   if (shieldEnemy) return null;
 
@@ -2995,10 +3028,35 @@ function nextStepToward(start, target, game, enemyPos) {
 
 /**
  * BFS 计算到目标的最短路径长度，并返回第一步移动的坐标
+ *
+ * 每帧缓存：同一帧内 game/map/blockPos 不变 → 同 (start,target,blockPos) 结果确定。
+ * buildMoveCandidates + shouldChaseStar + 巡逻/center/firingLane + braveBonus 每帧会查 5-8 次 BFS，
+ * 不少 target 重复(enemyPos、星、巡逻点)。按 game.frames 翻新缓存，命中返回浅拷贝(防调用方改对象污染)。
  */
+var _bfsCache = {};
+var _bfsCacheFrame = -1;
+var _bfsCacheGame = null;
 function shortestPathInfo(start, target, game, blockPos) {
   if (!target) return null;
   if (samePos(start, target)) return { dist: 0, step: null };
+
+  const frame = (game && game.frames) || 0;
+  // 帧号变化 或 game 对象本身换了(不同对局/不同测试场景常都在 frame 0) → 翻新缓存，防跨场景脏命中
+  if (frame !== _bfsCacheFrame || game !== _bfsCacheGame) {
+    _bfsCache = {}; _bfsCacheFrame = frame; _bfsCacheGame = game;
+  }
+  const cacheKey = key(start) + ">" + key(target) + ">" + (blockPos ? key(blockPos) : "_");
+  const cached = _bfsCache[cacheKey];
+  if (cached !== undefined) {
+    return cached ? { dist: cached.dist, step: cached.step ? [cached.step[0], cached.step[1]] : null } : null;
+  }
+
+  const result = _computeShortestPathInfo(start, target, game, blockPos);
+  _bfsCache[cacheKey] = result;
+  return result ? { dist: result.dist, step: result.step ? [result.step[0], result.step[1]] : null } : null;
+}
+
+function _computeShortestPathInfo(start, target, game, blockPos) {
   const w = game.map.length;
   const h = game.map[0].length;
   const queue = [start];
@@ -3015,15 +3073,15 @@ function shortestPathInfo(start, target, game, blockPos) {
       const k = key(n);
       if (seen[k]) continue;
       if (n[0] < 0 || n[1] < 0 || n[0] >= w || n[1] >= h) continue;
-      
+
       // 非目标格要求可通过，目标格可以容忍被敌人占据
       if (!samePos(n, target) && !isPassable(game, n, blockPos)) continue;
       if (samePos(n, target) && !isPassable(game, n, null) && !samePos(target, blockPos)) continue;
-      
+
       seen[k] = true;
       prev[k] = p;
       dist[k] = dist[key(p)] + 1;
-      
+
       if (samePos(n, target)) {
         return { dist: dist[k], step: firstStep(start, n, prev) };
       }
