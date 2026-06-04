@@ -667,6 +667,15 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
   const endgameGrab = endgameStarTeleport(me, enemy, enemyTank, game, walkDist);
   if (endgameGrab) return endgameGrab;
 
+  // 过载敌人：仅当对方 overload 冷却 <= 10 帧（即将放双弹）时才保留传送做逃生，
+  // 其余时间允许传星——传完后靠走位评分避开双弹带，不在这里一刀切禁止。
+  if (enemyIsOverloadType(enemy)) {
+    // 过载即将开火(已过载状态)：传星后若落点在双弹带内且无法即时逃跑，则留传送做逃生。
+    // 注意：overloadCD=0 但敌未激活(status.overloaded=false)，不等于实弹在途，不能一刀切禁用传星。
+    // isTeleportSafe / isStarGuardTrap 已过滤落点危险，此处只阻断"敌已过载中(实弹即将飞出)"的情形。
+    if (enemy && enemy.status && enemy.status.overloaded) return null; // 已激活，双弹本帧就发出
+  }
+
   // 走路够快(<=5步)时不浪费传送
   if (walkDist >= 0 && walkDist <= 5) return null;
 
@@ -1048,9 +1057,14 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   } else if (isOverload) {
     // 面对双弹流(Overload)的日常走位：围绕底图边缘转圈躲避（形成环形跑道）
     // 不去正中心（容易被双弹交叉封死四面八方），偏好距边缘 1~2 格的位置
-    if (distEdge === 0) score -= 2; // 紧贴最外侧墙皮容易被单向封死，微扣分
-    else if (distEdge > 2) score -= (distEdge - 2) * 2; // 越往中心越扣分，逼迫其在外圈绕圈
-    else score += 6; // distEdge === 1 或 2，完美的环绕躲避舒适区
+    // 有星星时削减外圈加分，让追星候选能打赢外圈巡逻（星星是唯一得分途径）
+    // 面对双弹流(Overload)：在内圈跑道（distEdge=2~4）绕圈，而非贴最外墙皮（distEdge=1）。
+    // 内圈原因：① 星星更多刷新在内区；② 机动空间更大；③ 贴墙反而被封死方向。
+    // 有星时削减环形加分，让追星候选打赢巡逻。
+    const ringBonus = game.star ? 3 : 6;
+    if (distEdge <= 1) score -= 4;               // 贴最外墙皮，减分
+    else if (distEdge > 4) score -= (distEdge - 4) * 2; // 太靠中心，轻微减分
+    else score += ringBonus;                      // distEdge=2~4：理想内圈跑道
   } else {
     // 面对其他技能(如传送、护盾)的日常走位：正常积极走中心，控制视野
     score += distEdge * 3; 
@@ -1105,7 +1119,9 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   if (game.star) {
     const ds = manhattan(step, game.star);
     const urg = isTrailing ? 2 : 1; // 落后时抢星欲望翻倍
-    const starPulse = Math.max(0, 26 - ds * 4) * urg;
+    // 拉远感知距离：原 26-ds*4 在 ds>6 时归零，外圈巡逻分数反而更高，导致不追远星。
+    // 改为 28-ds*3：感知半径扩至 9 格，平局时远星也有牵引力，不再只靠落后时的 urg 加权。
+    const starPulse = Math.max(0, 28 - ds * 3) * urg;
     if (kind === "star") {
       score += starPulse + 12 * urg;
       if (samePos(step, game.star)) score += 40 * urg; // 直接吃到星满分
@@ -1114,6 +1130,11 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
       // 近距离星紧急度：≤4步时补分，防止攻击提案（lane/standoff）靠 clearShot+方向奖励抢走优先级
       const myStarDist = manhattan(myPos, game.star);
       if (myStarDist <= 4) score += Math.max(0, 16 - myStarDist * 3) * urg;
+      // 与 scoring.js braveBonus 同步：把外层提案评分的落后/终局加权，
+      // 下沉到内部走位竞争，让追星候选能在 chooseMoveCandidateScored 里直接打赢外圈巡逻。
+      if (isTrailing) score += 20;
+      if (isTrailing && framesLeft <= 20) score += 25;
+      if (framesLeft <= 10) score += 20;
     } else {
       score += Math.max(0, 12 - ds * 2); // 其他移动动作若顺路靠近星也稍微加分
     }
@@ -1123,7 +1144,15 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
 
   if (kind === "patrol") {
     // 巡逻逻辑：鼓励向目标靠近，保持意图粘性，远离隐身敌人的最后出没地
-    if (meta && meta.target) score += Math.max(0, 18 - manhattan(step, meta.target) * 3);
+    if (meta && meta.target) {
+      const stepDist = manhattan(step, meta.target);
+      const myDist   = manhattan(myPos, meta.target);
+      // 原公式 18-dist*3 在 dist>6 时归零，导致远目标毫无引力，坦克只在起点外圈来回刷。
+      // 改为线性衰减：每步 -1 分但始终非负，远目标仍有方向感。
+      score += Math.max(0, 20 - stepDist);
+      // 额外奖励：每步靠近巡逻目标
+      if (stepDist < myDist) score += 8;
+    }
     if (state && state.patrolTarget && meta && samePos(meta.target, state.patrolTarget)) score += 12;
     if (!game.star && !enemyPos) score += 20; // 纯垃圾时间巡逻大幅加成，避免罚站
     if (state && state.lastEnemyPos && ((game.frames || 0) - state.lastEnemySeenFrame <= 12)) {
@@ -1425,7 +1454,7 @@ function virtualPatrolTarget(me, game, state, enemy) {
     // overload 流：贴边锚点降权(-8)；对侧象限加分(+6)，驱动绕到敌人背面
     let overloadBonus = 0;
     if (isOverload && enemyPos) {
-      if (edgeD <= 2) overloadBonus -= 8; // 贴墙角落降权，避免往死角走
+      if (edgeD <= 1) overloadBonus -= 8; // 贴最外墙降权，内圈锚点不受影响
       // 对侧象限：x 方向对侧 + y 方向对侧各 +3
       const oppX = (enemyPos[0] > cx) ? p[0] < cx : p[0] > cx;
       const oppY = (enemyPos[1] > cy) ? p[1] < cy : p[1] > cy;
@@ -1549,8 +1578,13 @@ function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
     if (overloadType && manhattan(next, enemyPos) > manhattan(myPos, enemyPos)) return false;
     return true;
   }
-  // 双弹威胁敌人：4 格内一律死区
-  if (doubleLane && d <= 4) return true;
+  // 双弹威胁敌人：同行/列或相邻±1行/列内 d<=4 是死区；纯对角(无直射线)放行，
+  // 避免封死所有"曼哈顿≤4但方向偏移"的格，让坦克仍能绕路抢星。
+  if (doubleLane && d <= 4) {
+    if (clearShotDirection(enemyPos, next, game) !== null) return true; // 敌有直射 -> 死区
+    if (inDoubleLaneBand(enemyPos, next, 4)) return true;              // 在双弹覆盖带内 -> 死区
+    // 纯对角(dx>=2 && dy>=2)且无直射 -> 放行（敌需先转向再瞄准）
+  }
   // freeze 流：与敌同行/列、无墙、曼哈顿<=4 时被冻 2 帧期间会被对准击杀(mat_0Wmx d=1 被冻点死) -> 死区。
   // 不同线/有墙(freezeKillsAt 内 clearShotDirection 判定)则不算，避免对开阔地相邻列防过头。
   if (freezeType && freezeKillsAt(next, enemyPos, game)) return true;
@@ -1993,13 +2027,12 @@ function findBulletDodge(me, enemy, game, enemyPos) {
 
     // 打分：当前朝向就能走 > 逃生开口数 > 远离边缘 > 靠近星星
     // 死胡同重罚：开口<=1 时后续无法横移脱困，连续躲避会越走越深进墙角
-    // openExits * 8        开口越多越安全（逃生空间奖励）
-    // deadEndPenalty -150  开口 ≤1 时重罚（死胡同）
-    // 墙角（1个开口）= -150 + 8 + edge分 ≈ 很低分；沿底边走（2个开口）= 16 + edge分，更高 → 会优先选择沿图边缘绕走，而非钻进角落。
     const facing = needTurn ? 0 : 100;
     const openExits = openNeighborCount(p, game);
     const deadEndPenalty = openExits <= 1 ? -150 : 0;
-    const score = facing + openExits * 8 + deadEndPenalty + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+    // 对射优化：躲弹后仍能直射敌人 → 立刻还手，不丢制枪机会。+30 让"能还手的侧方格"优先于"更宽裕但丢射线的方向"。
+    const counterBonus = enemyPos && clearShotDirection(p, enemyPos, game) ? 30 : 0;
+    const score = facing + openExits * 8 + deadEndPenalty + distanceFromEdges(p, game) + counterBonus + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
     if (score > bestScore) {
       bestScore = score;
       best = p;
@@ -2214,11 +2247,29 @@ function predictedOverloadBullets(enemyTank) {
   return bullets;
 }
 
+// 预判双弹覆盖带（含两侧 ±1 行/列）。
+// 实际副弹固定走 +1，但我方不知道敌人会向哪侧开火；±1 都预测，
+// 确保-1侧（对角方向）也被 predictedOverloadThreatens 识别为危险区。
+function predictedOverloadBulletsAll(enemyTank) {
+  if (!enemyTank || !enemyTank.position || !enemyTank.direction) return [];
+  const ep = enemyTank.position;
+  const dir = enemyTank.direction;
+  const bullets = [{ position: [ep[0], ep[1]], direction: dir, _predictedOverload: true }];
+  if (dir === "left" || dir === "right") {
+    bullets.push({ position: [ep[0], ep[1] + 1], direction: dir, _predictedOverload: true });
+    bullets.push({ position: [ep[0], ep[1] - 1], direction: dir, _predictedOverload: true });
+  } else {
+    bullets.push({ position: [ep[0] + 1, ep[1]], direction: dir, _predictedOverload: true });
+    bullets.push({ position: [ep[0] - 1, ep[1]], direction: dir, _predictedOverload: true });
+  }
+  return bullets;
+}
+
 function predictedOverloadThreatens(enemy, pos, game) {
   if (!enemy || !pos) return false;
   if (!enemyDoubleLaneThreat(enemy)) return false;
   if (!enemyCanFireSoon(enemy)) return false;
-  const predicted = predictedOverloadBullets(enemy.tank);
+  const predicted = predictedOverloadBulletsAll(enemy.tank);
   return anyBulletThreatens(predicted, pos, game) || stepIntoBulletPath(predicted, pos, game);
 }
 
@@ -2228,12 +2279,21 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
   if (!enemyCanFireSoon(enemy)) return null;
 
   const myPos = me.tank.position;
-  const predicted = predictedOverloadBullets(enemyTank);
-  if (!anyBulletThreatens(predicted, myPos, game)) return null;
+  // 用 ±1 全覆盖检测：敌不确定打哪侧，两侧都视为危险
+  const predictedAll = predictedOverloadBulletsAll(enemyTank);
+  if (!anyBulletThreatens(predictedAll, myPos, game)) return null;
 
-  const incomingFrames = minBulletFramesTo(predicted, myPos, game);
+  const incomingFrames = minBulletFramesTo(predictedAll, myPos, game);
   if (incomingFrames < 0) return null;
 
+  function scoreCell(p, needTurn) {
+    const exits = openNeighborCount(p, game);
+    const deadEndPenalty = exits <= 1 ? -150 : 0;
+    return (needTurn ? 0 : 100) + exits * 8 + distanceFromEdges(p, game) * 3 + deadEndPenalty +
+      (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+  }
+
+  // 一步逃脱
   let best = null;
   let bestScore = -9999;
   for (let i = 0; i < DIRS.length; i++) {
@@ -2241,26 +2301,39 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue;
-    if (anyBulletThreatens(predicted, p, game)) continue;
-    if (stepIntoBulletPath(predicted, p, game)) continue;
+    if (anyBulletThreatens(predictedAll, p, game)) continue;
+    if (stepIntoBulletPath(predictedAll, p, game)) continue;
 
     const needTurn = d.name !== me.tank.direction;
     if (!needTurn) {
       if (incomingFrames < 1) continue;
     } else {
       if (incomingFrames < 3) continue;
-      const predictedNext = advanceBullets(predicted, BULLET_SPEED);
+      const predictedNext = advanceBullets(predictedAll, BULLET_SPEED);
       if (stepIntoBulletPath(predictedNext, p, game) || anyBulletThreatens(predictedNext, p, game)) continue;
     }
 
-    const facing = needTurn ? 0 : 100;
-    const exits = openNeighborCount(p, game);
-    const deadEndPenalty = exits <= 1 ? -150 : 0;
-    const score = facing + exits * 8 + distanceFromEdges(p, game) * 3 + deadEndPenalty +
-      (game.star ? -manhattan(p, game.star) * 0.1 : 0);
-    if (score > bestScore) {
-      bestScore = score;
-      best = p;
+    const s = scoreCell(p, needTurn);
+    if (s > bestScore) { bestScore = s; best = p; }
+  }
+  if (best) return best;
+
+  // ±1 两侧都被封时（我在双弹带中央），做两步 BFS 找更远脱离格
+  if (incomingFrames < 2) return null; // 来不及了
+  for (let i = 0; i < DIRS.length; i++) {
+    const d1 = DIRS[i];
+    const p1 = [myPos[0] + d1.dx, myPos[1] + d1.dy];
+    if (!isPassable(game, p1, enemyPos)) continue;
+    // p1 也必须不在预测弹道上，否则经过 p1 时会被实际双弹扫到
+    if (anyBulletThreatens(predictedAll, p1, game)) continue;
+    for (let j = 0; j < DIRS.length; j++) {
+      const d2 = DIRS[j];
+      const p2 = [p1[0] + d2.dx, p1[1] + d2.dy];
+      if (!isPassable(game, p2, enemyPos)) continue;
+      if (anyBulletThreatens(predictedAll, p2, game)) continue;
+      if (stepIntoBulletPath(predictedAll, p2, game)) continue;
+      const s = scoreCell(p2, true);
+      if (s > bestScore) { bestScore = s; best = p2; }
     }
   }
   return best;
@@ -2308,7 +2381,9 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
 
     // 偏好当前朝向就能直接走的格子（1 帧脱离，最快）
     const facing = d.name === me.tank.direction ? 100 : 0;
-    const score = facing + distanceFromEdges(p, game) + (game.star ? -manhattan(p, game.star) * 0.1 : 0);
+    // 加强星星引力：躲弹时若某方向能更快接近星星，优先选（原 0.1 太弱，改为 3，使星星 1 格内相当于 facing 同向）
+    const starPull = game.star ? Math.max(0, 6 - manhattan(p, game.star)) * 3 : 0;
+    const score = facing + distanceFromEdges(p, game) + starPull;
     if (score > bestScore) {
       bestScore = score;
       best = p;
@@ -2328,13 +2403,20 @@ function shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game) {
   if (!game.star) return false;
   // 敌人已有实弹在途 -> 是真威胁，不豁免（交由子弹躲避/这里继续躲）
   if (enemy && enemy.bullet && enemy.bullet.position) return false;
-  // 过载敌人随时能补弹，威胁高，不豁免
-  if (enemy && enemy.status && enemy.status.overloaded) return false;
+  // 过载就绪/已过载：威胁高，通常不豁免。
+  // 特例：星极近(≤2步)且星所在格不在敌方炮线上——此时"抓星"= "脱线"，两件事合一，应当豁免。
+  if (enemyDoubleLaneThreat(enemy)) {
+    const myToStar = pathDistance(me.tank.position, game.star, game, enemyTank.position);
+    if (myToStar >= 0 && myToStar <= 2 && !enemyAimsAt(game.star, enemyTank, game)) {
+      return true; // 抓星格不在炮线，抓星同时完成闪避，不阻止
+    }
+    return false;
+  }
 
   const myPos = me.tank.position;
   const enemyPos = enemyTank.position;
   const myToStar = pathDistance(myPos, game.star, game, enemyPos);
-  if (myToStar < 0 || myToStar > 4) return false; // 星不够近就老实防瞄
+  if (myToStar < 0 || myToStar > 7) return false; // 星在7步内才值得冒险抢（原先4步过于保守，导致长期缩角落）
 
   const enemyToStar = pathDistance(enemyPos, game.star, game, myPos);
   // 我不比敌人远即抢（敌人不可达也抢）

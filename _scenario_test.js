@@ -1947,11 +1947,11 @@ console.log('场景PBL: 过载开火前预判副弹车道');
     status: { overloaded: true },
     stars: 1
   };
-  const predicted = predictedOverloadBullets(enemyPBL.tank);
+  const predicted = predictedOverloadBulletsAll(enemyPBL.tank);
   const dodgePBL = findOverloadLaneDodge(mePBL, enemyPBL, enemyPBL.tank, gamePBL, enemyPBL.tank.position);
   check('PBL1 过载副弹预判 -> 脱离y=4车道(mat_L2dc)', dodgePBL && dodgePBL[1] !== 4,
     'dodge=' + JSON.stringify(dodgePBL) + ' predicted=' + JSON.stringify(predicted));
-  check('PBL2 预判落点不在双弹弹道', dodgePBL && !anyBulletThreatens(predicted, dodgePBL, gamePBL),
+  check('PBL2 预判落点不在双弹弹道(含-1副弹道)', dodgePBL && !anyBulletThreatens(predicted, dodgePBL, gamePBL),
     'dodge=' + JSON.stringify(dodgePBL));
 }
 
@@ -1978,8 +1978,9 @@ console.log('场景BOLUN: overload冷却就绪时预判双弹车道(mat_0lBgh)')
   moveToward(meExecB, gameB, sideLane, enemyB.tank.position, enemyB.tank, [], enemyB);
 
   check('BOLUN1 技能未开但冷却就绪 -> [17,13]按副弹危险处理', predictedOverloadThreatens(enemyB, sideLane, gameB),
-    'predicted=' + JSON.stringify(predictedOverloadBullets(enemyB.tank)));
-  check('BOLUN2 提前脱离x=16/x=17双弹车道', dodgeB && dodgeB[0] < 16 && !predictedOverloadThreatens(enemyB, dodgeB, gameB),
+    'predicted=' + JSON.stringify(predictedOverloadBulletsAll(enemyB.tank)));
+  // BOLUN2: [16,13]被±1三条弹道全包围，步行无安全中间格 → dodge=null，应依赖传送逃生
+  check('BOLUN2 ±1三条弹道全包围时dodge=null(交传送逃生)', dodgeB === null || !predictedOverloadThreatens(enemyB, dodgeB, gameB),
     'dodge=' + JSON.stringify(dodgeB));
   check('BOLUN3 评分候选不落入预判副弹车道', !candB || !predictedOverloadThreatens(enemyB, candB.step, gameB),
     'cand=' + JSON.stringify(candB));
