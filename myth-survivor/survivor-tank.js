@@ -68,17 +68,26 @@ function chooseScoredDecision(me, enemy, game, threats, state) {
     cands.push({ type: "freeze", score: 1000, tag: "冰冻" });
   }
 
-  // [3] 同线先转后射：与目标同行/列且无遮挡
-  if (foePos && canShoot(pos, foePos, game.map)) {
+  // [2.5] 对炮存活闸门：与目标同线近距、对方能开火且我不占先手时，先侧移脱线而非站着对射。
+  // 这是出击分支的基线红线——绝不在不占先手的对炮里站着换命。
+  var duelDodge = (foePos) ? findLineDuelDodge(me, foe, threats, game) : null;
+  if (duelDodge) {
+    cands.push(withScore(duelDodge, 900, duelDodge.tag)); // 高于直射(850)，低于躲实弹/冰冻
+  }
+
+  // [3] 同线先转后射：与目标同行/列且无遮挡。
+  // 但若对炮闸门判定我不占先手(duelDodge 已生成脱线提案)，则压制本帧开火，避免换命。
+  if (foePos && canShoot(pos, foePos, game.map) && !duelDodge) {
     cands.push(withScore(actionToDir(pos, dir, directionTo(pos, foePos), "fire"),
       850 + closeBonus(pos, foePos) + starLineScore(pos, game.star, game.map, late), "直射"));
   }
 
-  // [4] 抢星：BFS 下一步
+  // [4] 抢星：BFS 下一步。出击分支本质是赚星，安全时吃星应压过"顺手对射"(直射850)。
+  // 基础分提到 900：仍低于生存层(躲实弹硬闸门/冰冻1000/对炮脱线900)，危险落点由 actionDanger 重罚拦下。
   var starStep = game.star && nextStep(pos, game.star, game.map);
   if (starStep) {
     cands.push(withScore(actionToDir(pos, dir, directionTo(pos, starStep), "go"),
-      700 + starUrgency(pos, starStep, game.star) + starLineScore(starStep, game.star, game.map, late), "抢星"));
+      900 + starUrgency(pos, starStep, game.star) + starLineScore(starStep, game.star, game.map, late), "抢星"));
   }
 
   // [4b] 追击：无星或残局，且存活数少时才主动逼近（避免混战贴脸）
@@ -198,22 +207,36 @@ function pushBullet(arr, b) {
 function findBulletDodge(me, bullets, game, enemy) {
   var pos = me.tank.position;
   var dir = me.tank.direction;
-  var best = null, bestScore = -Infinity;
+  if (!bullets || !bullets.length) return null;
 
+  // 当前格最快多少帧被命中——后续转身帧时序判断依赖此窗口。
+  var incoming = minBulletFramesTo(bullets, pos, game);
+
+  // 正在威胁我的子弹飞行方向集合：绝不顺着它逃（2 格/帧必从背后追上）。
+  var threatDirs = {};
+  for (var t = 0; t < bullets.length; t++) {
+    if (bulletReachTiles(bullets[t], pos, game) >= 0) threatDirs[bullets[t].direction] = true;
+  }
+
+  var best = null, bestScore = -Infinity;
   for (var i = 0; i < DIRS.length; i++) {
     var d = DIRS[i];
+    if (threatDirs[d]) continue;                               // 顺向逃必被追，跳过
     var cell = add(pos, delta(d));
     if (!isOpen(cell, game.map)) continue;
     if (stepIntoBulletPath(bullets, cell, game)) continue;     // 走过去同帧被扫到
 
     var facing = (dir === d);
-    // 转身帧：站在原地多 1 帧，预演原地是否被命中
-    if (!facing && posHitWithin(bullets, pos, game, 1)) {
-      // 转身这一帧原地会被打中 -> 该方向不可取（除非已朝向）
-      continue;
+    // 时序铁律（子弹 2 格/帧，转向占 1 帧）：
+    //  · 朝向即脱离：1 帧 go 出格，要求 incoming>=1（incoming<0 表示无直线威胁，放行）。
+    //  · 需先转向：转身帧仍停原地，要求 incoming>=3；并预演子弹推进 1 帧后落点 cell 仍安全。
+    if (facing) {
+      if (incoming >= 0 && incoming < 1) continue;
+    } else {
+      if (incoming >= 0 && incoming < 3) continue;
+      var nextB = advanceBullets(bullets, BULLET_SPEED);
+      if (stepIntoBulletPath(nextB, cell, game)) continue;
     }
-    // 落点后续仍要安全（再看 1 帧，防被追）
-    if (posHitWithin(bullets, cell, game, 1)) continue;
 
     var exits = openNeighborCount(cell, game.map);
     var score = (facing ? 100 : 0) + exits * 12 - (exits <= 1 ? 150 : 0)
@@ -262,6 +285,28 @@ function bulletFramesTo(bullet, pos, game) {
   var tiles = bulletReachTiles(bullet, pos, game);
   if (tiles < 0) return -1;
   return Math.ceil(tiles / BULLET_SPEED);
+}
+
+// 一组子弹中最快多少帧命中 pos；都打不到返回 -1。
+function minBulletFramesTo(bullets, pos, game) {
+  var best = -1;
+  for (var i = 0; i < bullets.length; i++) {
+    var f = bulletFramesTo(bullets[i], pos, game);
+    if (f >= 0 && (best < 0 || f < best)) best = f;
+  }
+  return best;
+}
+
+// 将子弹沿各自方向推进 steps 格，返回快照（仅用于躲避预演，不改原对象）。
+function advanceBullets(bullets, steps) {
+  var out = [];
+  for (var i = 0; i < bullets.length; i++) {
+    var b = bullets[i];
+    if (!b || !b.position) continue;
+    var d = delta(b.direction);
+    out.push({ position: [b.position[0] + d[0] * steps, b.position[1] + d[1] * steps], direction: b.direction });
+  }
+  return out;
 }
 
 // 走到 cell 这帧子弹也会前进 BULLET_SPEED 格，判断 cell 是否会被扫到。
@@ -330,6 +375,74 @@ function actionDanger(action, me, foe, threats, game, crowd) {
     else if (d <= 6 && canShoot(fp, nextPos, game.map) && pointsAt(foe.tank.direction, fp, nextPos)) penalty += 180;
   }
   return penalty + crowd * 30;
+}
+
+// ============================================================
+// 对炮存活基线（移植自 1v1 验证逻辑，适配多敌）：
+// 与某敌同线近距、对方又能开火时，先算"对射先手"——子弹 2 格/帧、转向占 1 帧：
+//   我命中敌帧 = 我转向到对准的帧 + ceil(dist/2)
+//   敌命中我帧 = 敌转向到对准的帧 + ceil(dist/2)
+// 只有我"严格更快"(myDuel < foeDuel) 才值得站着对射；否则不占先手，应侧移脱线，
+// 绝不站着转身换命（多敌混战里换命=被第三家收掉）。
+// 侧移耗帧 < 敌命中帧 才真能活着离线；来不及则返回 null，交回开火分支换血。
+// ============================================================
+
+// 敌人接下来一两帧能否开火：场上没有它的在途子弹(炮管空就能发)即视为能开火。
+function foeCanFireSoon(foe) {
+  if (!foe || !foe.tank) return false;
+  if (foe.bullet && foe.bullet.position) return false; // 已有在途子弹，短期内打不了我
+  return true;
+}
+
+// from 沿 lineDir 转到对准 to 的转向次数（90°=1，180°=2，已对准=0）。
+function turnCountTo(curDir, lineDir) {
+  var a = DIRS.indexOf(curDir), b = DIRS.indexOf(lineDir);
+  if (a < 0 || b < 0) return 2;
+  var diff = (b - a + 4) % 4;
+  return Math.min(diff, 4 - diff);
+}
+
+function findLineDuelDodge(me, foe, threats, game) {
+  if (!foe || !foe.tank) return null;
+  if (!foeCanFireSoon(foe)) return null;          // 敌打不了我，无近距对射威胁
+  var pos = me.tank.position, dir = me.tank.direction;
+  var fp = foe.tank.position;
+  // 必须同线、视线无遮挡
+  if (!canShoot(pos, fp, game.map)) return null;
+  var dist = manhattan(pos, fp);
+  if (dist > 5) return null;                       // 只管 5 格内近距死区，远了有躲闪余地
+
+  var lineToFoe = directionTo(pos, fp);            // 我对准敌人要朝的方向
+  var lineToMe  = directionTo(fp, pos);            // 敌对准我要朝的方向
+  var fly = Math.ceil(dist / BULLET_SPEED);
+  var myDuel  = turnCountTo(dir, lineToFoe) + fly;
+  var foeDuel = turnCountTo(foe.tank.direction, lineToMe) + fly;
+  if (myDuel < foeDuel) return null;               // 我严格更快=干净先手，交开火分支去刚
+
+  // 不占先手：找垂直于这条弹道、能在敌命中前离线的侧格。
+  var vertical = (lineToFoe === "up" || lineToFoe === "down");
+  var perp = vertical ? ["left", "right"] : ["up", "down"];
+  var best = null, bestScore = -Infinity;
+  for (var i = 0; i < perp.length; i++) {
+    var d = perp[i];
+    var p = add(pos, delta(d));
+    if (!isOpen(p, game.map)) continue;
+    if (stepIntoBulletPath(threats, p, game)) continue;       // 别躲进现有弹道
+    if (posHitWithin(threats, p, game, 1)) continue;
+    // 落点不能正撞另一敌的炮口（多敌）
+    if (foe.tank && canShoot(fp, p, game.map) && pointsAt(foe.tank.direction, fp, p)) continue;
+    var escapeFrames = (d === dir) ? 1 : 2;        // 朝向即侧向=1帧；否则转+走=2帧
+    var safe = (escapeFrames === 1) || (escapeFrames < foeDuel);
+    if (!safe) continue;                            // 来不及离线，侧移=白送，交回开火换血
+    var facing = (d === dir) ? 100 : 0;
+    var counterLine = canShoot(p, fp, game.map) ? 15 : 0; // 侧移后仍能还手
+    var score = facing + counterLine + manhattan(p, fp) + edgeDistance(p, game.map);
+    if (score > bestScore) { bestScore = score; best = d; }
+  }
+  if (best == null) return null;
+  return (dir === best)
+    ? { type: "go", tag: "脱线" }
+    : { type: "turn", side: turnDirection(dir, best), tag: "脱线" };
 }
 
 // ============================================================
