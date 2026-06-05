@@ -197,6 +197,41 @@ function canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game
 }
 
 /**
+ * 直射开火是否“不会必死”：用于判断能否把“打面前的敌人”提到预防性软躲避之上。
+ * 能进入攻击层说明已无需硬躲的来袭子弹（findBulletDodge/escapeTeleport 都已 return null），
+ * 所以这一炮的致死风险只来自敌方炮口。满足以下任一即认定开火不必死：
+ *  1. 敌方短期内开不了火（enemyCanFireSoon=false）：纯赚一炮。
+ *  2. 我对射不晚于敌命中（myDuel<=enemyDuel）：敌先倒或同归，不算必死。
+ *  3. 我不占先手，但开完火下一帧能侧移离开敌方炮线（不进别的弹道/炮口）：先打再躲。
+ * 三者皆不满足 -> 这一炮换不回血且躲不掉，判定必死，让位给软躲避。
+ */
+function directShotNotSuicidal(me, enemy, enemyTank, enemyBullets, game, enemyPos, shotDir) {
+  if (!enemyTank || !enemyPos || !shotDir) return false;
+  if (!enemyCanFireSoon(enemy)) return true;
+
+  const myPos = me.tank.position;
+  const dist = manhattan(myPos, enemyPos);
+  const myDuel = turnDistance(me.tank.direction, shotDir) + Math.ceil(dist / BULLET_SPEED);
+  const dirToMe = clearShotDirection(enemyPos, myPos, game);
+  const enemyDuel = (dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1) + Math.ceil(dist / BULLET_SPEED);
+  if (myDuel <= enemyDuel) return true;
+
+  const perp = (shotDir === "up" || shotDir === "down")
+    ? [DIRS[dirIndex("left")], DIRS[dirIndex("right")]]
+    : [DIRS[dirIndex("up")], DIRS[dirIndex("down")]];
+  for (let i = 0; i < perp.length; i++) {
+    const d = perp[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue;
+    const escapeFrames = d.name === me.tank.direction ? 1 : 2;
+    if (escapeFrames <= enemyDuel) return true; // 开火占本帧，下帧能在敌弹到达前离线
+  }
+  return false;
+}
+
+/**
  * 判断炮管是否就绪（场上无自己子弹且未被开火锁定）
  */
 function gunReady(me) {
@@ -268,6 +303,19 @@ function enemyIsFreezeType(enemy) {
  */
 function enemyIsCloakType(enemy) {
   return !!(enemy && enemy.skill && enemy.skill.type === "cloak");
+}
+
+/**
+ * 敌方是否为"被动跑分型 teleport 流"：拥有 teleport 技能(双弹/过载等近身杀伤威胁低)，且此刻没有实弹在途、
+ * 也没瞄准我。这类对手(mat_GwxblYdS 小强)只靠走路/瞬移抢星、几乎不主动对射——我吃完星后无需为躲它而跑向
+ * 外圈/对侧远角(那样会把中心争星位让出去，下一颗星刷新时反而离得远)。无星空窗期应守在地图中心十字区，
+ * 离任何方向新刷的星都近，抢星更快。仅 teleport 流且当前安全时成立；敌有实弹/瞄我时仍正常避让。
+ */
+function enemyIsPassiveRusher(enemy, enemyTank, game, myPos) {
+  if (!enemyHasTeleport(enemy)) return false;            // 仅针对 teleport 流(无双弹近身秒杀威胁)
+  if (enemy && enemy.bullet && enemy.bullet.position) return false; // 有实弹在途 -> 真威胁，正常避让
+  if (enemyTank && myPos && enemyAimsAt(myPos, enemyTank, game)) return false; // 正瞄我 -> 正常避让
+  return true;
 }
 
 /**
@@ -717,8 +765,10 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
 
   // 优先直接传送到星星上（但要排除"落地即被敌方开火打死、又躲不掉"的死亡陷阱）
   // 守星陷阱（双弹敌覆盖带）已由上方 isStarGuardTrap 统一拦截，这里只做落点安全判定。
+  // landingNearSweepingBullet：落点紧贴一发横扫子弹、吃完星自然走向会撞进弹道时也判危险(mat_GwxblYdS f51)。
   if (isTeleportSafe(game.star, enemyTank, enemyBullets, game, 0, enemy) &&
-      !starLandingDeadly(game.star, me, enemyTank, enemy, game)) {
+      !starLandingDeadly(game.star, me, enemyTank, enemy, game) &&
+      !landingNearSweepingBullet(game.star, enemyBullets, game)) {
     return game.star;
   }
 
@@ -877,6 +927,40 @@ function endgameStarTeleport(me, enemy, enemyTank, game, walkDist) {
 }
 
 /**
+ * 传送落点是否紧贴一发"横扫中"的飞行子弹，使得我吃完星后的自然走向会撞进它的弹道。
+ * 复盘来源：mat_GwxblYdS4ZSDXd0wX f51-f54——我传 [15,14] 吃星(落点本身安全，子弹在 y=12)，
+ * 落地后朝 up 一路走 [15,14]->[15,13]->[15,12]，f54 正好撞上沿 y=12 右扫的子弹。
+ *
+ * 落点本身不在弹道(isTeleportSafe 已过滤)，但若一发子弹与落点只差 1~2 行/列、且落点朝子弹那条行/列
+ * 偏移 1~2 格的邻格正落在该子弹的未来飞行路径上(同行/列且子弹朝它飞来)，则落点是"陷阱落点"——
+ * 我吃完星自然走 1~2 步进那条行/列时会与扫来的子弹相遇(子弹 2 格/帧 > 我 1 格/帧，迟早撞上)。
+ * 用 bulletReachTiles 判邻格是否在子弹未来路径上，不限帧数(走过去就会被扫到)。
+ */
+function landingNearSweepingBullet(landing, enemyBullets, game) {
+  const bullets = enemyBullets || [];
+  for (let i = 0; i < bullets.length; i++) {
+    const b = bullets[i];
+    if (!b || !b.position) continue;
+    const horizontal = b.direction === "left" || b.direction === "right";
+    // 子弹横扫的是它的飞行轴(水平飞->沿 x 扫，落点在相邻 y)；竖直飞->沿 y 扫，落点在相邻 x。
+    const sweepAxisSame = horizontal ? (b.position[1] !== landing[1]) : (b.position[0] !== landing[0]);
+    if (!sweepAxisSame) continue; // 落点与子弹同行/列由 isTeleportSafe/stepIntoBulletPath 处理，这里只管相邻带
+    const offset = horizontal ? Math.abs(b.position[1] - landing[1]) : Math.abs(b.position[0] - landing[0]);
+    if (offset === 0 || offset > 2) continue; // 只防相邻 1~2 行/列(吃完星 1~2 步会踏入)
+    for (let s = 1; s <= offset; s++) {
+      // 朝子弹弹道方向挪 s 步的落点邻格(模拟吃完星走向弹道行/列)
+      const towardBullet = horizontal
+        ? [landing[0], landing[1] + (b.position[1] > landing[1] ? s : -s)]
+        : [landing[0] + (b.position[0] > landing[0] ? s : -s), landing[1]];
+      if (!isPassable(game, towardBullet, null)) break; // 被墙挡住，走不过去，安全
+      // 邻格在子弹未来飞行路径上(同行/列、子弹朝它飞来、中间无墙) -> 走过去迟早被扫到
+      if (bulletReachTiles(b, towardBullet, game) >= 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
  * 判断传送到 landing（如星星）会不会"落地即死"：敌方与落点同线、能在我躲开前开火命中。
  *
  * 时间线（子弹 2 格/帧）：传送占当前帧；敌方下一帧可转向对准(若未对准+1帧)并开火；
@@ -952,11 +1036,14 @@ function bestUnknownEnemyStarTeleport(myPos, enemyGuess, enemyBullets, game) {
 function bestTeleportTile(myPos, enemyTank, enemyBullets, game, target, preferDistance, minEnemyDist, enemy) {
   let best = null;
   let bestScore = -9999;
+  // 抢星落点(target 是星)额外排除"紧贴横扫子弹、走向会撞弹道"的陷阱落点(mat_GwxblYdS)。
+  const avoidSweep = target && game.star && samePos(target, game.star);
   for (let x = 0; x < game.map.length; x++) {
     for (let y = 0; y < game.map[x].length; y++) {
       const p = [x, y];
       if (samePos(p, myPos)) continue;
       if (!isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist || 0, enemy)) continue;
+      if (avoidSweep && landingNearSweepingBullet(p, enemyBullets, game)) continue;
 
       const enemyPos = enemyTank ? enemyTank.position : null;
       // 偏好远离敌人打分
@@ -1272,6 +1359,21 @@ function buildMoveCandidates(me, enemy, game, enemyPos, state, enemyBullets) {
       const iAmStarFavorite = enemyStarDist < 0 || starPath.dist + 1 < enemyStarDist;
       // kind="star"：追星提案，向星星的最短路径迈进
       push("star", starPath.step, { target: game.star, allowStarDeadEnd: samePos(starPath.step, game.star), favorite: iAmStarFavorite });
+
+      // 贴脸星粘性：星在 2 步内、我是热门、敌此刻无实弹在途(只是预瞄=概率威胁)且抢星步不送死时，
+      // 锁定一个 2 步短意图直奔星——避免被防瞄/对峙的逐帧转向打断在原地抖动错失脚边星
+      // (mat_GwxblYdS f32-41：星[8,13]就在脚下[8,12]，敌还在远处没开火，我却反复 turn 没走下去，
+      //  等敌子弹飞进星行后被弹道判定每帧劝退，星被对手走路抢走)。
+      const starWalk = starPath.dist;
+      const enemyHasLiveBullet = !!(enemy && enemy.bullet && enemy.bullet.position);
+      const standoff = safeStandoffDistance(enemy);
+      const grabSafe = isSafeStep(starPath.step, myPos, enemyPos, game, enemy,
+        standoff, samePos(starPath.step, game.star), bullets);
+      if (state && starWalk >= 0 && starWalk <= 2 && iAmStarFavorite &&
+          !enemyHasLiveBullet && !enemyDoubleLaneThreat(enemy) && grabSafe &&
+          !(state.shortIntent && state.shortIntent.kind === "star")) {
+        primeShortIntent(state, "star", game.star, frame, 2);
+      }
     }
   }
 
@@ -1447,6 +1549,12 @@ function virtualPatrolTarget(me, game, state, enemy) {
     const o = nearestOpenTo(game, [ax[i], ay[j]]);
     if (o) anchors.push(o);
   }
+  // 被动跑分型 teleport 敌：把地图中心也作为候选锚点——守中心十字区离任何方向新刷的星都近(mat_GwxblYdS)。
+  const passiveRusher = enemyIsPassiveRusher(enemy, enemy && enemy.tank, game, myPos);
+  if (passiveRusher) {
+    const center = nearestOpenTo(game, [cx, cy]);
+    if (center) anchors.push(center);
+  }
   if (anchors.length === 0) return null;
 
   const isOverload = enemyIsOverloadType(enemy);
@@ -1468,7 +1576,16 @@ function virtualPatrolTarget(me, game, state, enemy) {
       if (oppX) overloadBonus += 3;
       if (oppY) overloadBonus += 3;
     }
-    const score = dangerScore + distMe + edgeD + overloadBonus;
+    // 被动跑分敌：不靠"远离敌"拉开(它不主动打)，改为偏好靠近中心十字区(抢下一颗星更快)。
+    // 抵消 dangerScore 的远离驱动，并按离中心距离加分(越居中越高)。
+    let rusherBonus = 0;
+    if (passiveRusher) {
+      const centerD = Math.abs(p[0] - cx) + Math.abs(p[1] - cy);
+      rusherBonus = Math.max(0, 8 - centerD) * 2; // 居中 +16，外圈逐渐归零
+      if (edgeD <= 1) rusherBonus -= 6;            // 仍不选贴墙死角
+    }
+    const dangerWeight = passiveRusher ? 0 : 1;     // 被动跑分敌不为"远离它"巡逻
+    const score = dangerScore * dangerWeight + distMe + edgeD + overloadBonus + rusherBonus;
     if (score > bestScore) { bestScore = score; best = p; }
   }
   if (best && state) state.patrolTarget = best; // 记住，保持航向

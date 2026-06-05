@@ -141,7 +141,13 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
   }
 
   const standoff = safeStandoffDistance(enemy);
-  if (!isPassable(game, step, enemyPos) || enemyAimsAt(step, enemyTank, game) ||
+  // 贴脸抢星(kind=star)豁免"被瞄准"这一条：星刷在敌炮口正对的行/列上很常见，但只要敌此刻无实弹
+  // 在途(仅预瞄=概率威胁)、且不是握双弹威胁，被瞄准不该阻止脚边抢星——抢星步本身仍要过弹道/死区校验
+  // (mat_GwxblYdS f32-41：星[8,13]在敌[14,13]朝left炮口行上，旧逻辑因 enemyAimsAt 每帧退缩，星被对手走路抢走)。
+  const enemyHasLiveBullet = !!(enemy && enemy.bullet && enemy.bullet.position);
+  const starGrabExempt = intent.kind === "star" && !enemyHasLiveBullet && !enemyDoubleLaneThreat(enemy);
+  const aimBlocks = enemyAimsAt(step, enemyTank, game) && !starGrabExempt;
+  if (!isPassable(game, step, enemyPos) || aimBlocks ||
       stepIntoBulletPath(bullets, step, game) ||
       (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff))) {
     clearShortIntent(state);
@@ -150,7 +156,7 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
 
   intent.stepsLeft -= 1;
   if (intent.stepsLeft <= 0) clearShortIntent(state);
-  return { step };
+  return { step, kind: intent.kind };
 }
 
 /**

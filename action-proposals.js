@@ -305,6 +305,17 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
           breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2, enemy);
           return;
         }
+        // 贴脸抢星意图：step 已在 resolveShortIntentStep 过弹道/死区校验，直接朝它走(go/转向)。
+        // 不走 moveToward——它的 enemyAimsAt 危险校验会把"敌炮口正对的星格"当危险改道，
+        // 正是这条让脚边星每帧被劝退抖动(mat_GwxblYdS f33)。其余意图仍走 moveToward 常规安全推进。
+        // 敌已有实弹在途则仍走 moveToward(弹道逻辑接管)，只在预瞄窗口直奔抢星。
+        const starLiveBullet = !!(enemy && enemy.bullet && enemy.bullet.position);
+        if (shortIntent.kind === "star" && !starLiveBullet) {
+          const sdir = directionBetween(me.tank.position, shortIntent.step);
+          if (sdir === me.tank.direction) me.go();
+          else if (sdir) turnToward(me, sdir);
+          return;
+        }
         moveToward(me, game, shortIntent.step, enemyPos, enemyTank, enemyBullets, enemy);
       }, { step: shortIntent.step, reason: 'short-intent' }));
     }
@@ -315,9 +326,21 @@ function collectMoveProposals(me, enemy, game, state, enemyBullets, enemyTank, e
   const moveCandidate = chooseMoveCandidateScored(me, enemy, game, enemyPos, state, enemyBullets);
   if (moveCandidate && moveCandidate.step) {
     const step = moveCandidate.step;
+    const isStarGrab = moveCandidate.kind === "star";
+    const enemyHasLiveBullet = !!(enemy && enemy.bullet && enemy.bullet.position);
     proposals.push(buildProposal('scored-move', function () {
       if (state.stuckFrames >= 2) {
         breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, state.lastMyPos2, enemy);
+        return;
+      }
+      // 抢星走位(kind=star)：step 已过 isSafeStep(弹道/死区)闸门，直接朝它走(go/转向)。
+      // 不走 moveToward——其 enemyAimsAt 危险校验会把"敌炮口正对的星格"当危险改道，
+      // 让脚边星被每帧劝退抖动(mat_GwxblYdS f32：星[8,13]在敌炮口行 y=13，旧逻辑朝 left 改道丢星)。
+      // 仅在敌无实弹在途时直奔(预瞄=概率威胁可冒险抢星)；敌已有实弹则仍走 moveToward 让弹道逻辑接管。
+      if (isStarGrab && !enemyHasLiveBullet) {
+        const sdir = directionBetween(me.tank.position, step);
+        if (sdir === me.tank.direction) me.go();
+        else if (sdir) turnToward(me, sdir);
         return;
       }
       moveToward(me, game, step, enemyPos, enemyTank, enemyBullets, enemy);

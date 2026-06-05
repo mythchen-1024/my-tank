@@ -170,7 +170,9 @@ function threateningFoe(me, enemy, game) {
 
 // ============================================================
 // 多子弹威胁：合并 game.visibleBullets + enemy.bullet + 各 enemies[].bullet，
-// 去重后按危险半径过滤。每项含 { position:[x,y], direction }。
+// 去重 + 排除自己的子弹(me.bullet)后，按危险半径过滤。每项含 { position:[x,y], direction }。
+// 排除己方弹的理由：自己刚发射的子弹若被当威胁，会触发无谓躲避、打断抢星节奏。
+// 引擎契约(1v1 文档)：me.bullet 是己方在场子弹(position+direction)，同位同向即同一发。
 // ============================================================
 function collectThreatBullets(me, enemy, game) {
   var myPos = me.tank.position;
@@ -181,12 +183,19 @@ function collectThreatBullets(me, enemy, game) {
   var es = game.enemies || [];
   for (var j = 0; j < es.length; j++) if (es[j]) pushBullet(raw, es[j].bullet);
 
-  // 排除自己的子弹（按方向+位置无法区分归属时，保守保留；若引擎含 owner 可扩展）
   var out = [];
   for (var k = 0; k < raw.length; k++) {
+    if (isMyBullet(raw[k], me)) continue;                 // 排除自己的子弹，别躲自己的弹
     if (manhattan(raw[k].position, myPos) <= DANGER_RADIUS + BULLET_SPEED) out.push(raw[k]);
   }
   return out;
+}
+
+// 判断一发子弹是否是我自己的：与 me.bullet 同位置同方向即同一发。
+function isMyBullet(b, me) {
+  var mine = me && me.bullet;
+  if (!mine || !mine.position) return false;
+  return samePos(b.position, mine.position) && b.direction === mine.direction;
 }
 
 function pushBullet(arr, b) {
