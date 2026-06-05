@@ -28,6 +28,9 @@ var SCORE_WEIGHTS = {
 //    hold-line 表示守线稳定性，plan 表示跨帧计划，move/fallback 表示普通兜底。
 // 4. 软红线：aim-dodge 约 70、line-duel-dodge 约 65、open-shot 约 55。
 //    调高抢星/攻击类动作时，要确认不会无意越过这些生存/反击红线。
+// 5. 例外（有意越线）：fire-direct 在“安全直射”时（directShotNotSuicidal=true）由 action-proposals.js
+//    用 opts 覆盖为 reward=92/risk=8（实际分 ~82），有意压过 aim-dodge(70)/line-duel(65) 软红线——
+//    这是“不必死就先打面前的敌人”的第一优先级设计。preset 里的 fire-direct(reward=75) 仍是不安全时的基准分。
 //
 // 当前 tag 统一释义：
 // - star：直接或间接服务于吃星/守星。braveBonus 会在落后、终局、最后10帧时加权。
@@ -48,7 +51,7 @@ var SCORE_WEIGHTS = {
 // - line-duel-dodge：软生存近距对射规避；近距同线且我不占先手时侧移。
 // - open-shot：攻击空窗期反击；敌方炮管被场上子弹占用时抢开火窗口。
 // - cloak-prefire：攻击隐身预射；敌 cloak 刚消失且可能进入我炮口/伏击线时提前开火。
-// - fire-direct：攻击直射；同线无遮挡且可开火时直接射击或转向。
+// - fire-direct：攻击直射；同线无遮挡且可开火时直接射击或转向。安全直射(不必死)时会被提权到 ~82 压过软躲避。
 // - guard-line：攻击守线；提前把炮口对准敌/星可能进入的路线。
 // - bush-shot：攻击草丛；预射草丛伏击线或我方草丛伏击。
 // - cloak-guard：目标防陷阱；隐身敌卡星线时侧向守位。
@@ -225,20 +228,37 @@ function scoreProposal(proposal, ctx) {
 // ---- 从候选列表裁决最优提案 ----
 /**
  * 依次检查 hardGate 提案（直接返回）；否则对所有提案打分取最高。
+ *
+ * 决策粘性（hysteresis，防守线↔走位每帧横跳空转送死，mat 复盘）：
+ * 守线(guard-line，只转炮口)与走位(scored-move，要移动)随敌移动交替胜出、执行方向相反，
+ * 相邻帧反复翻面、原地空转把机动时间耗光。故给"与上帧选中同 type"的提案一个小加成 STICKY_BONUS：
+ * 只在分差很小（抖动区）时维持上帧选择，分差大（局势真变化）时照常切换，不影响正常决策。
+ * 粘性绝不参与 hardGate（生存硬闸门在 decision-engine 前置执行，不经此函数）。
  */
+var DECISION_STICKY_BONUS = 6; // 维持上帧同类决策的加成；约等于一次转向代价，足以压平守线↔走位的微小分差抖动。
+
 function selectBestProposal(proposals, ctx) {
   // 硬闸门提案已在 decision-engine 中提前处理，此处不再重复。
+  var state    = ctx && ctx.state;
+  var lastType = state ? state.lastChosenType : null;
   var best      = null;
   var bestScore = -Infinity;
   for (var i = 0; i < proposals.length; i++) {
     var p = proposals[i];
     if (!p || !p.exec) continue;
     var s = scoreProposal(p, ctx);
+    // 粘性加成：本帧该提案与上帧选中同类型时小幅加权，压平相邻帧的方向翻面抖动。
+    // 仅作用于易互相抢占、执行方向相反的守线/走位族，避免无脑粘住所有动作。
+    if (lastType && p.type === lastType &&
+        (p.type === 'guard-line' || p.type === 'scored-move')) {
+      s += DECISION_STICKY_BONUS;
+    }
     p.score = s;
     if (s > bestScore) {
       bestScore = s;
       best = p;
     }
   }
+  if (best && state) state.lastChosenType = best.type; // 记录本帧选择，供下帧粘性判断
   return best;
 }

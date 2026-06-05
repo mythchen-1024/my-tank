@@ -14,7 +14,7 @@
 //   attack         open-shot   r=79 risk=20  s=0  ~55  (敌炮管空窗期)
 //   attack         cloak-pref  r=76 risk=18  s=0  ~54  (刚隐身炮口预射)
 //   target         star-tele   r=80 risk=25  s=5  ~50  (星=直接得分)
-//   attack         fire-direct r=75 risk=25  s=0  ~45  (战略价值)
+//   attack         fire-direct r=75 risk=25  s=0  ~45  (战略价值；安全直射时 opts 覆盖 r=92/risk=8 -> ~82 压过软躲避)
 //   attack         guard-line  r=65 risk=20  s=0  ~41
 //   attack         bush-shot   r=60 risk=15  s=0  ~42
 //   target         cloak-guard r=56 risk=15  s=0  ~38
@@ -174,11 +174,33 @@ function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank,
     const shieldBlock    = enemyHasShieldSkill(enemy) && !shieldDuelSafe;
     const doubleLaneClose = enemyDoubleLaneThreat(enemy) &&
       manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
-    if (!shieldBlock && !doubleLaneClose) {
+    // 第一优先级：打面前的敌人。只要这一炮不会必死（敌开不了火/我对射不晚于敌/开完能侧移离线），
+    // 就把直射提到预防性软躲避(aim-dodge~70 / line-duel~65)之上——不必死就别怂着空躲。
+    const safeShot = directShotNotSuicidal(me, enemy, enemyTank, enemyBullets, game, enemyPos, shotDir);
+    // 双弹先手击杀豁免（mat_7YQEUd f38-40 复盘）：握双弹近距(doubleLaneClose)本应退避，
+    // 但若我"已对准 + 严格先手命中(敌先倒，双弹来不及发出)"，就是稳赢的干净击杀，不该被双弹门控
+    // 压成卡墙空躲(破墙自曝送命)。这里只认严格先手，不含同归换命/先打再躲(双弹下侧移走相邻列仍被副弹打，
+    // directShotNotSuicidal 的侧移兜底对双弹不可靠)——同归/劣势让位走位拉开。
+    let firstStrikeKill = false;
+    if (doubleLaneClose && turnDistance(me.tank.direction, shotDir) === 0) {
+      if (!enemyCanFireSoon(enemy)) {
+        firstStrikeKill = true;
+      } else {
+        const dist = manhattan(myPos, enemyPos);
+        const myHit = Math.ceil(dist / 2); // BULLET_SPEED=2 格/帧；已对准转向0
+        const dirToMe = clearShotDirection(enemyPos, myPos, game);
+        const enemyHit = (dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1) + Math.ceil(dist / 2);
+        firstStrikeKill = myHit < enemyHit;
+      }
+    }
+    if (!shieldBlock && (!doubleLaneClose || firstStrikeKill)) {
+      const fireOpts = (safeShot || firstStrikeKill)
+        ? { reward: 92, risk: 8, reason: firstStrikeKill ? 'fire-direct-firststrike' : 'fire-direct-safe' }
+        : { reason: 'fire-direct' };
       proposals.push(buildProposal('fire-direct', function () {
         if (me.tank.direction === shotDir) { me.speak("开炮！！！"); me.fire(); }
         else turnToward(me, shotDir);
-      }, { reason: 'fire-direct' }));
+      }, fireOpts));
     }
   }
 

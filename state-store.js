@@ -24,6 +24,7 @@ var MATCH_STATE = null;
  * - enemySkillAnnounced: 布尔值，本局是否已播报过敌方技能，避免每帧刷屏
  * - lastSpeakDecisionKey / lastSpeakFrame: 上一次气泡播报的关键决策，用于抑制连续重复气泡
  * - lastPrintDecisionFrames: 对象，按决策 key 记录最近一次 print 帧，用于降低 debug 日志频率
+ * - lastChosenType: 字符串或 null，上一帧最终选中的提案 type，用于 selectBestProposal 的决策粘性（防守线↔走位横跳）
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
@@ -47,7 +48,8 @@ function getMatchState(game) {
       lastSpeakFrame: -999,
       lastPrintDecisionKey: null,
       lastPrintFrame: -999,
-      lastPrintDecisionFrames: {}
+      lastPrintDecisionFrames: {},
+      lastChosenType: null
     };
   }
   MATCH_STATE.lastFrame = frame;
@@ -206,8 +208,7 @@ function recordAssassinOutcome(state, enemy, enemyTank, game) {
     state.pendingAssassin = null;
     return;
   }
-  if (!enemyTank) {
-    state.assassinBanned = true;
-    state.pendingAssassin = null;
-  }
+  // 敌人消失（不可见）不等于“躲开了刺杀”：可能是被这次刺杀打死（成功）、隐身或进草丛。
+  // 误把消失判为躲避会出现“刺杀成功反而禁用刺杀”的反逻辑，故此处不下结论——
+  // 保留 pendingAssassin 继续观察，等敌人重新可见再裁决，或在 elapsed>3 时由上方逻辑自然清除。
 }

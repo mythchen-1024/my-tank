@@ -1,7 +1,7 @@
 // ============================================================
 // myth-tank.js — 自动生成，请勿手动编辑
 // 源文件: state-store.js, scoring.js, action-proposals.js, myth-tank.js, decision-engine.js
-// 构建时间: 2026-06-04T16:34:47.781Z
+// 构建时间: 2026-06-05T06:39:02.988Z
 // ============================================================
 // ===== state-store.js =====
 // ============================================================
@@ -30,6 +30,7 @@ var MATCH_STATE = null;
  * - enemySkillAnnounced: 布尔值，本局是否已播报过敌方技能，避免每帧刷屏
  * - lastSpeakDecisionKey / lastSpeakFrame: 上一次气泡播报的关键决策，用于抑制连续重复气泡
  * - lastPrintDecisionFrames: 对象，按决策 key 记录最近一次 print 帧，用于降低 debug 日志频率
+ * - lastChosenType: 字符串或 null，上一帧最终选中的提案 type，用于 selectBestProposal 的决策粘性（防守线↔走位横跳）
  */
 function getMatchState(game) {
   const frame = (game && game.frames) || 0;
@@ -53,7 +54,8 @@ function getMatchState(game) {
       lastSpeakFrame: -999,
       lastPrintDecisionKey: null,
       lastPrintFrame: -999,
-      lastPrintDecisionFrames: {}
+      lastPrintDecisionFrames: {},
+      lastChosenType: null
     };
   }
   MATCH_STATE.lastFrame = frame;
@@ -212,10 +214,9 @@ function recordAssassinOutcome(state, enemy, enemyTank, game) {
     state.pendingAssassin = null;
     return;
   }
-  if (!enemyTank) {
-    state.assassinBanned = true;
-    state.pendingAssassin = null;
-  }
+  // 敌人消失（不可见）不等于“躲开了刺杀”：可能是被这次刺杀打死（成功）、隐身或进草丛。
+  // 误把消失判为躲避会出现“刺杀成功反而禁用刺杀”的反逻辑，故此处不下结论——
+  // 保留 pendingAssassin 继续观察，等敌人重新可见再裁决，或在 elapsed>3 时由上方逻辑自然清除。
 }
 
 
@@ -250,6 +251,9 @@ var SCORE_WEIGHTS = {
 //    hold-line 表示守线稳定性，plan 表示跨帧计划，move/fallback 表示普通兜底。
 // 4. 软红线：aim-dodge 约 70、line-duel-dodge 约 65、open-shot 约 55。
 //    调高抢星/攻击类动作时，要确认不会无意越过这些生存/反击红线。
+// 5. 例外（有意越线）：fire-direct 在“安全直射”时（directShotNotSuicidal=true）由 action-proposals.js
+//    用 opts 覆盖为 reward=92/risk=8（实际分 ~82），有意压过 aim-dodge(70)/line-duel(65) 软红线——
+//    这是“不必死就先打面前的敌人”的第一优先级设计。preset 里的 fire-direct(reward=75) 仍是不安全时的基准分。
 //
 // 当前 tag 统一释义：
 // - star：直接或间接服务于吃星/守星。braveBonus 会在落后、终局、最后10帧时加权。
@@ -270,7 +274,7 @@ var SCORE_WEIGHTS = {
 // - line-duel-dodge：软生存近距对射规避；近距同线且我不占先手时侧移。
 // - open-shot：攻击空窗期反击；敌方炮管被场上子弹占用时抢开火窗口。
 // - cloak-prefire：攻击隐身预射；敌 cloak 刚消失且可能进入我炮口/伏击线时提前开火。
-// - fire-direct：攻击直射；同线无遮挡且可开火时直接射击或转向。
+// - fire-direct：攻击直射；同线无遮挡且可开火时直接射击或转向。安全直射(不必死)时会被提权到 ~82 压过软躲避。
 // - guard-line：攻击守线；提前把炮口对准敌/星可能进入的路线。
 // - bush-shot：攻击草丛；预射草丛伏击线或我方草丛伏击。
 // - cloak-guard：目标防陷阱；隐身敌卡星线时侧向守位。
@@ -447,21 +451,38 @@ function scoreProposal(proposal, ctx) {
 // ---- 从候选列表裁决最优提案 ----
 /**
  * 依次检查 hardGate 提案（直接返回）；否则对所有提案打分取最高。
+ *
+ * 决策粘性（hysteresis，防守线↔走位每帧横跳空转送死，mat 复盘）：
+ * 守线(guard-line，只转炮口)与走位(scored-move，要移动)随敌移动交替胜出、执行方向相反，
+ * 相邻帧反复翻面、原地空转把机动时间耗光。故给"与上帧选中同 type"的提案一个小加成 STICKY_BONUS：
+ * 只在分差很小（抖动区）时维持上帧选择，分差大（局势真变化）时照常切换，不影响正常决策。
+ * 粘性绝不参与 hardGate（生存硬闸门在 decision-engine 前置执行，不经此函数）。
  */
+var DECISION_STICKY_BONUS = 6; // 维持上帧同类决策的加成；约等于一次转向代价，足以压平守线↔走位的微小分差抖动。
+
 function selectBestProposal(proposals, ctx) {
   // 硬闸门提案已在 decision-engine 中提前处理，此处不再重复。
+  var state    = ctx && ctx.state;
+  var lastType = state ? state.lastChosenType : null;
   var best      = null;
   var bestScore = -Infinity;
   for (var i = 0; i < proposals.length; i++) {
     var p = proposals[i];
     if (!p || !p.exec) continue;
     var s = scoreProposal(p, ctx);
+    // 粘性加成：本帧该提案与上帧选中同类型时小幅加权，压平相邻帧的方向翻面抖动。
+    // 仅作用于易互相抢占、执行方向相反的守线/走位族，避免无脑粘住所有动作。
+    if (lastType && p.type === lastType &&
+        (p.type === 'guard-line' || p.type === 'scored-move')) {
+      s += DECISION_STICKY_BONUS;
+    }
     p.score = s;
     if (s > bestScore) {
       bestScore = s;
       best = p;
     }
   }
+  if (best && state) state.lastChosenType = best.type; // 记录本帧选择，供下帧粘性判断
   return best;
 }
 
@@ -483,7 +504,7 @@ function selectBestProposal(proposals, ctx) {
 //   attack         open-shot   r=79 risk=20  s=0  ~55  (敌炮管空窗期)
 //   attack         cloak-pref  r=76 risk=18  s=0  ~54  (刚隐身炮口预射)
 //   target         star-tele   r=80 risk=25  s=5  ~50  (星=直接得分)
-//   attack         fire-direct r=75 risk=25  s=0  ~45  (战略价值)
+//   attack         fire-direct r=75 risk=25  s=0  ~45  (战略价值；安全直射时 opts 覆盖 r=92/risk=8 -> ~82 压过软躲避)
 //   attack         guard-line  r=65 risk=20  s=0  ~41
 //   attack         bush-shot   r=60 risk=15  s=0  ~42
 //   target         cloak-guard r=56 risk=15  s=0  ~38
@@ -643,11 +664,33 @@ function collectAttackProposals(me, enemy, game, state, enemyBullets, enemyTank,
     const shieldBlock    = enemyHasShieldSkill(enemy) && !shieldDuelSafe;
     const doubleLaneClose = enemyDoubleLaneThreat(enemy) &&
       manhattan(myPos, enemyPos) < safeStandoffDistance(enemy);
-    if (!shieldBlock && !doubleLaneClose) {
+    // 第一优先级：打面前的敌人。只要这一炮不会必死（敌开不了火/我对射不晚于敌/开完能侧移离线），
+    // 就把直射提到预防性软躲避(aim-dodge~70 / line-duel~65)之上——不必死就别怂着空躲。
+    const safeShot = directShotNotSuicidal(me, enemy, enemyTank, enemyBullets, game, enemyPos, shotDir);
+    // 双弹先手击杀豁免（mat_7YQEUd f38-40 复盘）：握双弹近距(doubleLaneClose)本应退避，
+    // 但若我"已对准 + 严格先手命中(敌先倒，双弹来不及发出)"，就是稳赢的干净击杀，不该被双弹门控
+    // 压成卡墙空躲(破墙自曝送命)。这里只认严格先手，不含同归换命/先打再躲(双弹下侧移走相邻列仍被副弹打，
+    // directShotNotSuicidal 的侧移兜底对双弹不可靠)——同归/劣势让位走位拉开。
+    let firstStrikeKill = false;
+    if (doubleLaneClose && turnDistance(me.tank.direction, shotDir) === 0) {
+      if (!enemyCanFireSoon(enemy)) {
+        firstStrikeKill = true;
+      } else {
+        const dist = manhattan(myPos, enemyPos);
+        const myHit = Math.ceil(dist / 2); // BULLET_SPEED=2 格/帧；已对准转向0
+        const dirToMe = clearShotDirection(enemyPos, myPos, game);
+        const enemyHit = (dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1) + Math.ceil(dist / 2);
+        firstStrikeKill = myHit < enemyHit;
+      }
+    }
+    if (!shieldBlock && (!doubleLaneClose || firstStrikeKill)) {
+      const fireOpts = (safeShot || firstStrikeKill)
+        ? { reward: 92, risk: 8, reason: firstStrikeKill ? 'fire-direct-firststrike' : 'fire-direct-safe' }
+        : { reason: 'fire-direct' };
       proposals.push(buildProposal('fire-direct', function () {
         if (me.tank.direction === shotDir) { me.speak("开炮！！！"); me.fire(); }
         else turnToward(me, shotDir);
-      }, { reason: 'fire-direct' }));
+      }, fireOpts));
     }
   }
 
@@ -1044,6 +1087,61 @@ function canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game
     // 我开火占本帧，下一帧才能移动；敌子弹 enemyHitFrames 帧后到达我当前格。
     // 需要在子弹到达前离开：escapeFrames <= enemyHitFrames（等于时恰好来得及）。
     if (escapeFrames <= enemyHitFrames) return true;
+  }
+  return false;
+}
+
+/**
+ * 直射开火是否“不会必死”：用于判断能否把“打面前的敌人”提到预防性软躲避之上。
+ * 能进入攻击层说明已无需硬躲的来袭子弹（findBulletDodge/escapeTeleport 都已 return null），
+ * 所以这一炮的致死风险只来自敌方炮口。满足以下任一即认定开火不必死：
+ *  1. 敌方短期内开不了火（enemyCanFireSoon=false）：纯赚一炮。
+ *  2. 我严格先手命中（myDuel<enemyDuel）：敌先倒，不算必死。
+ *  2b. 同归于尽（myDuel===enemyDuel）只在**星星严格领先**时才算不必死：星平=运行时长判负=必输
+ *      (我方代码一贯更慢)，同归把翻盘机会清零更糟，绝不换命；领先时同归=我赢，可换命锁胜。
+ *  3. 我不占先手，但开完火下一帧能侧移离开敌方炮线（不进别的弹道/炮口）：先打再躲，自己没死与星数无关。
+ * 皆不满足 -> 这一炮换不回血且躲不掉，判定必死，让位给软躲避。
+ *
+ * 前置铁律（mat 摇摆送死复盘）：必须车头已对准敌人（turnDistance=0，开火即本帧发出）才算"即时先手直射"。
+ * 未对准时开火要先花一帧转向，而敌人往往已在转向过程中/即将开火（replay：敌连续转向对准、我才刚转向
+ * 就被抢先开炮），用静态转向距离赌"转向竞速先手"并不可靠——未对准一律让位躲避/机动，绝不站着转向把
+ * 先手白送给敌人。这正是"摇摆送死"的源头：直射↔躲避每帧横跳、连转方向却始终没离开弹道。
+ */
+function directShotNotSuicidal(me, enemy, enemyTank, enemyBullets, game, enemyPos, shotDir) {
+  if (!enemyTank || !enemyPos || !shotDir) return false;
+  // 未对准敌人 -> 开火非本帧即时，赌转向竞速会被抢先 -> 不算安全直射，让位躲避（及时机动优先）。
+  if (turnDistance(me.tank.direction, shotDir) !== 0) return false;
+  if (!enemyCanFireSoon(enemy)) return true;
+
+  // shield 流：这一发多半被盾吃掉换不到血，只有“打完仍能侧移离线”才不算白送（与守线/对射同源判定）。
+  if (enemyHasShieldSkill(enemy)) {
+    return canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos);
+  }
+
+  const myPos = me.tank.position;
+  const dist = manhattan(myPos, enemyPos);
+  const myDuel = turnDistance(me.tank.direction, shotDir) + Math.ceil(dist / BULLET_SPEED);
+  const dirToMe = clearShotDirection(enemyPos, myPos, game);
+  const enemyDuel = (dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1) + Math.ceil(dist / BULLET_SPEED);
+  if (myDuel < enemyDuel) return true; // 严格先手：敌先倒
+  if (myDuel === enemyDuel) {           // 同归：仅星星严格领先才换命，星平/落后必输不换
+    const myStars = (me && me.stars) || 0;
+    const enmStars = (enemy && enemy.stars) || 0;
+    if (myStars > enmStars) return true;
+    // 星平/落后：同归=必输，不放行，继续看能否先打再躲（自己不死则无所谓星数）
+  }
+
+  const perp = (shotDir === "up" || shotDir === "down")
+    ? [DIRS[dirIndex("left")], DIRS[dirIndex("right")]]
+    : [DIRS[dirIndex("up")], DIRS[dirIndex("down")]];
+  for (let i = 0; i < perp.length; i++) {
+    const d = perp[i];
+    const p = [myPos[0] + d.dx, myPos[1] + d.dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue;
+    const escapeFrames = d.name === me.tank.direction ? 1 : 2;
+    if (escapeFrames <= enemyDuel) return true; // 开火占本帧，下帧能在敌弹到达前离线
   }
   return false;
 }
@@ -1953,6 +2051,11 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
   if (predictedOverloadThreatens(enemy, step, game)) return -9999;
   if (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff)) return -9999;
   if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, step, standoff) && !hasDoubleLaneEscapeAt(step, enemyPos, game)) return -9999;
+  // 追星前瞻（十字线安全原则，mat 吃完星被困空转挨双弹复盘）：对 overload 敌，抢星落点即使此刻有横向脱离，
+  // 也要前瞻"吃完星、敌朝我逼近一步后"是否仍在双弹覆盖带且无脱离——过载敌会追着移动，吃星瞬间的出路常在
+  // 下一帧被封死(站到星点的下一帧四向全被双弹覆盖 -> 只能原地空转挨双弹)。宁可不吃这颗星，也不钻进会被封的过载十字线。
+  if (kind === "star" && enemyPos && enemyDoubleLaneThreat(enemy) &&
+      starGrabTrapsInOverloadLane(step, enemyPos, game)) return -9999;
   if (stepIntoSealedDeadEnd(step, enemyPos, game) && !safe) return -9999;
 
   let score = 0;
@@ -2041,6 +2144,13 @@ function scoreMoveCandidate(kind, step, me, enemy, game, enemyPos, enemyTank, en
       score += starPulse + 12 * urg;
       if (samePos(step, game.star)) score += 40 * urg; // 直接吃到星满分
       if (clearShotDirection(step, game.star, game)) score += 12 * urg; // 拿到抢星防守线加分
+      // 第二优先级：最优压制位抢星——抢星路径上的这一格若同时能直射敌人，说明它兼具
+      // “吃星”和“压制”双重价值，优先走它，引导坦克沿“能压住敌人的路线”去抢星而非绕远路。
+      if (enemyPos && clearShotDirection(step, enemyPos, game)) {
+        const de = manhattan(step, enemyPos);
+        score += 10;                              // 抢星顺带占枪线
+        if (de >= 2 && de <= standoff + 1) score += 8; // 且处于安全压制距离（不贴脸、不太远）
+      }
       if (framesLeft <= 30) score += Math.max(0, 18 - ds * 2); // 终局抢星加权
       // 近距离星紧急度：≤4步时补分，防止攻击提案（lane/standoff）靠 clearShot+方向奖励抢走优先级
       const myStarDist = manhattan(myPos, game.star);
@@ -2573,6 +2683,28 @@ function hasDoubleLaneEscapeAt(next, enemyPos, game) {
     if (dx >= 2 || dy >= 2) return true; // 两格横移跨出双弹覆盖带
   }
   return false;
+}
+
+/**
+ * 追星落点前瞻：站到 star 落点后，过载敌朝我逼近一步，落点是否会陷入"双弹覆盖带内且无横向脱离"的死地。
+ * 过载敌会追着我移动——吃星瞬间的横向出路常在下一帧被敌逼近而封死(mat：吃完星下一帧四向全被双弹覆盖、
+ * 只能原地空转挨双弹)。这里保守预演敌沿"敌->落点"主轴逼近一格，用新敌位复检落点是否仍在带内且脱不掉。
+ * 返回 true 表示这颗星是过载十字线陷阱，应放弃(scoreMoveCandidate 据此否决)。
+ */
+function starGrabTrapsInOverloadLane(starStep, enemyPos, game) {
+  // 敌朝落点逼近一步：沿曼哈顿主轴(偏移更大的轴)移动一格，模拟过载敌持续压上
+  const dx = starStep[0] - enemyPos[0];
+  const dy = starStep[1] - enemyPos[1];
+  let advanced = enemyPos;
+  if (Math.abs(dx) >= Math.abs(dy) && dx !== 0) {
+    advanced = [enemyPos[0] + (dx > 0 ? 1 : -1), enemyPos[1]];
+  } else if (dy !== 0) {
+    advanced = [enemyPos[0], enemyPos[1] + (dy > 0 ? 1 : -1)];
+  }
+  // 敌逼近格不可通行(撞墙)则维持原位预演
+  if (!samePos(advanced, enemyPos) && !isPassable(game, advanced, null)) advanced = enemyPos;
+  // 逼近后：落点仍在双弹覆盖带(同行/列或相邻±1)且无横向脱离 -> 吃完星即被困，判陷阱
+  return inDoubleLaneBand(advanced, starStep, 6) && !hasDoubleLaneEscapeAt(starStep, advanced, game);
 }
 
 /**
@@ -3137,12 +3269,57 @@ function findTwoStepEscape(me, enemyBullets, game, enemyPos, enemyTank) {
  *  - 开火后下一帧子弹推进 BULLET_SPEED 格，我仍能找到脱离弹道的相邻格。
  * 化纯被动逃跑为压制对射（见 mat_DtH4：全程只躲不还手被压死）。
  */
+/**
+ * 反击"先手干净击杀"判定：来袭子弹下，即使开火后自己躲不掉，但只要这一炮能**先于**敌方任何威胁
+ * 命中并打死敌人，敌坦克 crash 后其在途子弹威胁随之解除——此时先射就是"不必死还反杀"，
+ * 不该怂着躲（落实用户"不必死就先打面前的敌人"第一优先级）。
+ *
+ * 严格三约束（缺一不可，宁可不打也不送命/锁死平局）：
+ *  1. 我严格先手命中：myHit < enemyHit。其中 myHit = 开火占本帧后子弹飞行帧 = ceil(dist/2)；
+ *     enemyHit = 来袭子弹命中我当前格的最快帧(minBulletFramesTo，已含过载配对弹)。严格小于才算
+ *     "敌中弹时尚未轮到它的弹打到我"。相等=同归于尽，单独按约束3处理。
+ *  2. 护盾流敌人盾就绪(正开盾 或 cd=0 可即时格挡)时，这一炮会被盾吃掉，不构成击杀 -> 不放行。
+ *  3. 同归于尽(myHit === enemyHit)只在**星星严格领先**时才换命：星平=运行时长判负=必输(我方代码一贯更慢)，
+ *     同归把翻盘机会也清零，比被单方打死更糟，绝不换命；严格领先时同归=我赢，可换命锁胜。
+ */
+function counterShootKillsCleanly(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+  if (!enemyTank || !enemyPos) return false;
+  if (!canShoot(me, enemy)) return false;
+  const shotDir = clearShotDirection(me.tank.position, enemyPos, game);
+  if (!shotDir || shotDir !== me.tank.direction) return false;
+
+  // 约束2：护盾流敌盾就绪 -> 这一炮被吃，不算击杀
+  const shieldUp = enemy && enemy.status && enemy.status.shielded;
+  const shieldReady = enemyHasShieldSkill(enemy) &&
+    enemy.skill && (enemy.skill.remainingCooldownFrames || 0) === 0;
+  if (shieldUp || shieldReady) return false;
+
+  const bullets = enemyBullets || [];
+  const enemyHit = minBulletFramesTo(bullets, me.tank.position, game);
+  if (enemyHit < 0) return false; // 没有来袭弹会命中我 -> 不归本函数（交常规流程）
+  const dist = manhattan(me.tank.position, enemyPos);
+  const myHit = Math.ceil(dist / BULLET_SPEED); // 开火占本帧，子弹飞行 ceil(dist/2) 帧命中敌
+
+  // 约束1：严格先手 -> 敌中弹时其弹还没打到我，先射反杀
+  if (myHit < enemyHit) return true;
+  // 约束3：同归于尽，仅星星严格领先时换命锁胜；星平/落后必不换命
+  if (myHit === enemyHit) {
+    const myStars = (me && me.stars) || 0;
+    const enmStars = (enemy && enemy.stars) || 0;
+    return myStars > enmStars;
+  }
+  return false;
+}
+
 function shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return false;
   if (!canShoot(me, enemy)) return false; // 炮管就绪 + 敌未开盾
   // 必须车头已对准敌人（开火不耗转向帧），否则先躲
   const shotDir = clearShotDirection(me.tank.position, enemyPos, game);
   if (!shotDir || shotDir !== me.tank.direction) return false;
+
+  // 先手干净击杀：哪怕开火后自己躲不掉，只要这一炮先反杀敌人(且不锁死平局/不被盾吃)，就先射。
+  if (counterShootKillsCleanly(me, enemy, enemyTank, enemyBullets, game, enemyPos)) return true;
 
   const bullets = enemyBullets || [];
   const incoming = minBulletFramesTo(bullets, me.tank.position, game);
@@ -3316,6 +3493,12 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   }
 
   const myPos = me.tank.position;
+  // 敌最快命中我当前格所需帧：过载双弹/普通单弹都按"敌转向对准 + 子弹飞行(2格/帧)"估。
+  // 用于给"需转向才能到达的侧格"做时序闸门——转身那帧我还停在原格，必须保证敌弹此刻打不到。
+  const dist = manhattan(myPos, enemyPos);
+  const dirToMe = clearShotDirection(enemyPos, myPos, game);
+  const enemyHitFrames = (dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1) + Math.ceil(dist / BULLET_SPEED);
+
   let best = null;
   let bestScore = -9999;
   for (let i = 0; i < DIRS.length; i++) {
@@ -3324,9 +3507,18 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue; // 必须脱离炮线
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue; // 别躲进现有弹道
+    if (predictedOverloadThreatens(enemy, p, game)) continue;      // 别躲进过载双弹覆盖带
+
+    const needTurn = d.name !== me.tank.direction;
+    // 时序铁律（防摇摆送死，mat 复盘）：当前朝向即脱离方向 -> 本帧 go 一步离线，最快、必接受。
+    // 需先转向 -> 转身占 1 帧(人仍在原格)、第 2 帧才移动；只有敌弹这帧打不到我(escapeFrames<enemyHitFrames)
+    // 才来得及，否则返回这种格只会让我站着转身被抢先开火、且每帧 best 翻面横跳。来不及就别给侧格，
+    // 返回 null 让位硬闸门(传送逃生/绝境横移)——那才是真来不及时的正确兜底。
+    const escapeFrames = needTurn ? 2 : 1;
+    if (needTurn && escapeFrames >= enemyHitFrames) continue;
 
     // 偏好当前朝向就能直接走的格子（1 帧脱离，最快）
-    const facing = d.name === me.tank.direction ? 100 : 0;
+    const facing = needTurn ? 0 : 100;
     // 加强星星引力：躲弹时若某方向能更快接近星星，优先选（原 0.1 太弱，改为 3，使星星 1 格内相当于 facing 同向）
     const starPull = game.star ? Math.max(0, 6 - manhattan(p, game.star)) * 3 : 0;
     const score = facing + distanceFromEdges(p, game) + starPull;
@@ -3544,9 +3736,25 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   // 已在同行/同列且视线清晰：能打就打/对准
   const lineDir = clearShotDirection(myPos, enemyPos, game);
   if (lineDir) {
-    // 已过载（下帧双弹）或真正持双弹：仍不值得对枪，一发换双弹必亏
-    if (enemy.status && enemy.status.overloaded) return null;
-    if (enemyDoubleLaneThreat(enemy)) return null;
+    // 双弹流（已过载/握双弹）：默认一发换双弹必亏，不主动对枪。
+    // 但"预瞄转炮口"本身不发弹、不会同归——握双弹时若我尚未对准，仍先转过去对准，
+    // 占住先手姿态(mat_7YQEUd 复盘：因双弹门控连转炮口都不做，被压墙角破墙自曝)。
+    // 已对准时只放行"严格先手干净击杀"(敌先倒，双弹来不及发出)：
+    //   - 敌短期开不了火(enemyCanFireSoon=false)：纯赚一炮；
+    //   - 或我命中帧 < 敌命中帧(myHit<enemyHit)：敌先倒。
+    // 同归(myHit===enemyHit)即使我领先也不放行——双弹同归换命风险远高于普通对枪，不靠它锁胜；
+    // 劣势更不打。让位后续走位/躲避拉开距离。
+    const doubleLane = (enemy.status && enemy.status.overloaded) || enemyDoubleLaneThreat(enemy);
+    if (doubleLane) {
+      if (me.tank.direction !== lineDir) return { dir: lineDir }; // 转炮口预瞄，不发弹
+      if (!enemyCanFireSoon(enemy)) return { fire: true };       // 敌开不了火，纯赚
+      const dist = manhattan(myPos, enemyPos);
+      const myHit = Math.ceil(dist / BULLET_SPEED);              // 已对准，转向0
+      const dirToMe = clearShotDirection(enemyPos, myPos, game);
+      const enemyHit = (dirToMe ? turnDistance(enemyTank.direction, dirToMe) : 1) + Math.ceil(dist / BULLET_SPEED);
+      if (myHit < enemyHit) return { fire: true };               // 严格先手，敌先倒
+      return null; // 同归/劣势：不对枪换命，让位走位/躲避
+    }
     if (shieldEnemy && !canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos)) return null;
     if (me.tank.direction === lineDir) return { fire: true };
     return { dir: lineDir };

@@ -276,6 +276,32 @@ console.log('场景F2: 新对局(帧倒退)重置禁用状态');
 }
 
 // =========================================================
+// 场景 F3：敌消失(隐身/进草/被击杀)不误判为"躲开刺杀"而禁用刺杀
+// 修复反逻辑 bug：敌不可见更可能是被这次刺杀打死(成功!)或隐身,不能据此 assassinBanned=true。
+// =========================================================
+console.log('场景F3: 敌消失不误禁刺杀(状态污染修复)');
+{
+  // 敌消失(enemyTank=null)、刺杀后 1~3 帧内 -> 不下结论,保留 pending 继续观察
+  const state1 = { pendingAssassin: { targetPos: [10, 10], dir: 'up', frame: 10 }, assassinBanned: false };
+  recordAssassinOutcome(state1, null, null, { frames: 12 }); // elapsed=2
+  check('F3-A 敌消失(隐身)不禁刺杀且保留pending',
+    state1.assassinBanned === false && state1.pendingAssassin !== null,
+    'state=' + JSON.stringify(state1));
+
+  // 敌可见且确实移出瞄准线 -> 仍判定躲开,禁用(原有正确行为不受影响)
+  const state2 = { pendingAssassin: { targetPos: [10, 10], dir: 'up', frame: 10 }, assassinBanned: false };
+  recordAssassinOutcome(state2, {}, { position: [11, 10] }, { frames: 12 });
+  check('F3-B 敌可见且躲开 -> 仍禁刺杀', state2.assassinBanned === true);
+
+  // 超时(elapsed>3)仍没见到敌 -> 清 pending 但不禁用(信息过期,既不算成功也不算躲开)
+  const state3 = { pendingAssassin: { targetPos: [10, 10], dir: 'up', frame: 10 }, assassinBanned: false };
+  recordAssassinOutcome(state3, null, null, { frames: 20 }); // elapsed=10>3
+  check('F3-C 超时未见敌 -> 清pending但不禁刺杀',
+    state3.assassinBanned === false && state3.pendingAssassin === null,
+    'state=' + JSON.stringify(state3));
+}
+
+// =========================================================
 // 场景 G：抢星竞速 vs 防瞄（复刻 mat_DuPt4ff7Ivt9Hy6Rf 防瞄过保守丢星）
 //  G1: 敌人仅预瞄(无实弹)、星就在我脚边、我更近 -> 不应为防瞄空走，应继续抢星
 //  G2: 敌人已有实弹在途 -> 真威胁，仍应防瞄/躲避
@@ -843,13 +869,14 @@ console.log('场景O3: 敌距5太远 -> 不守线');
   const g = findGuardLineShot(me, enemy, enemy.tank, [], { map: map, star: null, frames: 30 }, enemy.tank.position);
   check('距5 -> 不守线(null)', g === null, 'g=' + JSON.stringify(g));
 }
-console.log('场景O4: 过载敌人 -> 不站着守线');
+console.log('场景O4: 过载敌人 + 严格先手(敌背对d=2) -> 守线开火');
 {
   const map = emptyMap(20, 20);
   const me = makeMe([13, 7], 'up');
+  // 敌朝right背对我(我在其正下方)，myHit=1，enemyHit=turn(right,down=1)+1=2，严格先手 -> 开火
   const enemy = { tank: { id: 'e', position: [13, 5], direction: 'right' }, bullet: null, skill: { type: 'overload', remainingCooldownFrames: 5 }, status: { overloaded: true } };
   const g = findGuardLineShot(me, enemy, enemy.tank, [], { map: map, star: null, frames: 30 }, enemy.tank.position);
-  check('过载 -> 不守线(null)', g === null, 'g=' + JSON.stringify(g));
+  check('过载但严格先手(敌背对d=2) -> 守线开火', g && g.fire === true, 'g=' + JSON.stringify(g));
 }
 console.log('场景O5: 有实弹来袭 -> 不守线(躲避优先)');
 {
@@ -1659,22 +1686,32 @@ console.log('场景DL: 双弹时序"握双弹怂、没双弹刚"(mat_Jov6/EUR/LV
     MATCH_STATE = null; onIdle(me, enemy, { map: mapDL, star: null, frames: 40 });
     check('DL1 敌overload冷却中+我对准 -> 开火(没双弹刚)', me._actions.some(a => a[0] === 'fire'), JSON.stringify(me._actions));
   }
-  // DL2: 敌握双弹(过载就绪cd0) 同样位置 -> 不开火(握双弹怂，让位走位拉开)
+  // DL2: 敌握双弹(过载就绪cd0)，但我已对准d=5、敌背对(right)严格先手 -> 开火(干净击杀豁免)
+  // myHit=ceil(5/2)=3，enemyHit=turn(right→down=1)+3=4，myHit<enemyHit，敌先倒
   {
     const me = mk([10, 10], 'up');
     const enemy = overEnemy([10, 5], 'right', 0, false);
     MATCH_STATE = null; onIdle(me, enemy, { map: mapDL, star: null, frames: 40 });
-    check('DL2 敌握双弹(就绪)+我对准 -> 不开火(握双弹怂)', !me._actions.some(a => a[0] === 'fire'), JSON.stringify(me._actions));
+    check('DL2 敌握双弹+我对准+严格先手(敌背对) -> 开火(干净击杀)', me._actions.some(a => a[0] === 'fire'), JSON.stringify(me._actions));
   }
-  // DL3: 敌已过载(握双弹) 同样位置 -> 不开火(怂)
+  // DL3: 敌已过载(握双弹)，同样位置同样严格先手 -> 开火
   {
     const me = mk([10, 10], 'up');
     const enemy = overEnemy([10, 5], 'right', 8, true);
     MATCH_STATE = null; onIdle(me, enemy, { map: mapDL, star: null, frames: 40 });
-    check('DL3 敌已过载(握双弹)+我对准 -> 不开火(怂)', !me._actions.some(a => a[0] === 'fire'), JSON.stringify(me._actions));
+    check('DL3 敌已过载+我对准+严格先手(敌背对) -> 开火(干净击杀)', me._actions.some(a => a[0] === 'fire'), JSON.stringify(me._actions));
+  }
+  // DL3b: 正面对峙(我up已对准，敌down也对准我) -> 同归，不开火(保守边界)
+  // myHit=3，enemyHit=turn(down,up=2)+3=5？不，down→up需转2步。实际 me[10,10]up，敌[10,5]down，
+  // dirToMe=down，turnDistance(down,down)=0，enemyHit=0+3=3。同归(3=3)→不打。
+  {
+    const me = mk([10, 10], 'up');
+    const enemy = overEnemy([10, 5], 'down', 0, false); // 敌朝down=正对我
+    MATCH_STATE = null; onIdle(me, enemy, { map: mapDL, star: null, frames: 40 });
+    check('DL3b 正面对峙同归+握双弹 -> 不开火(同归保守)', !me._actions.some(a => a[0] === 'fire'), JSON.stringify(me._actions));
   }
 
-  // DL4: findGuardLineShot 对 overload 流冷却中(没握双弹)同线近距 -> 允许守线开枪("没双弹刚")
+
   {
     const me = mk([6, 4], 'right');
     me.stars = 1; // 领先1星(非平局)，隔离"平局不对枪"新策略；平局抑制由 TIE 场景覆盖
@@ -2556,7 +2593,195 @@ console.log('场景GWX: mat_GwxblYdS 四失误复刻');
 }
 
 // =========================================================
-// 场景 TIE：平局不打"躲不掉的对枪"(mat_FXFkk0 复盘)
+// 场景 KILL：来袭子弹下的"先手干净击杀"放行 + 同归换命星数约束
+// 需求：不必死就先打面前的敌人。即使开火后自己躲不掉，只要这一炮先反杀敌人(敌crash则其在途弹威胁解除)就先射。
+// 三约束：①严格先手 myHit<enemyHit 放行；②护盾就绪炮被吃不算击杀；③同归(==)仅星星严格领先才换命(星平=运行时长判负=必输)。
+// =========================================================
+console.log('场景KILL: 来袭子弹下先手击杀放行 + 同归换命星数约束');
+{
+  const map = emptyMap(20, 20);
+  const g = { map: map, star: null, frames: 40 };
+  // 公共姿态：me[10,9]朝left 已对准敌；敌[6,9]朝right 已对准我，同行无墙。敌弹在途朝我(right)。
+  function mkKill(bulletX, myStars, enmStars, enemySkill, enemyStatus) {
+    const me = makeMe([10, 9], 'left', { stars: myStars, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+    const foe = {
+      tank: { id: 'e', position: [6, 9], direction: 'right', crashed: false },
+      bullet: { position: [bulletX, 9], direction: 'right' },
+      skill: enemySkill || { type: 'teleport', remainingCooldownFrames: 5 },
+      status: enemyStatus || {}, stars: enmStars
+    };
+    return { me, foe };
+  }
+
+  // KILL1: 敌弹贴脸先命中我(enemyHit<myHit) -> 非先手 -> 不先射
+  const k1 = mkKill(9, 0, 0); // 弹[9,9]距我1格=1帧 < myHit=ceil(4/2)=2
+  check('KILL1 敌弹先命中(非先手) -> 不先射',
+    counterShootKillsCleanly(k1.me, k1.foe, k1.foe.tank, collectEnemyBullets(k1.foe), g, k1.foe.tank.position) === false);
+
+  // KILL2: 我严格先手命中(myHit=2 < enemyHit=3) -> 先射反杀
+  const k2 = mkKill(5, 0, 0); // 弹[5,9]距我5格=ceil(5/2)=3帧 > myHit=2
+  check('KILL2 我严格先手 -> 先射反杀',
+    counterShootKillsCleanly(k2.me, k2.foe, k2.foe.tank, collectEnemyBullets(k2.foe), g, k2.foe.tank.position) === true);
+
+  // KILL3: 同归(myHit=enemyHit=2) + 星平 -> 必输,不换命
+  const k3 = mkKill(6, 1, 1); // 弹[6,9]距我4格=2帧 == myHit=2
+  check('KILL3 同归+星平 -> 不换命(锁死平局必输)',
+    counterShootKillsCleanly(k3.me, k3.foe, k3.foe.tank, collectEnemyBullets(k3.foe), g, k3.foe.tank.position) === false);
+
+  // KILL4: 同归 + 星严格领先 -> 换命锁胜
+  const k4 = mkKill(6, 2, 1);
+  check('KILL4 同归+星领先 -> 换命锁胜',
+    counterShootKillsCleanly(k4.me, k4.foe, k4.foe.tank, collectEnemyBullets(k4.foe), g, k4.foe.tank.position) === true);
+
+  // KILL5: 同归 + 星落后 -> 不换命
+  const k5 = mkKill(6, 0, 1);
+  check('KILL5 同归+星落后 -> 不换命',
+    counterShootKillsCleanly(k5.me, k5.foe, k5.foe.tank, collectEnemyBullets(k5.foe), g, k5.foe.tank.position) === false);
+
+  // KILL6: 护盾流盾就绪(cd=0) + 我严格先手 -> 炮被盾吃,不算击杀
+  const k6 = mkKill(5, 0, 0, { type: 'shield', remainingCooldownFrames: 0 });
+  check('KILL6 护盾就绪 -> 先手也不算击杀(不放行)',
+    counterShootKillsCleanly(k6.me, k6.foe, k6.foe.tank, collectEnemyBullets(k6.foe), g, k6.foe.tank.position) === false);
+
+  // KILL7: 护盾流但盾在冷却(cd>0,未开盾) + 严格先手 -> 可击杀
+  const k7 = mkKill(5, 0, 0, { type: 'shield', remainingCooldownFrames: 12 });
+  check('KILL7 护盾冷却中 -> 先手可击杀(放行)',
+    counterShootKillsCleanly(k7.me, k7.foe, k7.foe.tank, collectEnemyBullets(k7.foe), g, k7.foe.tank.position) === true);
+
+  // KILL8: shouldCounterShootThenDodge 串联——KILL2 场景应整体放行先射
+  check('KILL8 串联:严格先手场景 shouldCounterShootThenDodge=true',
+    shouldCounterShootThenDodge(k2.me, k2.foe, k2.foe.tank, collectEnemyBullets(k2.foe), g, k2.foe.tank.position) === true);
+}
+
+// =========================================================
+// 场景 SAFE：软层 directShotNotSuicidal 同归判定按星数收紧
+// 走廊地图(y=9 行可走、上下皆墙)隔离"无侧移退路"，使同归无法靠先打再躲逃生，纯看星数。
+// =========================================================
+console.log('场景SAFE: directShotNotSuicidal 同归星数判定(无退路走廊)');
+{
+  // 走廊：仅 y=9 行可走，上下都是墙 -> 开火后无垂直侧移空间
+  function corridorMap(w, h) {
+    const m = [];
+    for (let x = 0; x < w; x++) {
+      m[x] = [];
+      for (let y = 0; y < h; y++) m[x][y] = (y !== 9 || x === 0 || x === w - 1) ? 'x' : '.';
+    }
+    return m;
+  }
+  const map = corridorMap(20, 20);
+  const g = { map: map, star: null, frames: 40 };
+  // me[6,9]朝right 已对准、敌[10,9]朝left 已对准，d=4 -> myDuel=2、enemyDuel=2 同归
+  function mkSafe(myStars, enmStars) {
+    const me = makeMe([6, 9], 'right', { stars: myStars, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+    const foe = { tank: { id: 'e', position: [10, 9], direction: 'left', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 5 }, status: {}, stars: enmStars };
+    const sd = clearShotDirection(me.tank.position, foe.tank.position, g);
+    return { me, foe, sd };
+  }
+  const s1 = mkSafe(1, 1);
+  check('SAFE1 同归+星平 -> 必死(让位软躲避)',
+    directShotNotSuicidal(s1.me, s1.foe, s1.foe.tank, [], g, s1.foe.tank.position, s1.sd) === false);
+  const s2 = mkSafe(2, 1);
+  check('SAFE2 同归+星领先 -> 不必死(抢开火锁胜)',
+    directShotNotSuicidal(s2.me, s2.foe, s2.foe.tank, [], g, s2.foe.tank.position, s2.sd) === true);
+  const s3 = mkSafe(0, 1);
+  check('SAFE3 同归+星落后 -> 必死',
+    directShotNotSuicidal(s3.me, s3.foe, s3.foe.tank, [], g, s3.foe.tank.position, s3.sd) === false);
+
+  // SAFE4: 开阔地同归+星平 -> 因开火后能侧移离线(自己不死,与星数无关)而判不必死
+  const omap = emptyMap(20, 20);
+  const og = { map: omap, star: null, frames: 40 };
+  const me4 = makeMe([6, 9], 'right', { stars: 1, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+  const foe4 = { tank: { id: 'e', position: [10, 9], direction: 'left', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 5 }, status: {}, stars: 1 };
+  const sd4 = clearShotDirection(me4.tank.position, foe4.tank.position, og);
+  check('SAFE4 开阔地同归+星平 -> 不必死(先打再侧移逃生)',
+    directShotNotSuicidal(me4, foe4, foe4.tank, [], og, foe4.tank.position, sd4) === true);
+}
+
+// =========================================================
+// 场景 GRAB：抢星压制位评分——抢星格若同时能直射敌人(兼具吃星+压制)应更高分
+// =========================================================
+console.log('场景GRAB: 最优压制位抢星评分');
+{
+  const map = emptyMap(20, 20);
+  // 敌在 [10,5]，星在 [10,12]。抢星走 x=10 列既奔星、又与敌同列可直射(压制位)。
+  const me = makeMe([10, 14], 'up', { stars: 0, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+  const foe = { tank: { id: 'e', position: [10, 5], direction: 'up', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 30 }, status: {}, stars: 0 };
+  const g = { map: map, star: [10, 12], frames: 40 };
+  // 压制位抢星格 [10,13]：奔星(ds=1)且与敌[10,5]同列可直射、距敌8(>standoff+1=5)
+  const stepLane = scoreMoveCandidate('star', [10, 13], me, foe, g, foe.tank.position, foe.tank, [], null, {}, false, false, 88);
+  // 离线抢星格(假设走偏一列，不与敌同列) [9,13]：仍奔星但失去压制线
+  const stepOff = scoreMoveCandidate('star', [9, 13], me, foe, g, foe.tank.position, foe.tank, [], null, {}, false, false, 88);
+  check('GRAB1 抢星压制位(同列可直射)应高于离线抢星格', stepLane > stepOff,
+    'lane=' + stepLane + ' off=' + stepOff);
+}
+
+// =========================================================
+// 场景 SWING：未对准时不赌"转向竞速直射"——防摇摆送死
+// 复盘：敌连续转向对准我并抢先开火，我 F24 才决策"直射:82"却未对准 -> F25 站着转向没开炮也没躲 ->
+// 之后直射↔两步逃每帧横跳、连转方向却始终没离开弹道，F27 被命中。
+// 修复：directShotNotSuicidal 要求车头已对准(turnDistance=0)才算即时先手直射；未对准让位躲避机动。
+// =========================================================
+console.log('场景SWING: 未对准不赌转向竞速(防摇摆送死)');
+{
+  const map = emptyMap(20, 20);
+  const g = { map: map, star: null, frames: 40 };
+  // 未对准：我[10,9]朝up，敌在正左方[4,9]（shotDir=left，turnDistance(up,left)=1）
+  const me = makeMe([10, 9], 'up', { stars: 0, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+  const foe = { tank: { id: 'e', position: [4, 9], direction: 'right', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 5 }, status: {}, stars: 0 };
+  const sd = clearShotDirection(me.tank.position, foe.tank.position, g);
+  check('SWING1 未对准敌人 -> 不算安全直射(让位躲避)',
+    directShotNotSuicidal(me, foe, foe.tank, [], g, foe.tank.position, sd) === false);
+
+  // 对照：已对准且敌背对(严格先手) -> 仍是安全直射，不误伤正常压制
+  const me2 = makeMe([10, 9], 'left', { stars: 0, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+  const foe2 = { tank: { id: 'e', position: [4, 9], direction: 'right', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 5 }, status: {}, stars: 0 };
+  const sd2 = clearShotDirection(me2.tank.position, foe2.tank.position, g);
+  check('SWING2 已对准+敌背对(严格先手) -> 安全直射(不误伤)',
+    directShotNotSuicidal(me2, foe2, foe2.tank, [], g, foe2.tank.position, sd2) === true);
+}
+
+// =========================================================
+// 场景 SWING2：findAimDodge 需转向侧格的时序闸门——防过载敌贴近时空躲摇摆
+// 复盘：F81 敌过载、F82-84 转向对准我，F84 我决策"防瞄"选了需转向的侧格 -> F85 站着转向(敌同帧双弹开火)
+// -> F86/F87 best 翻面连转方向、从未离开弹道被命中。
+// 修复：findAimDodge 对"需转向才能到达"的侧格加时序校验(escapeFrames<enemyHitFrames)，来不及就不给该格，
+// 返回 null 让位硬闸门(传送逃生)；只接受"当前朝向即一帧脱离"的格。
+// =========================================================
+console.log('场景AIMSWING: findAimDodge需转向侧格时序闸门(防过载贴近摇摆)');
+{
+  const map = emptyMap(20, 20);
+  const g = { map: map, star: null, frames: 85 };
+  // 过载敌已对准、近距 d=2：敌最快 1 帧命中，需转向的侧格(2帧)一律来不及 -> 不返回需转向侧格
+  const me = makeMe([10, 9], 'up', { stars: 1, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+  const foe = { tank: { id: 'e', position: [8, 9], direction: 'right', crashed: false }, bullet: null, skill: { type: 'overload', remainingCooldownFrames: 0 }, status: { overloaded: true }, stars: 1 };
+  const ad = findAimDodge(me, foe, foe.tank, [], g, foe.tank.position);
+  // 允许返回 null(让位硬闸门)，或仅返回"当前朝向 up 即一帧脱离"的格 [10,8]；绝不返回需转向的左右侧格
+  check('AIMSWING1 过载贴近:不返回需转向侧格(null或朝向即脱离格)',
+    ad === null || (ad[0] === 10 && ad[1] === 8),
+    'ad=' + JSON.stringify(ad));
+
+  // 端到端：该场景 onIdle 应交硬闸门传送逃生，不连续转向摇摆
+  const acts = [];
+  const me2 = {
+    tank: { position: [10, 9], direction: 'up', crashed: false }, bullet: null, stars: 1,
+    skill: { type: 'teleport', remainingCooldownFrames: 0 }, status: {},
+    teleport: (x, y) => acts.push(['teleport', x, y]), go: () => acts.push(['go']),
+    turn: (d) => acts.push(['turn', d]), fire: () => acts.push(['fire']), speak: () => {}
+  };
+  const foe2 = { tank: { id: 'e', position: [8, 9], direction: 'right', crashed: false }, bullet: null, skill: { type: 'overload', remainingCooldownFrames: 0 }, status: { overloaded: true }, stars: 1 };
+  MATCH_STATE = null;
+  onIdle(me2, foe2, { map: map, star: null, frames: 85 });
+  check('AIMSWING2 过载贴近 onIdle 传送逃生(非站桩转向)',
+    acts.some(a => a[0] === 'teleport'), 'acts=' + JSON.stringify(acts));
+
+  // 对照防过头：远敌(d=8)需转向侧格仍来得及 -> findAimDodge 照常返回脱线格
+  const meF = makeMe([10, 9], 'up', { stars: 1, skill: { type: 'teleport', remainingCooldownFrames: 30 } });
+  const foeF = { tank: { id: 'e', position: [2, 9], direction: 'right', crashed: false }, bullet: null, skill: { type: 'teleport', remainingCooldownFrames: 5 }, status: {}, stars: 1 };
+  const adF = findAimDodge(meF, foeF, foeF.tank, [], g, foeF.tank.position);
+  check('AIMSWING3 远敌:仍返回脱线格(来得及,不防过头)', adF !== null, 'ad=' + JSON.stringify(adF));
+}
+
+
 // 平局判定按代码运行时长决胜，myth-tank 一贯更慢(215ms vs 21ms)=平局必输。
 // 故星数持平时，会同帧互射换命的对枪一律抑制，改走脱线；只放行严格先手的干净击杀。
 // =========================================================
