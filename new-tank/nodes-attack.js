@@ -1,0 +1,135 @@
+// ============================================================
+// nodes-attack.js — 攻击行为节点
+//
+// 由 profile.attackAggression 控制挂载哪些攻击子节点：
+//   'none'     → 不挂载任何攻击节点（终局纯抢星）
+//   'low'      → 只挂空窗反击
+//   'cautious' → 空窗反击 + 安全直射（骗盾流专用）
+//   'medium'   → 空窗反击 + 直射 + 守线
+//   'high'     → 全挂载（空窗 + 隐身预射 + 直射 + 守线 + 草丛）
+// ============================================================
+
+function createAttackTree(profile) {
+  if (profile.attackAggression === 'none') return null;
+
+  var children = [];
+
+  // 空窗期反击：敌方子弹刚射出（炮管空），我与敌同线时抢射
+  children.push(
+    Sequence('open-shot', [
+      Guard('has-open-shot', function (bb) { return !!senseOpenShot(bb); }),
+      Action('do-open-shot', function (bb) {
+        var dir = senseOpenShot(bb);
+        if (bb.myDir === dir) { bbSpeak(bb, '空窗!'); bbFire(bb); }
+        else bbTurnToward(bb, dir);
+      })
+    ])
+  );
+
+  // cloak 敌刚隐身时预射（仅对隐身流启用）
+  if (profile.prefireOnDisappear) {
+    children.push(
+      Sequence('cloak-prefire', [
+        Guard('has-cloak-prefire', function (bb) { return !!senseCloakPreFire(bb); }),
+        Action('do-cloak-prefire', function (bb) {
+          var shot = senseCloakPreFire(bb);
+          if (shot.fire) { bbSpeak(bb, '预射!'); bbFire(bb); }
+          else bbTurnToward(bb, shot.dir);
+        })
+      ])
+    );
+  }
+
+  // 直射：同线无障碍 + 可开火
+  if (profile.attackAggression !== 'low') {
+    children.push(
+      Sequence('fire-direct', [
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
+        Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        // shield 流特殊处理：需要确认打完能侧移躲开回敬
+        Guard('shield-safe', function (bb) {
+          if (!enemyHasShieldSkill(bb.enemy)) return true;
+          if (profile.shieldBait) {
+            return canShootThenEvadeShieldCounter(
+              bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos
+            );
+          }
+          return true;
+        }),
+        // 双弹近距不对枪（除非严格先手击杀）
+        Guard('not-double-lane-close', function (bb) {
+          if (!enemyDoubleLaneThreat(bb.enemy)) return true;
+          if (bb.distToEnemy >= safeStandoffDistance(bb.enemy)) return true;
+          // 检查严格先手击杀
+          if (turnDistance(bb.myDir, bb.shotDir) !== 0) return false;
+          if (!enemyCanFireSoon(bb.enemy)) return true;
+          var myHit = Math.ceil(bb.distToEnemy / BULLET_SPEED);
+          var dirToMe = clearShotDirection(bb.enemyPos, bb.myPos, bb.game);
+          var enemyHit = (dirToMe ? turnDistance(bb.enemyTank.direction, dirToMe) : 1)
+            + Math.ceil(bb.distToEnemy / BULLET_SPEED);
+          return myHit < enemyHit;
+        }),
+        // 安全直射判定：不会必死才提到高优先级
+        Guard('safe-to-fire', function (bb) {
+          return directShotNotSuicidal(
+            bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos, bb.shotDir
+          );
+        }),
+        Action('do-fire-direct', function (bb) {
+          if (bb.myDir === bb.shotDir) { bbSpeak(bb, '直射!'); bbFire(bb); }
+          else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+
+    // 非安全直射（能打但有风险，优先级低于安全直射，高于守线）
+    children.push(
+      Sequence('fire-risky', [
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
+        Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('shield-ok', function (bb) {
+          return !enemyHasShieldSkill(bb.enemy) ||
+            canShootThenEvadeShieldCounter(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos);
+        }),
+        Guard('not-double-threat', function (bb) {
+          return !enemyDoubleLaneThreat(bb.enemy) ||
+            bb.distToEnemy >= safeStandoffDistance(bb.enemy);
+        }),
+        Action('do-fire-risky', function (bb) {
+          if (bb.myDir === bb.shotDir) { bbSpeak(bb, '开炮!'); bbFire(bb); }
+          else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+  }
+
+  // 守线预瞄：提前把炮口对准敌/星可能进入的路线
+  if (profile.attackAggression === 'medium' || profile.attackAggression === 'high') {
+    children.push(
+      Sequence('guard-line', [
+        Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
+        Action('do-guard-line', function (bb) {
+          var shot = senseGuardLineShot(bb);
+          if (shot.fire) { bbSpeak(bb, '守线!'); bbFire(bb); }
+          else bbTurnToward(bb, shot.dir);
+        })
+      ])
+    );
+  }
+
+  // 草丛攻防：预射打草惊蛇 / 草丛伏击
+  if (profile.attackAggression === 'high') {
+    children.push(
+      Sequence('bush-shot', [
+        Guard('has-bush-shot', function (bb) { return !!senseBushLineShot(bb); }),
+        Action('do-bush-shot', function (bb) {
+          var shot = senseBushLineShot(bb);
+          if (shot.fire) { bbSpeak(bb, '草枪!'); bbFire(bb); }
+          else bbTurnToward(bb, shot.dir);
+        })
+      ])
+    );
+  }
+
+  return Selector('attack', children);
+}
