@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-16T10:20:58.644Z
+// 构建时间: 2026-06-16T11:50:40.482Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1427,9 +1427,74 @@ function inCloakStarTrap(me, enemy, enemyTank, game, state) {
 
 
 /**
- * 隐身守星时的守位走法：移动到既不在敌方狙击线上、又尽量靠近星星(便于星消失/敌现身时抢)的相邻格。
- * 找不到更优守位则返回 null（原地不动等待）。
+ * 草丛星点陷阱检测（通用版，不限敌人技能）：
+ * 敌人消失 + 最后位置附近有草丛在星射击线上 → 大概率蹲草伏击。
+ * 返回 true 时应避免盲冲星。
  */
+function inBushStarTrap(me, enemy, enemyTank, game, state) {
+  if (!game.star) return false;
+  if (enemyTank) return false;
+  if (!state || !state.lastEnemyPos) return false;
+  var frame = (game && game.frames) || 0;
+  if (frame - state.lastEnemySeenFrame > 10) return null;
+  var myPos = me.tank.position;
+  if (manhattan(myPos, game.star) > 8) return false;
+
+  var ePos = state.lastEnemyPos;
+  var star = game.star;
+  var w = game.map.length, h = game.map[0].length;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (game.map[x][y] !== "o") continue;
+      var c = [x, y];
+      var distToStar = manhattan(c, star);
+      if (distToStar < 1 || distToStar > 4) continue;
+      if (!clearShotDirection(c, star, game)) continue;
+      if (manhattan(c, ePos) > 5) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+
+/**
+ * 找到星附近可疑草丛的射击方向（供远距预射使用）。
+ * 返回 { dir, target } 或 null。
+ */
+function findBushPreFireTarget(me, enemy, enemyTank, game, state) {
+  if (!game.star || enemyTank) return null;
+  if (!canShoot(me, enemy)) return null;
+  if (!state || !state.lastEnemyPos) return null;
+  var frame = (game && game.frames) || 0;
+  if (frame - state.lastEnemySeenFrame > 10) return null;
+
+  var myPos = me.tank.position;
+  var ePos = state.lastEnemyPos;
+  var star = game.star;
+  var w = game.map.length, h = game.map[0].length;
+  var best = null, bestDist = 9999;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (game.map[x][y] !== "o") continue;
+      var c = [x, y];
+      var distToStar = manhattan(c, star);
+      if (distToStar < 1 || distToStar > 4) continue;
+      if (!clearShotDirection(c, star, game)) continue;
+      if (manhattan(c, ePos) > 5) continue;
+      var dir = clearShotDirection(myPos, c, game);
+      if (!dir) continue;
+      var dist = manhattan(myPos, c);
+      if (dist > 6) continue;
+      if (dist < bestDist) { bestDist = dist; best = { dir: dir, target: c }; }
+    }
+  }
+  return best;
+}
+
+
 function cloakStarGuardStep(me, game, state) {
   const myPos = me.tank.position;
   const ePos = state.lastEnemyPos;
@@ -3018,6 +3083,43 @@ function findBushBomb(me, enemy, enemyTank, game, state, frame) {
 }
 
 
+function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
+  if (!teleportReady(me) || !game.star) return null;
+  var myPos = me.tank.position;
+  var enemyPos = enemyTank ? enemyTank.position : null;
+  var walkDist = pathDistance(myPos, game.star, game, enemyPos);
+  if (walkDist >= 0 && walkDist <= 5) return null;
+  if (iAmHidden(me, game) && clearShotDirection(myPos, game.star, game)) return null;
+  // 敌人可见且比我更近星时不蹲人——直接抢星更优
+  if (enemyPos) {
+    var enemyToStar = manhattan(enemyPos, game.star);
+    if (enemyToStar <= 5) return null;
+  }
+  // 敌人可见时不蹲人（它看得见我传送，没有伏击效果）
+  if (enemyTank) return null;
+
+  var w = game.map.length, h = game.map[0].length;
+  var best = null, bestScore = -9999;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (game.map[x][y] !== "o") continue;
+      var c = [x, y];
+      if (samePos(c, myPos)) continue;
+      var distToStar = manhattan(c, game.star);
+      if (distToStar < 2 || distToStar > 4) continue;
+      if (!clearShotDirection(c, game.star, game)) continue;
+      if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, enemy)) continue;
+      var score = 100 + (5 - distToStar) * 20;
+      if (enemyPos) score += manhattan(c, enemyPos) * 5;
+      score += distanceFromEdges(c, game) * 3;
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+  }
+  return best;
+}
+
+
 // ===== movement-engine.js =====
 // ============================================================
 // movement-engine.js — 走位策略层
@@ -4100,6 +4202,18 @@ function senseBushBomb(bb) {
   });
 }
 
+function senseStarBushAmbush(bb) {
+  return sense(bb, 'starBushAmbush', function () {
+    return findStarBushAmbush(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.memory);
+  });
+}
+
+function senseBushPreFire(bb) {
+  return sense(bb, 'bushPreFire', function () {
+    return findBushPreFireTarget(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+  });
+}
+
 // ============================================================
 // 动作包装器（统一从 bb 取参数，简化节点代码）
 // ============================================================
@@ -4637,6 +4751,21 @@ function createAttackTree(profile) {
     );
   }
 
+  // 远距清草预射：检测到草丛陷阱时朝可疑草丛开枪
+  children.push(
+    Sequence('bush-prefire', [
+      Guard('bush-trap-detected', function (bb) {
+        return !bb.enemyTank && inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+      }),
+      Guard('has-prefire-target', function (bb) { return !!senseBushPreFire(bb); }),
+      Action('do-bush-prefire', function (bb) {
+        var shot = senseBushPreFire(bb);
+        if (bb.myDir === shot.dir) { bbSpeak(bb, '清草!'); bbFire(bb); }
+        else bbTurnToward(bb, shot.dir);
+      })
+    ])
+  );
+
   // 草丛攻防：预射打草惊蛇 / 草丛伏击
   if (profile.attackAggression === 'high') {
     children.push(
@@ -4738,6 +4867,32 @@ function createObjectiveTree(profile) {
     ])
   );
 
+  // ---- 星点草丛伏击（优先于直接传送抢星） ----
+  children.push(
+    Sequence('star-bush-ambush', [
+      Guard('star-exists', function (bb) { return !!bb.star; }),
+      Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
+      Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+      Guard('enemy-not-visible', function (bb) { return !bb.enemyTank; }),
+      Guard('not-losing-badly', function (bb) {
+        return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
+      }),
+      Guard('not-endgame', function (bb) { return bb.framesLeft > 25; }),
+      Guard('has-ambush-pos', function (bb) { return !!senseStarBushAmbush(bb); }),
+      Action('do-star-ambush', function (bb) {
+        var pos = senseStarBushAmbush(bb);
+        var faceDir = clearShotDirection(pos, bb.star, bb.game);
+        if (faceDir && bb.myDir !== faceDir) {
+          bbTurnToward(bb, faceDir);
+        } else {
+          bbSpeak(bb, '伏击!');
+          bbTeleport(bb, pos);
+          bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame };
+        }
+      })
+    ])
+  );
+
   // ---- 传送抢星 ----
   children.push(
     Sequence('star-teleport', [
@@ -4745,6 +4900,9 @@ function createObjectiveTree(profile) {
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
       Guard('not-in-cloak-trap', function (bb) {
         return !inCloakStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+      }),
+      Guard('not-in-bush-trap', function (bb) {
+        return !inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
       }),
       Guard('has-star-tp', function (bb) { return !!senseStarTeleport(bb); }),
       // starAggression='low' 时额外检查：星星附近是否安全
@@ -4846,6 +5004,39 @@ function createStarGrabNode() {
 function createMovementTree(profile) {
   var children = [];
 
+  // ---- 伏击蹲守：传送到伏击位后原地等待射击 ----
+  children.push(
+    Sequence('ambush-hold', [
+      Guard('in-ambush', function (bb) {
+        var a = bb.memory.ambushState;
+        if (!a) return false;
+        if (bb.frame - a.frame > 10) { bb.memory.ambushState = null; return false; }
+        if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
+        return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
+      }),
+      Guard('still-safe', function (bb) {
+        return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+      }),
+      Action('do-ambush-hold', function (bb) {
+        var a = bb.memory.ambushState;
+        var faceDir = clearShotDirection(bb.myPos, a.star, bb.game);
+        // 敌人进入射线：直接开火
+        if (bb.enemyTank && bb.gunIsReady) {
+          var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
+          if (shotDir) {
+            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+            else { bbTurnToward(bb, shotDir); }
+            return;
+          }
+        }
+        // 否则面朝星等待
+        if (faceDir && bb.myDir !== faceDir) {
+          bbTurnToward(bb, faceDir);
+        }
+      })
+    ])
+  );
+
   // ---- 蹲草等星（对 overload 双弹流 + 无星 + 我在草丛 + 有传送） ----
   if (profile.bushCamp) {
     children.push(
@@ -4909,6 +5100,8 @@ function createMovementTree(profile) {
         // overload 陷阱检查
         if (bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
             starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game)) return false;
+        // 草丛伏击陷阱：敌人消失 + 星附近有草丛在射击线上
+        if (!bb.enemyTank && inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory)) return false;
         bb._cache._starPath = starPath;
         return true;
       }),

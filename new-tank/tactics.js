@@ -305,9 +305,74 @@ function inCloakStarTrap(me, enemy, enemyTank, game, state) {
 
 
 /**
- * 隐身守星时的守位走法：移动到既不在敌方狙击线上、又尽量靠近星星(便于星消失/敌现身时抢)的相邻格。
- * 找不到更优守位则返回 null（原地不动等待）。
+ * 草丛星点陷阱检测（通用版，不限敌人技能）：
+ * 敌人消失 + 最后位置附近有草丛在星射击线上 → 大概率蹲草伏击。
+ * 返回 true 时应避免盲冲星。
  */
+function inBushStarTrap(me, enemy, enemyTank, game, state) {
+  if (!game.star) return false;
+  if (enemyTank) return false;
+  if (!state || !state.lastEnemyPos) return false;
+  var frame = (game && game.frames) || 0;
+  if (frame - state.lastEnemySeenFrame > 10) return null;
+  var myPos = me.tank.position;
+  if (manhattan(myPos, game.star) > 8) return false;
+
+  var ePos = state.lastEnemyPos;
+  var star = game.star;
+  var w = game.map.length, h = game.map[0].length;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (game.map[x][y] !== "o") continue;
+      var c = [x, y];
+      var distToStar = manhattan(c, star);
+      if (distToStar < 1 || distToStar > 4) continue;
+      if (!clearShotDirection(c, star, game)) continue;
+      if (manhattan(c, ePos) > 5) continue;
+      return true;
+    }
+  }
+  return false;
+}
+
+
+/**
+ * 找到星附近可疑草丛的射击方向（供远距预射使用）。
+ * 返回 { dir, target } 或 null。
+ */
+function findBushPreFireTarget(me, enemy, enemyTank, game, state) {
+  if (!game.star || enemyTank) return null;
+  if (!canShoot(me, enemy)) return null;
+  if (!state || !state.lastEnemyPos) return null;
+  var frame = (game && game.frames) || 0;
+  if (frame - state.lastEnemySeenFrame > 10) return null;
+
+  var myPos = me.tank.position;
+  var ePos = state.lastEnemyPos;
+  var star = game.star;
+  var w = game.map.length, h = game.map[0].length;
+  var best = null, bestDist = 9999;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (game.map[x][y] !== "o") continue;
+      var c = [x, y];
+      var distToStar = manhattan(c, star);
+      if (distToStar < 1 || distToStar > 4) continue;
+      if (!clearShotDirection(c, star, game)) continue;
+      if (manhattan(c, ePos) > 5) continue;
+      var dir = clearShotDirection(myPos, c, game);
+      if (!dir) continue;
+      var dist = manhattan(myPos, c);
+      if (dist > 6) continue;
+      if (dist < bestDist) { bestDist = dist; best = { dir: dir, target: c }; }
+    }
+  }
+  return best;
+}
+
+
 function cloakStarGuardStep(me, game, state) {
   const myPos = me.tank.position;
   const ePos = state.lastEnemyPos;
@@ -1893,4 +1958,41 @@ function findBushBomb(me, enemy, enemyTank, game, state, frame) {
   if (!enemyApproaching) return null;
   if (!canEscapeAfterBomb(myPos, me.tank.direction, game, enemyTank.position, [], state, frame)) return null;
   return { type: 'bush' };
+}
+
+
+function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
+  if (!teleportReady(me) || !game.star) return null;
+  var myPos = me.tank.position;
+  var enemyPos = enemyTank ? enemyTank.position : null;
+  var walkDist = pathDistance(myPos, game.star, game, enemyPos);
+  if (walkDist >= 0 && walkDist <= 5) return null;
+  if (iAmHidden(me, game) && clearShotDirection(myPos, game.star, game)) return null;
+  // 敌人可见且比我更近星时不蹲人——直接抢星更优
+  if (enemyPos) {
+    var enemyToStar = manhattan(enemyPos, game.star);
+    if (enemyToStar <= 5) return null;
+  }
+  // 敌人可见时不蹲人（它看得见我传送，没有伏击效果）
+  if (enemyTank) return null;
+
+  var w = game.map.length, h = game.map[0].length;
+  var best = null, bestScore = -9999;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (game.map[x][y] !== "o") continue;
+      var c = [x, y];
+      if (samePos(c, myPos)) continue;
+      var distToStar = manhattan(c, game.star);
+      if (distToStar < 2 || distToStar > 4) continue;
+      if (!clearShotDirection(c, game.star, game)) continue;
+      if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, enemy)) continue;
+      var score = 100 + (5 - distToStar) * 20;
+      if (enemyPos) score += manhattan(c, enemyPos) * 5;
+      score += distanceFromEdges(c, game) * 3;
+      if (score > bestScore) { bestScore = score; best = c; }
+    }
+  }
+  return best;
 }

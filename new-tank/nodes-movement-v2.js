@@ -11,6 +11,39 @@
 function createMovementTree(profile) {
   var children = [];
 
+  // ---- 伏击蹲守：传送到伏击位后原地等待射击 ----
+  children.push(
+    Sequence('ambush-hold', [
+      Guard('in-ambush', function (bb) {
+        var a = bb.memory.ambushState;
+        if (!a) return false;
+        if (bb.frame - a.frame > 10) { bb.memory.ambushState = null; return false; }
+        if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
+        return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
+      }),
+      Guard('still-safe', function (bb) {
+        return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+      }),
+      Action('do-ambush-hold', function (bb) {
+        var a = bb.memory.ambushState;
+        var faceDir = clearShotDirection(bb.myPos, a.star, bb.game);
+        // 敌人进入射线：直接开火
+        if (bb.enemyTank && bb.gunIsReady) {
+          var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
+          if (shotDir) {
+            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+            else { bbTurnToward(bb, shotDir); }
+            return;
+          }
+        }
+        // 否则面朝星等待
+        if (faceDir && bb.myDir !== faceDir) {
+          bbTurnToward(bb, faceDir);
+        }
+      })
+    ])
+  );
+
   // ---- 蹲草等星（对 overload 双弹流 + 无星 + 我在草丛 + 有传送） ----
   if (profile.bushCamp) {
     children.push(
@@ -74,6 +107,8 @@ function createMovementTree(profile) {
         // overload 陷阱检查
         if (bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
             starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game)) return false;
+        // 草丛伏击陷阱：敌人消失 + 星附近有草丛在射击线上
+        if (!bb.enemyTank && inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory)) return false;
         bb._cache._starPath = starPath;
         return true;
       }),

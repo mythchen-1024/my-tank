@@ -37,6 +37,32 @@ function createObjectiveTree(profile) {
     ])
   );
 
+  // ---- 星点草丛伏击（优先于直接传送抢星） ----
+  children.push(
+    Sequence('star-bush-ambush', [
+      Guard('star-exists', function (bb) { return !!bb.star; }),
+      Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
+      Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+      Guard('enemy-not-visible', function (bb) { return !bb.enemyTank; }),
+      Guard('not-losing-badly', function (bb) {
+        return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
+      }),
+      Guard('not-endgame', function (bb) { return bb.framesLeft > 25; }),
+      Guard('has-ambush-pos', function (bb) { return !!senseStarBushAmbush(bb); }),
+      Action('do-star-ambush', function (bb) {
+        var pos = senseStarBushAmbush(bb);
+        var faceDir = clearShotDirection(pos, bb.star, bb.game);
+        if (faceDir && bb.myDir !== faceDir) {
+          bbTurnToward(bb, faceDir);
+        } else {
+          bbSpeak(bb, '伏击!');
+          bbTeleport(bb, pos);
+          bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame };
+        }
+      })
+    ])
+  );
+
   // ---- 传送抢星 ----
   children.push(
     Sequence('star-teleport', [
@@ -44,6 +70,9 @@ function createObjectiveTree(profile) {
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
       Guard('not-in-cloak-trap', function (bb) {
         return !inCloakStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+      }),
+      Guard('not-in-bush-trap', function (bb) {
+        return !inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
       }),
       Guard('has-star-tp', function (bb) { return !!senseStarTeleport(bb); }),
       // starAggression='low' 时额外检查：星星附近是否安全

@@ -117,6 +117,21 @@ function createAttackTree(profile) {
     );
   }
 
+  // 远距清草预射：检测到草丛陷阱时朝可疑草丛开枪
+  children.push(
+    Sequence('bush-prefire', [
+      Guard('bush-trap-detected', function (bb) {
+        return !bb.enemyTank && inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+      }),
+      Guard('has-prefire-target', function (bb) { return !!senseBushPreFire(bb); }),
+      Action('do-bush-prefire', function (bb) {
+        var shot = senseBushPreFire(bb);
+        if (bb.myDir === shot.dir) { bbSpeak(bb, '清草!'); bbFire(bb); }
+        else bbTurnToward(bb, shot.dir);
+      })
+    ])
+  );
+
   // 草丛攻防：预射打草惊蛇 / 草丛伏击
   if (profile.attackAggression === 'high') {
     children.push(

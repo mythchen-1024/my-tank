@@ -268,6 +268,18 @@ function senseBushBomb(bb) {
   });
 }
 
+function senseStarBushAmbush(bb) {
+  return sense(bb, 'starBushAmbush', function () {
+    return findStarBushAmbush(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.memory);
+  });
+}
+
+function senseBushPreFire(bb) {
+  return sense(bb, 'bushPreFire', function () {
+    return findBushPreFireTarget(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+  });
+}
+
 // ============================================================
 // 动作包装器（统一从 bb 取参数，简化节点代码）
 // ============================================================
