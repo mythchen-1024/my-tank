@@ -25,7 +25,9 @@ function buildBehaviorTree(profile) {
 
   // ═══════ 子树构建 ═══════
   var hardSurvival = createHardSurvivalTree();
+  var starGrab     = createStarGrabNode();
   var softSurvival = createSoftSurvivalTree(profile);
+  var bombAttack   = createBombNodes(profile);
   var attack       = createAttackTree(profile);
   var objective    = createObjectiveTree(profile);
   var movement     = createMovementTree(profile);
@@ -65,24 +67,30 @@ function buildBehaviorTree(profile) {
     // 第一优先级：被冻住就直接返回
     frozenCheck,
 
-    // 第二优先级：硬生存（来袭子弹必须立即响应）
+    // 第二优先级：硬生存（来袭子弹 + 炸弹躲避）
     hardSurvival,
 
-    // 第三优先级：软生存（预防性躲避）
+    // 第三优先级：传送补吃星（只有来弹才打断）
+    starGrab,
+
+    // 第四优先级：软生存（预防性躲避）
     softSurvival,
 
-    // 第四优先级（动态）：终局/落后/极致模式时目标层提前
+    // 第五优先级（动态）：终局/落后/极致模式时目标层提前
     lastChanceStar,
     endgameStarBoost,
     maxStarAggression,
 
-    // 第五优先级：攻击
+    // 第六优先级：攻击（炮弹）
     attack,
 
-    // 第六优先级：常规目标（非终局时的正常优先级）
+    // 第七优先级：主动放弹（堵路/封路/草丛陷阱）
+    bombAttack,
+
+    // 第八优先级：常规目标（非终局时的正常优先级）
     objective,
 
-    // 第七优先级：移动/兜底
+    // 第九优先级：移动/兜底
     movement,
   ];
 

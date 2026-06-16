@@ -49,7 +49,9 @@ function getMatchState(game) {
       lastPrintDecisionKey: null,
       lastPrintFrame: -999,
       lastPrintDecisionFrames: {},
-      lastChosenType: null
+      lastChosenType: null,
+      phantomBullets: [],
+      myBombs: [],
     };
   }
   MATCH_STATE.lastFrame = frame;

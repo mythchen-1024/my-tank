@@ -31,9 +31,11 @@ const dir  = __dirname;
 const parentDir = path.resolve(dir, '..');
 
 const MODULE_ORDER = [
-  // 底层工具（从父目录引用）
-  { file: 'myth-tank.js',       base: parentDir },
-  { file: 'state-store.js',     base: parentDir },
+  // 底层工具（拆分自 myth-tank.js）
+  { file: 'core-utils.js',       base: dir },
+  { file: 'tactics.js',          base: dir },
+  { file: 'movement-engine.js',  base: dir },
+  { file: 'state-store.js',      base: parentDir },
   // 行为树框架
   { file: 'bt-core.js',         base: dir },
   { file: 'blackboard.js',      base: dir },
@@ -42,7 +44,7 @@ const MODULE_ORDER = [
   { file: 'nodes-survival.js',  base: dir },
   { file: 'nodes-attack.js',    base: dir },
   { file: 'nodes-objective.js', base: dir },
-  { file: 'nodes-movement.js',  base: dir },
+  { file: 'nodes-movement-v2.js', base: dir },
   // 编排 & 入口
   { file: 'tree-factory.js',    base: dir },
   { file: 'entry.js',           base: dir },

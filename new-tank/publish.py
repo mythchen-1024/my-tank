@@ -34,22 +34,15 @@ BASE_URL = "https://agentank.ai"
 # 坦克档案：每档案绑定 key / 默认文件 / 默认分支 / 构建命令 / 署名。
 # build_cmd 为 None 表示单文件无需构建。
 TANK_PROFILES = {
-    "ranked": {  # 默认：排名 1v1 坦克(技能 shield)，行为与改造前完全一致
-        "key": "agtk_4b1cdd58062b79c270f0983872acaeddac07",
-        "file": "my-tank/new-tank/bt-tank-submit.js",
+    "bt": {  # 默认：行为树坦克 myth-tank004
+        "key": "agtk_809791b19e14b43702200b261e612b0e9b47",
+        "file": "bt-tank-submit.js",
         "branch": "main",
-        "build_cmd": ["node", "my-tank/build.js"],
-        "submitted_by": "Claude",
-    },
-    "survivor": {  # 出击/生存坦克(技能 freeze, id 3083)，默认发到 raid(出击)分支
-        "key": "agtk_cce872653e5d5b90f76db3ac370a2d2809b6",
-        "file": "my-tank/myth-survivor/survivor-tank.js",
-        "branch": "raid",
-        "build_cmd": None,
+        "build_cmd": ["node", "build.js"],
         "submitted_by": "Claude",
     },
 }
-DEFAULT_TANK = "ranked"
+DEFAULT_TANK = "bt"
 
 
 def get_tank_key(profile):

@@ -55,6 +55,14 @@ function createHardSurvivalTree() {
         bbMoveToward(bb, senseDesperateDodge(bb));
       })
     ]),
+
+    // 6. 炸弹躲避：在爆炸范围内且即将引爆时逃离
+    Sequence('bomb-dodge', [
+      Guard('has-bomb-threat', function (bb) { return !!senseBombThreat(bb); }),
+      Action('do-bomb-dodge', function (bb) {
+        bbMoveToward(bb, senseBombThreat(bb));
+      })
+    ]),
   ]);
 }
 

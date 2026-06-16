@@ -72,10 +72,12 @@ function refreshBlackboard(bb, me, enemy, game) {
   bb.enemyPos = bb.enemyTank ? bb.enemyTank.position : null;
   bb.enemyBullets = collectEnemyBullets(enemy);
   bb.star = game.star;
+  bb.bombs = (game && game.bombs) || [];
 
   // ── 廉价派生感知（每帧必算，O(1)） ──
   bb.gunIsReady = gunReady(me);
   bb.teleportIsReady = teleportReady(me);
+  bb.bombIsReady = bombReady(me);
   bb.shotDir = bb.enemyPos ? clearShotDirection(bb.myPos, bb.enemyPos, game) : null;
   bb.distToEnemy = bb.enemyPos ? manhattan(bb.myPos, bb.enemyPos) : 999;
   bb.distToStar = bb.star ? manhattan(bb.myPos, bb.star) : 999;
@@ -96,6 +98,14 @@ function refreshBlackboard(bb, me, enemy, game) {
   recordAssassinOutcome(bb.memory, enemy, bb.enemyTank, game);
   trackEnemy(bb.memory, bb.enemyTank, bb.myPos, game);
   trackStuck(bb.memory, bb.myPos);
+  cleanExpiredBombs(bb.memory, bb.frame);
+  // 幽灵弹补偿：推算视锥外不可见的子弹位置（必须在 memory 初始化之后）
+  var phantoms = updatePhantomBullets(bb.memory, bb.enemyBullets, game);
+  for (var i = 0; i < phantoms.length; i++) bb.enemyBullets.push(phantoms[i]);
+  // 合并自己的炸弹到 bombs 列表（用于自炸检查）
+  for (var i = 0; i < (bb.memory.myBombs || []).length; i++) {
+    bb.bombs.push(bb.memory.myBombs[i]);
+  }
 }
 
 // ============================================================
@@ -232,6 +242,32 @@ function senseDigDirection(bb) {
   });
 }
 
+// ---- 炸弹传感器 ----
+
+function senseBombThreat(bb) {
+  return sense(bb, 'bombThreat', function () {
+    return findBombDodge(bb.myPos, bb.bombs, bb.game, bb.enemyPos, bb.enemyBullets, bb.frame);
+  });
+}
+
+function senseRetreatBomb(bb) {
+  return sense(bb, 'retreatBomb', function () {
+    return findRetreatBomb(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory, bb.frame);
+  });
+}
+
+function senseStarBomb(bb) {
+  return sense(bb, 'starBomb', function () {
+    return findStarBomb(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory, bb.frame);
+  });
+}
+
+function senseBushBomb(bb) {
+  return sense(bb, 'bushBomb', function () {
+    return findBushBomb(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory, bb.frame);
+  });
+}
+
 // ============================================================
 // 动作包装器（统一从 bb 取参数，简化节点代码）
 // ============================================================
@@ -250,6 +286,14 @@ function bbMoveToward(bb, target) {
 
 function bbTurnToward(bb, dir) {
   turnToward(bb.me, dir);
+}
+
+function bbThrowBomb(bb) {
+  bb.me.throwBomb();
+  bb.memory.myBombs.push({
+    position: bb.myPos.slice(),
+    detonateFrame: bb.frame + BOMB_FUSE_FRAMES
+  });
 }
 
 function bbSpeak(bb, msg) {

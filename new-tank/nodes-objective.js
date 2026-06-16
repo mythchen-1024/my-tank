@@ -57,13 +57,16 @@ function createObjectiveTree(profile) {
       }),
       Action('do-star-tp', function (bb) {
         var tp = senseStarTeleport(bb);
-        // 传送前先转好朝向（落地朝向不变）
         var faceDir = teleportPreTurnDir(bb.me, tp, bb.enemy, bb.enemyTank, bb.game);
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);
         } else {
           bbSpeak(bb, '传星!');
           bbTeleport(bb, tp);
+          // 传送削弱：落星旁需补吃，标记高优先级补吃意图
+          if (bb.star) {
+            bb.memory.pendingStarGrab = { target: bb.star.slice(), frame: bb.frame, ttl: 3 };
+          }
         }
       })
     ])
@@ -104,4 +107,25 @@ function createObjectiveTree(profile) {
   }
 
   return Selector('objective', children);
+}
+
+// ---- 传送补吃星节点（独立于 objective 子树，挂载在根节点硬生存之后） ----
+
+function createStarGrabNode() {
+  return Sequence('star-grab', [
+    Guard('has-pending-grab', function (bb) {
+      var g = bb.memory.pendingStarGrab;
+      if (!g) return false;
+      if (bb.frame - g.frame > g.ttl) { bb.memory.pendingStarGrab = null; return false; }
+      if (!bb.star || !samePos(bb.star, g.target)) { bb.memory.pendingStarGrab = null; return false; }
+      if (samePos(bb.myPos, bb.star)) { bb.memory.pendingStarGrab = null; return false; }
+      return true;
+    }),
+    Guard('star-reachable', function (bb) {
+      return manhattan(bb.myPos, bb.star) <= 2;
+    }),
+    Action('do-star-grab', function (bb) {
+      bbDirectGo(bb, bb.star);
+    })
+  ]);
 }

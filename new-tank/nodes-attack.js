@@ -133,3 +133,46 @@ function createAttackTree(profile) {
 
   return Selector('attack', children);
 }
+
+// ============================================================
+// 主动放弹行为节点
+// ============================================================
+
+function createBombNodes(profile) {
+  var children = [];
+
+  // 1. 堵路炸弹：敌在身后追来，放弹堵路后跑
+  children.push(
+    Sequence('retreat-bomb', [
+      Guard('has-retreat-bomb', function (bb) { return !!senseRetreatBomb(bb); }),
+      Action('do-retreat-bomb', function (bb) {
+        bbSpeak(bb, '堵路!');
+        bbThrowBomb(bb);
+      })
+    ])
+  );
+
+  // 2. 抢星封路：星附近放弹封锁敌人来路
+  children.push(
+    Sequence('star-bomb', [
+      Guard('has-star-bomb', function (bb) { return !!senseStarBomb(bb); }),
+      Action('do-star-bomb', function (bb) {
+        bbSpeak(bb, '封路!');
+        bbThrowBomb(bb);
+      })
+    ])
+  );
+
+  // 3. 草丛陷阱：蹲草时放弹阴人
+  children.push(
+    Sequence('bush-bomb', [
+      Guard('has-bush-bomb', function (bb) { return !!senseBushBomb(bb); }),
+      Action('do-bush-bomb', function (bb) {
+        bbSpeak(bb, '陷阱!');
+        bbThrowBomb(bb);
+      })
+    ])
+  );
+
+  return Selector('bomb-attack', children);
+}
