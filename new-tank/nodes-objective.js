@@ -124,6 +124,7 @@ function createObjectiveTree(profile) {
   if (profile.enableAssassination) {
     children.push(
       Sequence('assassination', [
+        Guard('no-star', function (bb) { return !bb.star; }),
         Guard('has-assassination', function (bb) { return !!senseAssassination(bb); }),
         Action('do-assassination', function (bb) {
           var plan = senseAssassination(bb);
