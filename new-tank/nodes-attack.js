@@ -40,6 +40,22 @@ function createAttackTree(profile) {
     );
   }
 
+  // 骗盾预瞄：敌盾激活 + 有射线 + 近距 → 不开火但转向对准（盾落即射）
+  if (profile.shieldBait) {
+    children.push(
+      Sequence('shield-preaim', [
+        Guard('enemy-shielded', function (bb) {
+          return !!(bb.enemyTank && bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
+        }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= 3; }),
+        Action('do-shield-preaim', function (bb) {
+          if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+  }
+
   // 直射：同线无障碍 + 可开火
   if (profile.attackAggression !== 'low') {
     children.push(

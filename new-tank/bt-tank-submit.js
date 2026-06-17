@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-17T05:48:19.345Z
+// 构建时间: 2026-06-17T15:06:54.704Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -4700,6 +4700,22 @@ function createAttackTree(profile) {
     );
   }
 
+  // 骗盾预瞄：敌盾激活 + 有射线 + 近距 → 不开火但转向对准（盾落即射）
+  if (profile.shieldBait) {
+    children.push(
+      Sequence('shield-preaim', [
+        Guard('enemy-shielded', function (bb) {
+          return !!(bb.enemyTank && bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
+        }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= 3; }),
+        Action('do-shield-preaim', function (bb) {
+          if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+  }
+
   // 直射：同线无障碍 + 可开火
   if (profile.attackAggression !== 'low') {
     children.push(
@@ -5085,9 +5101,8 @@ function createMovementTree(profile) {
           if (!bb.star) return true;
           // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
           if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
-          // 星不在炮线但敌人近星：出草传星会暴露自己
-          return !!bb.enemyPos && bb.distToEnemy <= 8 &&
-            manhattan(bb.enemyPos, bb.star) <= 6;
+          // 星不在炮线但敌人近星（≤8步可达）：出草传星会暴露自己
+          return !!bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8;
         }),
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
         Guard('bush-safe', function (bb) {
