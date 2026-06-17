@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-16T11:50:40.482Z
+// 构建时间: 2026-06-17T05:48:19.345Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1215,7 +1215,8 @@ function directShotNotSuicidal(me, enemy, enemyTank, enemyBullets, game, enemyPo
     if (!isPassable(game, p, enemyPos)) continue;
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue;
-    const escapeFrames = d.name === me.tank.direction ? 1 : 2;
+    const td = turnDistance(me.tank.direction, d.name);
+    const escapeFrames = td === 0 ? 1 : td + 1;
     if (escapeFrames <= enemyDuel) return true; // 开火占本帧，下帧能在敌弹到达前离线
   }
   return false;
@@ -1697,7 +1698,7 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
 
   // 终局帧数博弈：临近 128 帧结束时，按星数判胜负。若走路来不及吃星(walkDist>剩余帧)，但传送+剩余帧内
   // 敌人即使立刻开火也打不到我(剩余帧 < 敌开火命中所需帧)，则大胆传送抢星锁分——哪怕落点在敌炮线。
-  const endgameGrab = endgameStarTeleport(me, enemy, enemyTank, game, walkDist);
+  const endgameGrab = endgameStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist);
   if (endgameGrab) return endgameGrab;
 
   // 过载敌人：仅当对方 overload 冷却 <= 10 帧（即将放双弹）时才保留传送做逃生，
@@ -1896,7 +1897,7 @@ function teleportPreTurnDir(me, landing, enemy, enemyTank, game) {
  * 就传送抢星锁定星数胜负（超时按星数判）。子弹2格/帧：敌最快命中我需 1(传送占帧,敌下帧响应)+敌转向(0或1)+ceil(dist/2)。
  * 剩余帧 < 该命中帧 -> 终局前打不到我 -> 安全抢星，哪怕落点在敌炮线。落点本身必须可站(不卡墙/不接现有子弹)。
  */
-function endgameStarTeleport(me, enemy, enemyTank, game, walkDist) {
+function endgameStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist) {
   const frame = (game && game.frames) || 0;
   const framesLeft = MAX_GAME_FRAMES - frame;
   if (framesLeft <= 0) return null;
@@ -2126,9 +2127,11 @@ function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
     if (!doubleLane && !overloadType) return false;
   }
   // 普通敌人：贴近 3 格内即死区（转向就被追上）。
-  // overload 流在“后撤且确实拉开距离”时，允许先退一步再交给下一帧继续评估，避免太近时直接卡死。
+  // overload 流在”后撤且确实拉开距离”时，允许先退一步再交给下一帧继续评估，避免太近时直接卡死。
+  // 但后撤豁免不能覆盖”next 仍在敌方直射线上”的情况——敌此刻已对准，退一步照样被秒。
   if (d <= 3) {
-    if (overloadType && manhattan(next, enemyPos) > manhattan(myPos, enemyPos)) return false;
+    if (overloadType && manhattan(next, enemyPos) > manhattan(myPos, enemyPos) &&
+        !clearShotDirection(enemyPos, next, game)) return false;
     return true;
   }
   // 双弹威胁敌人：同行/列或相邻±1行/列内 d<=4 是死区；纯对角(无直射线)放行，
@@ -2628,6 +2631,11 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
 function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank) return null;
   if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
+  // 隐身豁免：草丛中敌人看不见我，炮口朝向不是真正的瞄准，无需空躲。
+  // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
+  const enemyOverloadActive = enemy && enemy.status && enemy.status.overloaded;
+  const tooClose = enemyPos && manhattan(me.tank.position, enemyPos) <= 3;
+  if (iAmHidden(me, game) && !enemyOverloadActive && !tooClose && !(enemy && enemy.bullet && enemy.bullet.position)) return null;
   // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
   if (!enemyCanFireSoon(enemy)) return null;
   // 抢星竞速豁免：敌人只是预瞄、没有实弹在途时，若这颗星我更可能先到，则继续抢星不空躲
@@ -2663,11 +2671,11 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     if (predictedOverloadThreatens(enemy, p, game)) continue;      // 别躲进过载双弹覆盖带
 
     const needTurn = d.name !== me.tank.direction;
-    // 时序铁律（防摇摆送死，mat 复盘）：当前朝向即脱离方向 -> 本帧 go 一步离线，最快、必接受。
-    // 需先转向 -> 转身占 1 帧(人仍在原格)、第 2 帧才移动；只有敌弹这帧打不到我(escapeFrames<enemyHitFrames)
-    // 才来得及，否则返回这种格只会让我站着转身被抢先开火、且每帧 best 翻面横跳。来不及就别给侧格，
-    // 返回 null 让位硬闸门(传送逃生/绝境横移)——那才是真来不及时的正确兜底。
-    const escapeFrames = needTurn ? 2 : 1;
+    // 时序铁律：当前朝向即脱离方向 -> 1 帧 go 离线，最快。
+    // 需转向：实际转向帧 = turnDistance(当前, 目标方向)，共需 turns+1 帧(含最后走步)。
+    // 反向(如 DOWN→UP, turns=2)需 3 帧，旧代码误算为 2 帧导致以为能逃实则来不及。
+    const turns = needTurn ? turnDistance(me.tank.direction, d.name) : 0;
+    const escapeFrames = turns === 0 ? 1 : turns + 1;
     if (needTurn && escapeFrames >= enemyHitFrames) continue;
 
     // 偏好当前朝向就能直接走的格子（1 帧脱离，最快）
@@ -2728,6 +2736,11 @@ function shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game) {
  */
 function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
+  // 隐身豁免：草丛中敌人看不见我，同线威胁不成立，无需规避。
+  // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
+  const enemyOverloadActive = enemy && enemy.status && enemy.status.overloaded;
+  const tooClose = enemyPos && manhattan(me.tank.position, enemyPos) <= 3;
+  if (iAmHidden(me, game) && !enemyOverloadActive && !tooClose && !(enemy && enemy.bullet && enemy.bullet.position)) return null;
   if (!enemyCanFireSoon(enemy)) return null; // 敌人开不了火，无近距威胁
   // M3: overload 冷却中且场上无己弹 = 空窗期，炮管实际是空的，不算"能立刻开火"的近距威胁，
   // 允许回敬（mat_Lwm4：对方双弹耗尽后我仍一路侧移躲避，最后被单发打死）。
@@ -2777,10 +2790,12 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     if (!isPassable(game, p, enemyPos)) continue;
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue; // 别躲进现有弹道
     if (enemyAimsAt(p, enemyTank, game)) continue;                 // 也别进另一条炮线
-    const escapeFrames = d.name === me.tank.direction ? 1 : 2;
-    // 能否在中弹前离线：朝向即侧向可本帧直接 go 离线(必活)；需先转向(2帧)则要求敌命中更晚。
+    const turns2 = turnDistance(me.tank.direction, d.name);
+    const escapeFrames = turns2 === 0 ? 1 : turns2 + 1;
+    // 能否在中弹前离线：朝向即侧向可本帧直接 go 离线(必活)；需转向则要求敌命中更晚。
+    // 修正：原 needTurn?2:1 对反向(turns=2)低估1帧，导致坦克来不及脱线时仍尝试转向。
     const safe = escapeFrames === 1 || escapeFrames < enemyDuel;
-    if (!safe) continue; // 来不及离线，侧移反而白送（应转为对射/换血）
+    if (!safe) continue;
     // 偏好当前朝向就能直接走的方向（1 帧脱离），其次保持反击角度，再次远离边缘
     const facing = d.name === me.tank.direction ? 100 : 0;
     // 侧移后仍能直射敌人(如侧方恰好同行/列)→ 保留反击机会，不白跑
@@ -2825,13 +2840,21 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
 function findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;
-  // 必须有敌方子弹在场（炮管空了）
   const eb = enemy && enemy.bullet;
-  if (!eb || !eb.position) return null;
-  // 子弹不朝我（朝我的交给躲避逻辑，这里只处理"子弹打别处"的窗口）
-  const bulletThreatensMe = bulletThreatens(eb, me.tank.position, game);
-  if (bulletThreatensMe) return null;
-  // 过载流握双弹时不进：场上那发可能是双弹之一
+  const hasBulletInFlight = eb && eb.position;
+  // 空窗期判定：
+  //   A) 场上有敌弹但不朝我（朝我的交给躲避逻辑）
+  //   B) overload 技能冷却中且场上无子弹（双弹耗尽，炮管实际为空）
+  const overloadCooling = enemyIsOverloadType(enemy) &&
+    !(enemy.status && enemy.status.overloaded) &&
+    (enemy.skill && typeof enemy.skill.remainingCooldownFrames === 'number' && enemy.skill.remainingCooldownFrames > 0) &&
+    !hasBulletInFlight;
+  if (!hasBulletInFlight && !overloadCooling) return null;
+  if (hasBulletInFlight) {
+    const bulletThreatensMe = bulletThreatens(eb, me.tank.position, game);
+    if (bulletThreatensMe) return null;
+  }
+  // 过载流握双弹时不进：场上有弹且过载激活，可能还有第二发
   if (enemyDoubleLaneThreat(enemy)) return null;
   // shield 流不进（开盾吃掉我这发）
   if (enemyHasShieldSkill(enemy)) return null;
@@ -2843,7 +2866,7 @@ function findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemy
   // 距离合理（太远的不值得浪费一炮）
   const d = manhattan(me.tank.position, enemyPos);
   if (d > 10) return null;
-  return shotDir; // 返回应该朝的方向
+  return shotDir;
 }
 
 
@@ -2943,11 +2966,15 @@ function findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, st
   const myPos = me.tank.position;
   if (anyBulletThreatens(enemyBullets || [], myPos, game)) return null;
 
-  // B) 草丛伏击：我在草丛、敌可见同线近距 -> 开火
+  // B) 草丛伏击：我在草丛、敌可见近距 -> 已在同线则开火；未同线则预判下一步
   const iAmInBush = me.status && me.status.cloaked || tileAt(game, myPos) === "o";
-  if (iAmInBush && enemyTank && enemyPos && manhattan(myPos, enemyPos) <= 3) {
+  if (iAmInBush && enemyTank && enemyPos && manhattan(myPos, enemyPos) <= 4) {
+    // 敌当前已在炮线上
     const dir = clearShotDirection(myPos, enemyPos, game);
     if (dir) return me.tank.direction === dir ? { fire: true } : { dir: dir };
+    // 敌下一步将进入炮线（canPreemptiveShot：敌沿当前方向走一步后与我同线）
+    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
+    if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
   }
 
   // A) 防伏击预射：敌不可见(草丛或cloak隐身)、最后位置与我同线、近距、视线清晰 -> 朝该线预射
@@ -3095,8 +3122,7 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
     var enemyToStar = manhattan(enemyPos, game.star);
     if (enemyToStar <= 5) return null;
   }
-  // 敌人可见时不蹲人（它看得见我传送，没有伏击效果）
-  if (enemyTank) return null;
+  // 敌人可见时：只要距星 > 5 步，传送蹲人仍有价值（开局距离远时尤其如此）
 
   var w = game.map.length, h = game.map[0].length;
   var best = null, bestScore = -9999;
@@ -4872,8 +4898,11 @@ function createObjectiveTree(profile) {
     Sequence('star-bush-ambush', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
-      Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
-      Guard('enemy-not-visible', function (bb) { return !bb.enemyTank; }),
+      // 不要求枪立刻就绪——传送后等几帧枪也会好，不应因此跳过伏击
+      // 敌人不可见，或可见但距星 > 5（传送到草丛后仍有时间蹲守）
+      Guard('enemy-far-from-star', function (bb) {
+        return !bb.enemyTank || manhattan(bb.enemyPos, bb.star) > 5;
+      }),
       Guard('not-losing-badly', function (bb) {
         return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
       }),
@@ -4882,6 +4911,11 @@ function createObjectiveTree(profile) {
       Action('do-star-ambush', function (bb) {
         var pos = senseStarBushAmbush(bb);
         var faceDir = clearShotDirection(pos, bb.star, bb.game);
+        // 枪未就绪：先转向对准射击线等待，下帧枪好后再传送
+        if (!bb.gunIsReady) {
+          if (faceDir && bb.myDir !== faceDir) bbTurnToward(bb, faceDir);
+          return;
+        }
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);
         } else {
@@ -5010,7 +5044,7 @@ function createMovementTree(profile) {
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;
         if (!a) return false;
-        if (bb.frame - a.frame > 10) { bb.memory.ambushState = null; return false; }
+        if (bb.frame - a.frame > 15) { bb.memory.ambushState = null; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),
@@ -5037,20 +5071,48 @@ function createMovementTree(profile) {
     ])
   );
 
-  // ---- 蹲草等星（对 overload 双弹流 + 无星 + 我在草丛 + 有传送） ----
+  // ---- 蹲草等星（对 overload 双弹流 + 无星/可利用星诱敌 + 我在草丛） ----
+  // 注意：不要求传送就绪——无星时原地藏着比暴露在外更安全，传送冷却中也应坚守
+  // 有星时：
+  //   - 星在我炮线上（与我同行/同列视线清晰）→ 敌人来追星必经我的射程，蹲守价值最高
+  //   - 星不在炮线但敌人距星 ≤ 6 → 出草传星会暴露自己，继续蹲守更安全
+  //   - 其他情况 → 出草追星
   if (profile.bushCamp) {
     children.push(
       Sequence('bush-hold', [
         Guard('is-overload-enemy', function (bb) { return enemyIsOverloadType(bb.enemy); }),
-        Guard('no-star', function (bb) { return !bb.star; }),
+        Guard('no-star-or-star-bait', function (bb) {
+          if (!bb.star) return true;
+          // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
+          if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
+          // 星不在炮线但敌人近星：出草传星会暴露自己
+          return !!bb.enemyPos && bb.distToEnemy <= 8 &&
+            manhattan(bb.enemyPos, bb.star) <= 6;
+        }),
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
-        Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
         Guard('bush-safe', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game) &&
-            (!bb.enemyPos || bb.distToEnemy >= 3) &&
-            (!bb.enemyTank || !enemyAimsAt(bb.myPos, bb.enemyTank, bb.game));
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (!bb.enemyPos) return true;
+          // 敌人对准我时需保持距离（近距逃不掉）
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game)) return bb.distToEnemy >= 3;
+          // 敌人未对准我：允许近距蹲守伏击（action 层负责开枪或预瞄）
+          return true;
         }),
         Action('do-bush-hold', function (bb) {
+          // 草丛伏击：不受 attackAggression 限制
+          if (bb.gunIsReady && bb.enemyTank) {
+            // 敌已在炮线上
+            if (bb.shotDir) {
+              if (bb.myDir === bb.shotDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
+              bbTurnToward(bb, bb.shotDir); return;
+            }
+            // 敌下一步将进入炮线：提前转向等待
+            var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+            if (preDir) {
+              if (bb.myDir === preDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
+              bbTurnToward(bb, preDir); return;
+            }
+          }
           primeShortIntent(bb.memory, 'hold', bb.myPos, bb.frame, 3);
           bbSpeak(bb, '蹲草');
         })
@@ -5201,6 +5263,10 @@ function createMovementTree(profile) {
         Guard('overload-enemy', function (bb) { return enemyIsOverloadType(bb.enemy); }),
         Guard('no-star', function (bb) { return !bb.star; }),
         Guard('not-hidden', function (bb) { return !iAmHidden(bb.me, bb.game); }),
+        // 敌人贴近时（≤ 3 格）不去奔草，移动本身会暴露在炮线上，交 maintain-standoff 处理
+        Guard('enemy-not-too-close', function (bb) {
+          return !bb.enemyPos || bb.distToEnemy > 3;
+        }),
         Guard('bush-step', function (bb) {
           var standoff = safeStandoffDistance(bb.enemy);
           var step = nextStepToSafeBush(bb.me, bb.enemy, bb.game, bb.enemyPos, standoff, bb.enemyBullets);

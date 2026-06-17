@@ -17,7 +17,7 @@ function createMovementTree(profile) {
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;
         if (!a) return false;
-        if (bb.frame - a.frame > 10) { bb.memory.ambushState = null; return false; }
+        if (bb.frame - a.frame > 15) { bb.memory.ambushState = null; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),
@@ -44,20 +44,48 @@ function createMovementTree(profile) {
     ])
   );
 
-  // ---- 蹲草等星（对 overload 双弹流 + 无星 + 我在草丛 + 有传送） ----
+  // ---- 蹲草等星（对 overload 双弹流 + 无星/可利用星诱敌 + 我在草丛） ----
+  // 注意：不要求传送就绪——无星时原地藏着比暴露在外更安全，传送冷却中也应坚守
+  // 有星时：
+  //   - 星在我炮线上（与我同行/同列视线清晰）→ 敌人来追星必经我的射程，蹲守价值最高
+  //   - 星不在炮线但敌人距星 ≤ 6 → 出草传星会暴露自己，继续蹲守更安全
+  //   - 其他情况 → 出草追星
   if (profile.bushCamp) {
     children.push(
       Sequence('bush-hold', [
         Guard('is-overload-enemy', function (bb) { return enemyIsOverloadType(bb.enemy); }),
-        Guard('no-star', function (bb) { return !bb.star; }),
+        Guard('no-star-or-star-bait', function (bb) {
+          if (!bb.star) return true;
+          // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
+          if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
+          // 星不在炮线但敌人近星：出草传星会暴露自己
+          return !!bb.enemyPos && bb.distToEnemy <= 8 &&
+            manhattan(bb.enemyPos, bb.star) <= 6;
+        }),
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
-        Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
         Guard('bush-safe', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game) &&
-            (!bb.enemyPos || bb.distToEnemy >= 3) &&
-            (!bb.enemyTank || !enemyAimsAt(bb.myPos, bb.enemyTank, bb.game));
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (!bb.enemyPos) return true;
+          // 敌人对准我时需保持距离（近距逃不掉）
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game)) return bb.distToEnemy >= 3;
+          // 敌人未对准我：允许近距蹲守伏击（action 层负责开枪或预瞄）
+          return true;
         }),
         Action('do-bush-hold', function (bb) {
+          // 草丛伏击：不受 attackAggression 限制
+          if (bb.gunIsReady && bb.enemyTank) {
+            // 敌已在炮线上
+            if (bb.shotDir) {
+              if (bb.myDir === bb.shotDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
+              bbTurnToward(bb, bb.shotDir); return;
+            }
+            // 敌下一步将进入炮线：提前转向等待
+            var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+            if (preDir) {
+              if (bb.myDir === preDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
+              bbTurnToward(bb, preDir); return;
+            }
+          }
           primeShortIntent(bb.memory, 'hold', bb.myPos, bb.frame, 3);
           bbSpeak(bb, '蹲草');
         })
@@ -208,6 +236,10 @@ function createMovementTree(profile) {
         Guard('overload-enemy', function (bb) { return enemyIsOverloadType(bb.enemy); }),
         Guard('no-star', function (bb) { return !bb.star; }),
         Guard('not-hidden', function (bb) { return !iAmHidden(bb.me, bb.game); }),
+        // 敌人贴近时（≤ 3 格）不去奔草，移动本身会暴露在炮线上，交 maintain-standoff 处理
+        Guard('enemy-not-too-close', function (bb) {
+          return !bb.enemyPos || bb.distToEnemy > 3;
+        }),
         Guard('bush-step', function (bb) {
           var standoff = safeStandoffDistance(bb.enemy);
           var step = nextStepToSafeBush(bb.me, bb.enemy, bb.game, bb.enemyPos, standoff, bb.enemyBullets);
