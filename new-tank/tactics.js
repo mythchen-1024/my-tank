@@ -1555,9 +1555,13 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
   // 隐身豁免：草丛中敌人看不见我，炮口朝向不是真正的瞄准，无需空躲。
   // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
+  // 近距反豁免的例外：枪就绪 + 有射击线 → 草丛先手优势，应射击而非出草逃跑
   const enemyOverloadActive = enemy && enemy.status && enemy.status.overloaded;
   const tooClose = enemyPos && manhattan(me.tank.position, enemyPos) <= 3;
-  if (iAmHidden(me, game) && !enemyOverloadActive && !tooClose && !(enemy && enemy.bullet && enemy.bullet.position)) return null;
+  if (iAmHidden(me, game) && !enemyOverloadActive && !(enemy && enemy.bullet && enemy.bullet.position)) {
+    if (!tooClose) return null;
+    if (gunReady(me) && clearShotDirection(me.tank.position, enemyPos, game)) return null;
+  }
   // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
   if (!enemyCanFireSoon(enemy)) return null;
   // 抢星竞速豁免：敌人只是预瞄、没有实弹在途时，若这颗星我更可能先到，则继续抢星不空躲
@@ -1660,9 +1664,13 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   // 隐身豁免：草丛中敌人看不见我，同线威胁不成立，无需规避。
   // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
+  // 近距反豁免的例外：枪就绪 + 有射击线 → 草丛先手优势，应射击而非出草逃跑
   const enemyOverloadActive = enemy && enemy.status && enemy.status.overloaded;
   const tooClose = enemyPos && manhattan(me.tank.position, enemyPos) <= 3;
-  if (iAmHidden(me, game) && !enemyOverloadActive && !tooClose && !(enemy && enemy.bullet && enemy.bullet.position)) return null;
+  if (iAmHidden(me, game) && !enemyOverloadActive && !(enemy && enemy.bullet && enemy.bullet.position)) {
+    if (!tooClose) return null;
+    if (gunReady(me) && clearShotDirection(me.tank.position, enemyPos, game)) return null;
+  }
   if (!enemyCanFireSoon(enemy)) return null; // 敌人开不了火，无近距威胁
   // M3: overload 冷却中且场上无己弹 = 空窗期，炮管实际是空的，不算"能立刻开火"的近距威胁，
   // 允许回敬（mat_Lwm4：对方双弹耗尽后我仍一路侧移躲避，最后被单发打死）。
@@ -1838,12 +1846,14 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
   if (!shotDir || bulletDist === 0 || enemySteps === 0) return null;
   if (bulletDist > 7 || enemySteps > 7) return null;
 
-  var bulletFrames = Math.ceil(bulletDist / BULLET_SPEED);
+  // 子弹到达交叉点的帧数：子弹每帧走2格，fire frame 内就开始移动
+  // 距离D的格子在 fire + floor((D-1)/2) 帧被经过
   var turnFrames = turnDistance(myDir, shotDir);
-  var totalBulletFrames = turnFrames + bulletFrames;
+  var bulletArrival = turnFrames + Math.floor((bulletDist - 1) / BULLET_SPEED);
+  // 敌人到达交叉点的帧数：每帧走1格，fire frame 内也移动
+  var enemyArrival = enemySteps - 1;
 
-  if (totalBulletFrames > enemySteps + 1) return null;
-  if (totalBulletFrames < enemySteps - 1) return null;
+  if (bulletArrival !== enemyArrival) return null;
 
   var intersection = (d[1] !== 0)
     ? [ePos[0], myPos[1]]
