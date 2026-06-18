@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T04:51:34.037Z
+// 构建时间: 2026-06-18T04:55:10.197Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -5324,14 +5324,9 @@ function createMovementTree(profile) {
         if (bb.enemyTank && bb.gunIsReady) {
           var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
           if (shotDir) {
-            var dist = manhattan(bb.myPos, bb.enemyPos);
-            var perpendicular = dist >= 4 && isPerpendicularDir(shotDir, bb.enemyTank.direction);
-            if (!perpendicular) {
-              if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
-              else { bbTurnToward(bb, shotDir); }
-              return;
-            }
-            if (bb.myDir !== shotDir) { bbTurnToward(bb, shotDir); return; }
+            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+            else { bbTurnToward(bb, shotDir); }
+            return;
           }
           // 预射击：敌人下一步将进入我的射线
           var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);

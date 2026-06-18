@@ -45,14 +45,9 @@ function createMovementTree(profile) {
         if (bb.enemyTank && bb.gunIsReady) {
           var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
           if (shotDir) {
-            var dist = manhattan(bb.myPos, bb.enemyPos);
-            var perpendicular = dist >= 4 && isPerpendicularDir(shotDir, bb.enemyTank.direction);
-            if (!perpendicular) {
-              if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
-              else { bbTurnToward(bb, shotDir); }
-              return;
-            }
-            if (bb.myDir !== shotDir) { bbTurnToward(bb, shotDir); return; }
+            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+            else { bbTurnToward(bb, shotDir); }
+            return;
           }
           // 预射击：敌人下一步将进入我的射线
           var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
