@@ -2165,3 +2165,45 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
   }
   return best;
 }
+
+
+/**
+ * 伏击扫草：传送后敌人不可见时，逐方向朝星附近草丛开炮扫描。
+ * 返回要射击的方向(dir string)，或 null（无目标/已全部扫完）。
+ *
+ * state.ambushScannedDirs: 已扫过的方向集合，由调用方维护。
+ */
+function findAmbushGrassScan(myPos, myDir, star, game, state) {
+  if (!star || !game || !game.map) return null;
+  var scanned = (state && state.ambushScannedDirs) || {};
+  var allDirs = ['up', 'down', 'left', 'right'];
+  var deltas = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+
+  // 收集每个方向的扫草价值
+  var candidates = [];
+  for (var di = 0; di < allDirs.length; di++) {
+    var dir = allDirs[di];
+    if (scanned[dir]) continue;
+    var d = deltas[dir];
+    // 沿射线方向找第一个草丛格
+    var cx = myPos[0] + d[0], cy = myPos[1] + d[1];
+    var hasGrass = false;
+    var grassDist = 0;
+    while (true) {
+      var t = tileAt(game, [cx, cy]);
+      if (t === 'x') break;
+      if (t === 'o') { hasGrass = true; grassDist = manhattan(myPos, [cx, cy]); break; }
+      cx += d[0]; cy += d[1];
+      if (manhattan(myPos, [cx, cy]) > 10) break;
+    }
+    if (!hasGrass) continue;
+    var grassToStar = manhattan([cx, cy], star);
+    var score = (10 - grassToStar) * 10 + (8 - grassDist) * 5;
+    if (dir === myDir) score += 30;
+    candidates.push({ dir: dir, score: score });
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort(function (a, b) { return b.score - a.score; });
+  return candidates[0].dir;
+}

@@ -71,6 +71,7 @@ function createObjectiveTree(profile) {
           bbSpeak(bb, '伏击!');
           bbTeleport(bb, pos);
           bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame };
+          bb.memory.ambushScannedDirs = {};
         }
       })
     ])

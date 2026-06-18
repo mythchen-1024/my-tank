@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T03:06:52.051Z
+// 构建时间: 2026-06-18T03:59:51.906Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -3289,6 +3289,48 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
 }
 
 
+/**
+ * 伏击扫草：传送后敌人不可见时，逐方向朝星附近草丛开炮扫描。
+ * 返回要射击的方向(dir string)，或 null（无目标/已全部扫完）。
+ *
+ * state.ambushScannedDirs: 已扫过的方向集合，由调用方维护。
+ */
+function findAmbushGrassScan(myPos, myDir, star, game, state) {
+  if (!star || !game || !game.map) return null;
+  var scanned = (state && state.ambushScannedDirs) || {};
+  var allDirs = ['up', 'down', 'left', 'right'];
+  var deltas = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+
+  // 收集每个方向的扫草价值
+  var candidates = [];
+  for (var di = 0; di < allDirs.length; di++) {
+    var dir = allDirs[di];
+    if (scanned[dir]) continue;
+    var d = deltas[dir];
+    // 沿射线方向找第一个草丛格
+    var cx = myPos[0] + d[0], cy = myPos[1] + d[1];
+    var hasGrass = false;
+    var grassDist = 0;
+    while (true) {
+      var t = tileAt(game, [cx, cy]);
+      if (t === 'x') break;
+      if (t === 'o') { hasGrass = true; grassDist = manhattan(myPos, [cx, cy]); break; }
+      cx += d[0]; cy += d[1];
+      if (manhattan(myPos, [cx, cy]) > 10) break;
+    }
+    if (!hasGrass) continue;
+    var grassToStar = manhattan([cx, cy], star);
+    var score = (10 - grassToStar) * 10 + (8 - grassDist) * 5;
+    if (dir === myDir) score += 30;
+    candidates.push({ dir: dir, score: score });
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort(function (a, b) { return b.score - a.score; });
+  return candidates[0].dir;
+}
+
+
 // ===== movement-engine.js =====
 // ============================================================
 // movement-engine.js — 走位策略层
@@ -5120,6 +5162,7 @@ function createObjectiveTree(profile) {
           bbSpeak(bb, '伏击!');
           bbTeleport(bb, pos);
           bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame };
+          bb.memory.ambushScannedDirs = {};
         }
       })
     ])
@@ -5305,6 +5348,21 @@ function createMovementTree(profile) {
               else { bbTurnToward(bb, starLineDir); }
               return;
             }
+          }
+        }
+        // 伏击扫草：敌人不可见 + 伏击刚开始 → 朝草丛开炮扫描
+        if (!bb.enemyTank && bb.gunIsReady && (bb.frame - a.frame) <= 8) {
+          if (!bb.memory.ambushScannedDirs) bb.memory.ambushScannedDirs = {};
+          var scanDir = findAmbushGrassScan(bb.myPos, bb.myDir, a.star, bb.game, bb.memory);
+          if (scanDir) {
+            if (bb.myDir === scanDir) {
+              bbSpeak(bb, '扫草!');
+              bbFire(bb);
+              bb.memory.ambushScannedDirs[scanDir] = true;
+            } else {
+              bbTurnToward(bb, scanDir);
+            }
+            return;
           }
         }
         // 面朝最佳射线方向等待

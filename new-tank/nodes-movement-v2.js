@@ -81,6 +81,21 @@ function createMovementTree(profile) {
             }
           }
         }
+        // 伏击扫草：敌人不可见 + 伏击刚开始 → 朝草丛开炮扫描
+        if (!bb.enemyTank && bb.gunIsReady && (bb.frame - a.frame) <= 8) {
+          if (!bb.memory.ambushScannedDirs) bb.memory.ambushScannedDirs = {};
+          var scanDir = findAmbushGrassScan(bb.myPos, bb.myDir, a.star, bb.game, bb.memory);
+          if (scanDir) {
+            if (bb.myDir === scanDir) {
+              bbSpeak(bb, '扫草!');
+              bbFire(bb);
+              bb.memory.ambushScannedDirs[scanDir] = true;
+            } else {
+              bbTurnToward(bb, scanDir);
+            }
+            return;
+          }
+        }
         // 面朝最佳射线方向等待
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);
