@@ -171,8 +171,14 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
  */
 function trackEnemy(state, enemyTank, myPos, game) {
   if (enemyTank && enemyTank.position) {
+    var prevPos = state.lastEnemyPos;
     state.lastEnemyPos = enemyTank.position.slice();
     state.lastEnemySeenFrame = (game && game.frames) || 0;
+    if (prevPos && samePos(prevPos, enemyTank.position)) {
+      state.enemyStationaryFrames = (state.enemyStationaryFrames || 0) + 1;
+    } else {
+      state.enemyStationaryFrames = 0;
+    }
     if (myPos) {
       const ep = enemyTank.position;
       const dx = ep[0] - myPos[0], dy = ep[1] - myPos[1];

@@ -191,7 +191,7 @@ function senseCloakPreFire(bb) {
 
 function senseGuardLineShot(bb) {
   return sense(bb, 'guardLineShot', function () {
-    return findGuardLineShot(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos);
+    return findGuardLineShot(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos, bb.memory);
   });
 }
 

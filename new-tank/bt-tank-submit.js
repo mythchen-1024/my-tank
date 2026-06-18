@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T02:44:02.279Z
+// 构建时间: 2026-06-18T03:06:52.051Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -2993,10 +2993,10 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
 }
 
 
-function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
-  // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支“没双弹就刚”一致：
+  // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支”没双弹就刚”一致：
   // overload 流但 CD 充裕(手里没双弹)时，同线开火与未同线预转都照常——只在真握弹(已过载/cd<=1)时全关。
   const shieldEnemy = enemyHasShieldSkill(enemy);
   if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
@@ -3007,7 +3007,9 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
 
   const myPos = me.tank.position;
   // 预判开炮：敌人朝我走且1帧后进入炮线（仅非双弹威胁时）
-  if (!enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy)) {
+  // 额外条件：敌人正在移动（非原地转向），否则预判无意义
+  var enemyIsMoving = !state || !state.enemyStationaryFrames || state.enemyStationaryFrames < 2;
+  if (enemyIsMoving && !enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy)) {
     const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
     if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
   }
@@ -3934,8 +3936,14 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
  */
 function trackEnemy(state, enemyTank, myPos, game) {
   if (enemyTank && enemyTank.position) {
+    var prevPos = state.lastEnemyPos;
     state.lastEnemyPos = enemyTank.position.slice();
     state.lastEnemySeenFrame = (game && game.frames) || 0;
+    if (prevPos && samePos(prevPos, enemyTank.position)) {
+      state.enemyStationaryFrames = (state.enemyStationaryFrames || 0) + 1;
+    } else {
+      state.enemyStationaryFrames = 0;
+    }
     if (myPos) {
       const ep = enemyTank.position;
       const dx = ep[0] - myPos[0], dy = ep[1] - myPos[1];
@@ -4292,7 +4300,7 @@ function senseCloakPreFire(bb) {
 
 function senseGuardLineShot(bb) {
   return sense(bb, 'guardLineShot', function () {
-    return findGuardLineShot(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos);
+    return findGuardLineShot(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos, bb.memory);
   });
 }
 
@@ -5239,6 +5247,14 @@ function createMovementTree(profile) {
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
         if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
+        // 敌人比我更快到星且我射线不通 → 放弃伏击去追星
+        if (bb.enemyTank && bb.star) {
+          var myDistToStar = manhattan(bb.myPos, bb.star);
+          var enemyDistToStar = manhattan(bb.enemyPos, bb.star);
+          if (enemyDistToStar <= myDistToStar && !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
+            bb.memory.ambushState = null; return false;
+          }
+        }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),
       Guard('still-safe', function (bb) {

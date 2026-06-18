@@ -1871,10 +1871,10 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
 }
 
 
-function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
+function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
-  // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支“没双弹就刚”一致：
+  // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支”没双弹就刚”一致：
   // overload 流但 CD 充裕(手里没双弹)时，同线开火与未同线预转都照常——只在真握弹(已过载/cd<=1)时全关。
   const shieldEnemy = enemyHasShieldSkill(enemy);
   if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
@@ -1885,7 +1885,9 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
 
   const myPos = me.tank.position;
   // 预判开炮：敌人朝我走且1帧后进入炮线（仅非双弹威胁时）
-  if (!enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy)) {
+  // 额外条件：敌人正在移动（非原地转向），否则预判无意义
+  var enemyIsMoving = !state || !state.enemyStationaryFrames || state.enemyStationaryFrames < 2;
+  if (enemyIsMoving && !enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy)) {
     const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
     if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
   }

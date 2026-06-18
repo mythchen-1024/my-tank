@@ -21,6 +21,14 @@ function createMovementTree(profile) {
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
         if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
+        // 敌人比我更快到星且我射线不通 → 放弃伏击去追星
+        if (bb.enemyTank && bb.star) {
+          var myDistToStar = manhattan(bb.myPos, bb.star);
+          var enemyDistToStar = manhattan(bb.enemyPos, bb.star);
+          if (enemyDistToStar <= myDistToStar && !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
+            bb.memory.ambushState = null; return false;
+          }
+        }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),
       Guard('still-safe', function (bb) {
