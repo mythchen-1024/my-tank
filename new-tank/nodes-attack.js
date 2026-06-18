@@ -26,6 +26,18 @@ function createAttackTree(profile) {
     ])
   );
 
+  // 反推反击：敌全程不可见(蹲草/隐身狙击)，凭敌弹反推锚点反打——同轴净空且开火后还躲得掉才射
+  children.push(
+    Sequence('sniper-counter', [
+      Guard('has-sniper-counter', function (bb) { return !!senseSniperCounter(bb); }),
+      Action('do-sniper-counter', function (bb) {
+        var shot = senseSniperCounter(bb);
+        if (shot.fire) { bbSpeak(bb, '反推!'); bbFire(bb); }
+        else bbTurnToward(bb, shot.dir);
+      })
+    ])
+  );
+
   // cloak 敌刚隐身时预射（仅对隐身流启用）
   if (profile.prefireOnDisappear) {
     children.push(
@@ -177,6 +189,17 @@ function createAttackTree(profile) {
       ])
     );
   }
+
+  // 守望转身（最低优先级）：脱离反推火线后，若锚点不在我前方视锥内，转炮口朝锚点——
+  // 让狙击手后续敌弹能进我 90° 视锥被看到(否则侧后弹永远收不到)。仅无星可抢时做，不抢追星帧。
+  children.push(
+    Sequence('scan-inferred', [
+      Guard('has-scan', function (bb) { return !!senseInferredScan(bb); }),
+      Action('do-scan-inferred', function (bb) {
+        bbTurnToward(bb, senseInferredScan(bb));
+      })
+    ])
+  );
 
   return Selector('attack', children);
 }

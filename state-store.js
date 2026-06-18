@@ -52,6 +52,10 @@ function getMatchState(game) {
       lastChosenType: null,
       phantomBullets: [],
       myBombs: [],
+      inferredEnemy: null,
+      recentFireLines: [],
+      vanishPoint: null,
+      vanishFrame: -999,
     };
   }
   MATCH_STATE.lastFrame = frame;
@@ -170,10 +174,11 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
  * 放宽追星竞争条件——不再等"我比敌更近"才追，直接抢（敌根本不进攻，优先拿分）。
  */
 function trackEnemy(state, enemyTank, myPos, game) {
+  const curFrame = (game && game.frames) || 0;
   if (enemyTank && enemyTank.position) {
     var prevPos = state.lastEnemyPos;
     state.lastEnemyPos = enemyTank.position.slice();
-    state.lastEnemySeenFrame = (game && game.frames) || 0;
+    state.lastEnemySeenFrame = curFrame;
     if (prevPos && samePos(prevPos, enemyTank.position)) {
       state.enemyStationaryFrames = (state.enemyStationaryFrames || 0) + 1;
     } else {
@@ -195,7 +200,108 @@ function trackEnemy(state, enemyTank, myPos, game) {
     }
   } else {
     state.enemyFleeFrames = 0;
+    // 目击敌人"刚消失"（上帧还可见，本帧不可见）→ 记下消失点。敌人钻草/转出视锥后会沿原行/列
+    // 平移一两格来对齐我开火（mat_8L9T87lNESh9yTvg3：f31 现身[6,6]，钻草平移到[6,7]截杀我 y=7 行）。
+    // 落点规避用：把消失点行/列±1 邻域当短期危险带，覆盖它平移对齐的范围。
+    if (state.lastEnemyPos && state.lastEnemySeenFrame === curFrame - 1) {
+      state.vanishPoint = state.lastEnemyPos.slice();
+      state.vanishFrame = curFrame;
+    }
   }
+}
+
+/**
+ * 子弹溯源追踪：敌人整局蹲草/隐身狙击时 enemyTank 恒为 null，trackEnemy 永远不写 lastEnemyPos，
+ * 所有依赖它的避线/反击都不触发（mat_1TyhhQEjQZK4Hlyeu 被白白狙死的根因）。这里补上唯一的信息来源：
+ * 从可见敌弹反推敌人所在火线轴 + 藏身锚点，写入 state.inferredEnemy。
+ *   - 仅在 enemyTank 为 null（敌不可见）时推断，敌可见时用真实 enemyPos，不污染。
+ *   - 跳过 _inferred（过载配对弹是我方推算的，不能当溯源源头）。
+ *   - 超过 DECAY 帧未更新则清空（信息过期，避免凭旧轴乱避/乱打）。
+ */
+function trackBulletOrigin(state, visibleBullets, enemyTank, game) {
+  const frame = (game && game.frames) || 0;
+  const DECAY = 10;
+  // 敌可见：不依赖反推，清掉旧推断避免与真实位置冲突
+  if (enemyTank && enemyTank.position) { state.inferredEnemy = null; return; }
+  let best = null;
+  if (visibleBullets) {
+    for (let i = 0; i < visibleBullets.length; i++) {
+      const b = visibleBullets[i];
+      if (!b || b._inferred || !b.position || !b.direction) continue;
+      const traced = traceBulletToAnchor(b, game);
+      if (!traced) continue;
+      // 多发时取锚点离我更近的（更紧迫的威胁）
+      if (!best || (state.lastMyPos &&
+          manhattan(traced.anchor, state.lastMyPos) < manhattan(best.anchor, state.lastMyPos))) {
+        best = traced;
+      }
+    }
+  }
+  if (best) {
+    const prev = state.inferredEnemy;
+    best.seenFrame = frame;
+    best.confidence = (prev && prev.axis === best.axis && prev.line === best.line)
+      ? (prev.confidence || 0) + 1 : 1;
+    state.inferredEnemy = best;
+  } else if (state.inferredEnemy) {
+    // 无新命中：过期则清空
+    if (frame - (state.inferredEnemy.seenFrame || -999) > DECAY) state.inferredEnemy = null;
+  }
+}
+
+/**
+ * 可见敌连射轴记忆：敌可见且坐桩沿某轴连射时，trackBulletOrigin 不写（敌可见就清空 inferredEnemy），
+ * 现有 isSafeStep 只看"此刻可见弹"，敌射完后轴上暂时没弹/敌切新轴时新轴还没弹 → 漏判。
+ * 我抢完星 patrol 一头撞进敌刚连射过的轴被秒（mat_FHkUaoghaom2a8Qo7 / Riftwalker r3 同型死因）。
+ * 这里记下"敌可见时在哪条行/列连过火"，即使此刻无弹也把该轴当危险带，落点规避用。
+ *   - 仅在 enemyTank 可见时记录（不可见交给 inferredEnemy）。
+ *   - 用敌真实位置当锚点（比反推锚点更准）；按 (axis,line) 去重，命中则刷新 seenFrame。
+ *   - 超过 FRESH 帧未续命的轴移除；上限 4 条防膨胀。
+ */
+function trackVisibleFireLines(state, visibleBullets, enemyTank, game) {
+  const frame = (game && game.frames) || 0;
+  const FRESH = 6;
+  if (!state.recentFireLines) state.recentFireLines = [];
+  // 敌不可见：仅做过期清理，不新增（此刻交给 inferredEnemy）
+  if (!(enemyTank && enemyTank.position)) {
+    state.recentFireLines = pruneFireLines(state.recentFireLines, frame, FRESH);
+    return;
+  }
+  const ep = enemyTank.position;
+  if (visibleBullets) {
+    for (let i = 0; i < visibleBullets.length; i++) {
+      const b = visibleBullets[i];
+      if (!b || b._inferred || !b.position || !b.direction) continue;
+      const vertical = (b.direction === "up" || b.direction === "down");
+      // 子弹必须真的从敌位置那条轴射出（同行/同列），否则不是这敌人的火线
+      const axis = vertical ? "col" : "row";
+      const line = vertical ? b.position[0] : b.position[1];
+      const enemyOnAxis = vertical ? (ep[0] === line) : (ep[1] === line);
+      if (!enemyOnAxis) continue;
+      let existing = null;
+      for (let j = 0; j < state.recentFireLines.length; j++) {
+        const l = state.recentFireLines[j];
+        if (l.axis === axis && l.line === line) { existing = l; break; }
+      }
+      if (existing) {
+        existing.seenFrame = frame;
+        existing.anchor = ep.slice();
+      } else {
+        state.recentFireLines.push({ axis: axis, line: line, anchor: ep.slice(), seenFrame: frame });
+      }
+    }
+  }
+  state.recentFireLines = pruneFireLines(state.recentFireLines, frame, FRESH);
+}
+
+// 过期清理 + 限长（保留最新的 4 条），供 trackVisibleFireLines 复用。
+function pruneFireLines(lines, frame, fresh) {
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (frame - lines[i].seenFrame <= fresh) kept.push(lines[i]);
+  }
+  kept.sort(function (a, b) { return b.seenFrame - a.seenFrame; });
+  return kept.slice(0, 4);
 }
 
 /**

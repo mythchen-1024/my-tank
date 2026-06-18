@@ -13,6 +13,61 @@
  * 隐身敌人按最后已知位置避让；逼近敌人时停在能开火又留有躲弹余地的距离。
  */
 /**
+ * 落点是否踩在"新鲜反推火线轴"上（敌全程不可见时的假安全修复）。
+ * 追星/巡逻只靠 isSafeStep(看可见弹)会漏判——侧后狙击手的后续弹进不了我视锥，
+ * 但它就守在反推出的那条轴上。step 落在该轴 + 锚点到 step 无遮挡 = 会撞进狙击线。
+ */
+function crossesFreshInferredLine(step, memory, game, frame) {
+  if (!step || !memory) return false;
+  var inf = memory.inferredEnemy;
+  if (!inf || (frame - (inf.seenFrame || -999)) > 8) return false;
+  var onAxis = inf.axis === 'col' ? (step[0] === inf.line) : (step[1] === inf.line);
+  if (!onAxis) return false;
+  return clearBetween(inf.anchor, step, game); // 无遮挡才危险（有墙挡子弹则不算）
+}
+/**
+ * 落点是否踩在"可见敌新鲜连射轴"上。crossesFreshInferredLine 的可见敌版：
+ * 敌可见且坐桩沿某轴连射时，isSafeStep 只看此刻可见弹会漏判（敌射完轴上暂时没弹/切新轴新轴没弹），
+ * 抢完星 patrol 撞进敌刚连射过的轴被秒（mat_FHkUaoghaom2a8Qo7）。memory.recentFireLines 记着这些轴，
+ * 落点踩在某条新鲜轴 + 敌锚点到落点无遮挡 = 会被敌随时再射的连射弹打到。
+ */
+function crossesRecentFireLine(step, memory, game, frame) {
+  if (!step || !memory || !memory.recentFireLines) return false;
+  var lines = memory.recentFireLines;
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i];
+    if ((frame - (l.seenFrame || -999)) > 6) continue;
+    var onAxis = l.axis === 'col' ? (step[0] === l.line) : (step[1] === l.line);
+    if (!onAxis) continue;
+    if (clearBetween(l.anchor, step, game)) return true; // 无遮挡才危险
+  }
+  return false;
+}
+/**
+ * 落点是否踩进"目击敌消失点的行/列±1 邻域"（钻草游走偷袭手的盲区修复）。
+ * crossesRecentFireLine/crossesFreshInferredLine 都要"证据"（看见开火/追到子弹）才记，
+ * 但敌人空手钻进草丛消失时没有证据——它会沿原行/列平移一两格来对齐我再开火
+ * （mat_8L9T87lNESh9yTvg3：现身[6,6]→钻草→平移到[6,7] 沿 y=7 行截杀）。
+ * 把消失点行/列各 ±1 当短期危险带（敌 1 帧 1 格，±1 覆盖钻草后的平移量），
+ * 落点踩进该带 + 对齐到该带的锚点到落点无遮挡 = 会被它平移对齐后一炮打到。避让克制：只挡落点，不绕路。
+ */
+function crossesVanishZone(step, memory, game, frame) {
+  if (!step || !memory) return false;
+  var vp = memory.vanishPoint;
+  if (!vp || (frame - (memory.vanishFrame || -999)) > 6) return false;
+  // 行邻域：step 的 y 落在消失点 y±1，敌可平移到 step 的行来对齐
+  if (Math.abs(step[1] - vp[1]) <= 1) {
+    var rowAnchor = [vp[0], step[1]]; // 敌平移到 step 所在行后的代理位置
+    if (clearBetween(rowAnchor, step, game)) return true;
+  }
+  // 列邻域：step 的 x 落在消失点 x±1
+  if (Math.abs(step[0] - vp[0]) <= 1) {
+    var colAnchor = [step[0], vp[1]];
+    if (clearBetween(colAnchor, step, game)) return true;
+  }
+  return false;
+}
+/**
  * 步伐安全守门：next 格不进死区且不踏入敌能封锁的死胡同。
  * 各分支的死区复检统一走这里，消除重复的 stepEntersKillZone + stepIntoSealedDeadEnd 调用。
  * allowStarDeadEnd：星就在死格里时仍允许进入（不因噎废食）。

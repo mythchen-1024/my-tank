@@ -205,6 +205,14 @@ function createMovementTree(profile) {
       Guard('star-step-safe', function (bb) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
+        // 敌不可见时，落点踩进新鲜反推火线轴也算危险（可见弹扫描漏判侧后狙击）
+        if (!bb.enemyPos && crossesFreshInferredLine(starPath.step, bb.memory, bb.game, bb.frame)) return false;
+        // 敌可见坐桩连射时，落点踩进它刚连射过的轴也算危险（除非落点就是星本身，不因噎废食）
+        if (!samePos(starPath.step, bb.star) &&
+            crossesRecentFireLine(starPath.step, bb.memory, bb.game, bb.frame)) return false;
+        // 目击敌钻草消失：落点踩进消失点行/列±1邻域也危险（敌平移对齐后截杀）。落点是星本身则放行
+        if (!bb.enemyPos && !samePos(starPath.step, bb.star) &&
+            crossesVanishZone(starPath.step, bb.memory, bb.game, bb.frame)) return false;
         return isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
           bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets);
       }),
@@ -372,6 +380,35 @@ function createMovementTree(profile) {
     ])
   );
 
+  // ---- 反推火线逃离：敌全程不可见(蹲草/隐身狙击)，从敌弹反推出的火线轴上逃离 ----
+  // 专治 lastEnemyPos===null 的纯狙击手场景（mat_1TyhhQEjQZK4Hlyeu）。视锥盲区下"没看见≠安全"：
+  // 不要求本帧仍见弹，凭新鲜的反推轴决定避让（侧后续弹本就进不了前方视锥）。
+  children.push(
+    Sequence('escape-inferred-line', [
+      Guard('inferred-line-active', function (bb) {
+        return !!senseInferredAvoid(bb);
+      }),
+      Action('do-escape-inferred-line', function (bb) {
+        bbMoveToward(bb, senseInferredAvoid(bb));
+      })
+    ])
+  );
+
+  // ---- 反推安全逼近：避线优先后，若有安全轨道则走过去反打狙击手；不安全则 FAILURE 落防御 ----
+  children.push(
+    Sequence('sniper-approach', [
+      Guard('has-sniper-approach', function (bb) {
+        var step = senseSniperApproach(bb);
+        if (!step) return false;
+        bb._cache._sniperApproachStep = step;
+        return true;
+      }),
+      Action('do-sniper-approach', function (bb) {
+        bbMoveToward(bb, bb._cache._sniperApproachStep);
+      })
+    ])
+  );
+
   // ---- 巡逻 ----
   children.push(
     Sequence('patrol', [
@@ -380,6 +417,12 @@ function createMovementTree(profile) {
         if (!vt) return false;
         var step = nextStepToward(bb.myPos, vt, bb.game, null);
         if (!step) return false;
+        // 巡逻也别走进新鲜反推火线轴（敌不可见时）
+        if (!bb.enemyPos && crossesFreshInferredLine(step, bb.memory, bb.game, bb.frame)) return false;
+        // 也别走进可见敌刚连射过的轴（抢完星 patrol 撞轴被秒的死因）
+        if (crossesRecentFireLine(step, bb.memory, bb.game, bb.frame)) return false;
+        // 也别走进目击敌钻草消失点的行/列±1邻域（钻草游走偷袭手）
+        if (!bb.enemyPos && crossesVanishZone(step, bb.memory, bb.game, bb.frame)) return false;
         bb._cache._patrolStep = step;
         return true;
       }),

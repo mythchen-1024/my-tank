@@ -98,6 +98,10 @@ function refreshBlackboard(bb, me, enemy, game) {
   recordAssassinOutcome(bb.memory, enemy, bb.enemyTank, game);
   trackEnemy(bb.memory, bb.enemyTank, bb.myPos, game);
   trackStuck(bb.memory, bb.myPos);
+  // 子弹溯源：敌不可见时从可见敌弹反推火线轴+藏身锚点（须在幽灵弹混入前，源头最干净）
+  trackBulletOrigin(bb.memory, bb.enemyBullets, bb.enemyTank, game);
+  // 可见敌连射轴记忆：敌可见坐桩连射时记下火线轴，供落点规避（同样须在幽灵弹混入前，用真实可见弹）
+  trackVisibleFireLines(bb.memory, bb.enemyBullets, bb.enemyTank, game);
   cleanExpiredBombs(bb.memory, bb.frame);
   // 幽灵弹补偿：推算视锥外不可见的子弹位置（必须在 memory 初始化之后）
   var phantoms = updatePhantomBullets(bb.memory, bb.enemyBullets, game);
@@ -189,6 +193,32 @@ function senseCloakPreFire(bb) {
   });
 }
 
+// 反推反击开火：敌全程不可见，凭新鲜反推锚点反打（同轴+净空+开火后还躲得掉）。
+function senseSniperCounter(bb) {
+  return sense(bb, 'sniperCounter', function () {
+    if (bb.enemyPos) return null;
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    return findSniperCounterShot(bb.me, bb.enemy, bb.game, inf, bb.enemyBullets);
+  });
+}
+
+// 守望转身：脱离反推火线后，锚点不在我视锥内时返回朝锚点的转向(让后续敌弹进锥)。
+// 仅无星可抢时触发(不抢追星帧)，且已对准/已在锥内则返回 null(防止原地空转)。
+function senseInferredScan(bb) {
+  return sense(bb, 'inferredScan', function () {
+    if (bb.enemyPos || bb.star) return null;            // 敌可见 或 有星可抢 -> 不做
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    if (inVisionCone(bb.myPos, bb.myDir, inf.anchor)) return null; // 锚点已在视锥，无需转
+    // 朝锚点的主轴方向转炮口
+    var dx = inf.anchor[0] - bb.myPos[0], dy = inf.anchor[1] - bb.myPos[1];
+    var dir = Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
+    if (dir === bb.myDir) return null;                  // 已朝该向
+    return dir;
+  });
+}
+
 function senseGuardLineShot(bb) {
   return sense(bb, 'guardLineShot', function () {
     return findGuardLineShot(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos, bb.memory);
@@ -232,6 +262,39 @@ function senseMoveCandidate(bb) {
 function senseSafeNeighbor(bb) {
   return sense(bb, 'safeNeighbor', function () {
     return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+  });
+}
+
+// 反推火线逃离：敌全程不可见且有新鲜反推轴、我恰在该火线轴上无遮挡时，返回横向脱离步。
+// cloak 流藏身高度不确定 -> 之字斜逃；普通蹲草 -> 横移脱线。无安全步返回 null。
+function senseInferredAvoid(bb) {
+  return sense(bb, 'inferredAvoid', function () {
+    if (bb.enemyPos) return null;                       // 敌可见时交给既有分支
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    // 我是否在反推火线轴上
+    var onAxis = inf.axis === 'col' ? (bb.myPos[0] === inf.line) : (bb.myPos[1] === inf.line);
+    if (!onAxis) return null;
+    if (!clearBetween(inf.anchor, bb.myPos, bb.game)) return null; // 中间有墙 -> 子弹打不到，不必躲
+    var standoff = safeStandoffDistance(bb.enemy);
+    // cloak 流：藏身位置高度不确定，之字斜逃打乱任意直线狙击
+    if (enemyIsCloakType(bb.enemy)) {
+      var zig = diagonalEvadeStep(bb.myPos, inf.anchor, bb.game, bb.memory);
+      if (zig && isSafeStep(zig, bb.myPos, null, bb.game, bb.enemy, standoff, false, bb.enemyBullets)) return zig;
+    }
+    var step = escapeAmbushLine(bb.myPos, inf.anchor, bb.game, bb.enemyBullets);
+    if (step && isSafeStep(step, bb.myPos, null, bb.game, bb.enemy, standoff, false, bb.enemyBullets)) return step;
+    return null;
+  });
+}
+
+// 反推安全逼近：敌全程不可见且有新鲜反推锚点时，找一条走过去能反打的安全轨道下一步。
+function senseSniperApproach(bb) {
+  return sense(bb, 'sniperApproach', function () {
+    if (bb.enemyPos) return null;
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    return findSniperApproachStep(bb.me, bb.game, inf, bb.enemyBullets, bb.enemy);
   });
 }
 

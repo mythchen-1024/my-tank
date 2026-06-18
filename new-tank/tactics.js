@@ -1459,17 +1459,23 @@ function shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, e
   // 先手干净击杀：哪怕开火后自己躲不掉，只要这一炮先反杀敌人(且不锁死平局/不被盾吃)，就先射。
   if (counterShootKillsCleanly(me, enemy, enemyTank, enemyBullets, game, enemyPos)) return true;
 
-  const bullets = enemyBullets || [];
-  const incoming = minBulletFramesTo(bullets, me.tank.position, game);
-  if (incoming < 2) return false; // 子弹 0~1 帧即到，开火占掉本帧必来不及躲，老实躲
+  return canFireThenStillDodge(me.tank.position, me.tank.direction, enemyBullets, game, enemyPos, enemyTank);
+}
 
-  // 时序验算（用户要求）：开火占掉当前帧、子弹随之推进 1 帧(BULLET_SPEED 格)，剩下的就是一个
-  // 全新的"躲子弹"问题。我必朝敌(沿弹道轴)，脱离只能垂直=必先转向一帧再移动，所以唯有
-  // "转向帧+移动帧 < 子弹(含双弹)命中帧"时才躲得掉。直接复用 hasTimedDodge 的时序铁律
-  // (需转向要求剩余 incoming>=3，等价于开火前 incoming>=4)对**推进后的全部子弹**(已含过载配对弹)
-  // 做存在性校验：开火后仍存在来得及的躲位才值得先射，否则白送一发又躲不掉(见用户复盘)。
+
+/**
+ * 反击安全闸（从 shouldCounterShootThenDodge 抽出，反推反击共用）：
+ * 时序铁律——开火占掉当前帧、子弹随之推进 1 帧(BULLET_SPEED 格)，剩下就是个全新"躲子弹"问题。
+ * 我必朝敌(沿弹道轴)，脱离只能垂直=必先转向一帧再移动，所以唯有"转向帧+移动帧 < 子弹命中帧"才躲得掉。
+ * 对推进后的全部子弹(已含过载配对弹)做存在性校验：开火后仍存在来得及的躲位才值得先射。
+ * 反推场景下敌不可见，enemyTank 传 null、enemyPos 传 anchor。
+ */
+function canFireThenStillDodge(myPos, myDir, enemyBullets, game, enemyPos, enemyTank) {
+  const bullets = enemyBullets || [];
+  const incoming = minBulletFramesTo(bullets, myPos, game);
+  if (incoming < 2) return false; // 子弹 0~1 帧即到，开火占掉本帧必来不及躲，老实躲
   const advanced = advanceBullets(bullets, BULLET_SPEED);
-  return hasTimedDodge(me.tank.position, me.tank.direction, advanced, game, enemyPos, enemyTank);
+  return hasTimedDodge(myPos, myDir, advanced, game, enemyPos, enemyTank);
 }
 
 
@@ -2022,6 +2028,54 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
 
   if (!bestDir) return null;
   return me.tank.direction === bestDir ? { fire: true, dir: bestDir } : { dir: bestDir };
+}
+
+
+/**
+ * 反推反击开火（需求 B 的开火端）：敌全程不可见，凭反推锚点反打。
+ * 我已与 anchor 同轴 + 视线净空 + 炮管就绪时，复用 canFireThenStillDodge 时序闸——
+ * 开火后还躲得掉才射(anchor 当 enemyPos、enemyTank=null)，否则不白送一炮。
+ * 未对准则先转向(转向会旋转视锥，让后续敌弹能进锥)。返回 {fire}|{dir}|null。
+ */
+function findSniperCounterShot(me, enemy, game, inferred, enemyBullets) {
+  if (!inferred || !inferred.anchor) return null;
+  if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
+  if (enemy && enemy.status && enemy.status.overloaded) return null; // 过载握双弹太险，交躲避
+  const myPos = me.tank.position;
+  const anchor = inferred.anchor;
+  const fireDir = clearShotDirection(myPos, anchor, game); // 同行/列且无遮挡
+  if (!fireDir) return null;
+  const d = manhattan(myPos, anchor);
+  if (d > 9) return null;                                  // 太远不值得
+  // 未对准：转向对准(不发弹)。转向那帧视锥旋转，可能让后续敌弹进锥被看到。
+  if (me.tank.direction !== fireDir) return { dir: fireDir };
+  // 已对准：开火安全闸。
+  const bullets = enemyBullets || [];
+  const incoming = minBulletFramesTo(bullets, myPos, game);
+  if (incoming < 0) return { fire: true };               // 空窗(无来袭弹)：抓住暴露火线直接反打
+  if (!canFireThenStillDodge(myPos, me.tank.direction, bullets, game, anchor, null)) return null;
+  return { fire: true };
+}
+
+
+/**
+ * 反推安全逼近（需求 B 的走位端）：把 anchor 当敌位代理，找一条"走过去能对锚点开火"的安全轨道。
+ * 复用 nextStepToFiringLane 找轨道格下一步，每一步必过 isSafeStep(逐格安全)。
+ * 无安全轨道返回 null → 交防御兜底。inferred 过期由调用方(传感器)把关。
+ * overload 双弹流不主动逼近(穿其行列进副弹带太险)。返回下一步格 或 null。
+ */
+function findSniperApproachStep(me, game, inferred, enemyBullets, enemy) {
+  if (!inferred || !inferred.anchor) return null;
+  if (enemyDoubleLaneThreat(enemy)) return null;          // 双弹流不逼近
+  const myPos = me.tank.position;
+  const anchor = inferred.anchor;
+  const standoff = safeStandoffDistance(enemy);
+  // 已经同轴且视线净空：无需再走，交给开火端
+  if (clearShotDirection(myPos, anchor, game)) return null;
+  const step = nextStepToFiringLane(myPos, anchor, game, standoff);
+  if (!step) return null;
+  if (!isSafeStep(step, myPos, anchor, game, enemy, standoff, false, enemyBullets)) return null;
+  return step;
 }
 
 

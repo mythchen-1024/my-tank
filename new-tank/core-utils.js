@@ -1018,6 +1018,63 @@ function isWallTile(game, pos) {
 }
 
 
+// 敌方子弹只能反方向名（敌人在子弹飞来的那一侧）
+const OPP_DIR = { up: "down", down: "up", left: "right", right: "left" };
+
+
+/**
+ * 前方 90° 视锥判定（引擎规则：子弹只有进我车头朝向 ±45° 锥内且无遮挡才可见）。
+ * 取 facing 轴的前向投影 fwd 与横向分量 lat：fwd>0 且 fwd>=|lat| 即在锥内
+ * （斜前对角 fwd==|lat| 边界算可见，正侧 fwd==0 排除，背后 fwd<0 排除）。
+ */
+function inVisionCone(myPos, myDir, targetPos) {
+  const d = DIR_DELTAS[myDir];
+  if (!d || !myPos || !targetPos) return false;
+  const rx = targetPos[0] - myPos[0];
+  const ry = targetPos[1] - myPos[1];
+  const fwd = rx * d[0] + ry * d[1];               // 前向投影（facing 轴）
+  const lat = rx * Math.abs(d[1]) + ry * Math.abs(d[0]); // 横向分量（另一轴）
+  return fwd > 0 && fwd >= Math.abs(lat);
+}
+
+
+/**
+ * 子弹溯源：沿 bullet.direction 反方向从 bullet.position 逐格回溯，推断敌人藏身锚点。
+ * 敌人蹲草("o")/隐身(cloak) 时 enemy.tank=null 看不见本体，但它射出的子弹可见——
+ * 子弹必在敌人所在的同一行/列上，回溯即可锁定那条火线轴 + 估计藏身格。
+ *   - 遇第一个草丛 "o" → 该格即藏身锚点（蹲草狙击）
+ *   - 遇墙/土块 "x"/"m" 或越界 → 锚点取遮挡前一格（敌只能在遮挡我侧）
+ *   - 一路空地到上限 → 锚点取最远扫到的合法格（轴确定，具体格不确定）
+ * 返回 { axis:'row'|'col', line, anchor:[x,y], side, dir } 或 null。
+ */
+function traceBulletToAnchor(bullet, game) {
+  if (!bullet || !bullet.position || !bullet.direction) return null;
+  const d = DIR_DELTAS[bullet.direction];
+  if (!d) return null;
+  const rev = [-d[0], -d[1]]; // 反方向（朝敌人方向回溯）
+  const start = bullet.position;
+  const MAX_TRACE = 12; // 子弹 2 格/帧，首见已离源若干格，放宽上限
+  let anchor = start.slice();
+  let cur = start.slice();
+  for (let i = 0; i < MAX_TRACE; i++) {
+    const next = [cur[0] + rev[0], cur[1] + rev[1]];
+    const t = tileAt(game, next);
+    if (t === "o") { anchor = next; break; }       // 草丛藏身格
+    if (t === "x" || t === "m") { anchor = cur; break; } // 遮挡前一格（cur 仍是合法格）
+    cur = next;
+    anchor = next;                                  // 空地：继续推进，记最远合法格
+  }
+  const vertical = (bullet.direction === "up" || bullet.direction === "down");
+  return {
+    axis: vertical ? "col" : "row",
+    line: vertical ? start[0] : start[1],
+    anchor: anchor,
+    side: OPP_DIR[bullet.direction],                // 敌人在子弹飞来侧
+    dir: bullet.direction
+  };
+}
+
+
 function updatePhantomBullets(state, visibleBullets, game) {
   const phantoms = state.phantomBullets || [];
   const alive = [];

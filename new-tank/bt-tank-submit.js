@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T05:15:32.507Z
+// 构建时间: 2026-06-18T13:13:41.371Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1021,6 +1021,63 @@ function inBounds(pos, game) {
 
 function isWallTile(game, pos) {
   return game.map[pos[0]] && game.map[pos[0]][pos[1]] === 'x';
+}
+
+
+// 敌方子弹只能反方向名（敌人在子弹飞来的那一侧）
+const OPP_DIR = { up: "down", down: "up", left: "right", right: "left" };
+
+
+/**
+ * 前方 90° 视锥判定（引擎规则：子弹只有进我车头朝向 ±45° 锥内且无遮挡才可见）。
+ * 取 facing 轴的前向投影 fwd 与横向分量 lat：fwd>0 且 fwd>=|lat| 即在锥内
+ * （斜前对角 fwd==|lat| 边界算可见，正侧 fwd==0 排除，背后 fwd<0 排除）。
+ */
+function inVisionCone(myPos, myDir, targetPos) {
+  const d = DIR_DELTAS[myDir];
+  if (!d || !myPos || !targetPos) return false;
+  const rx = targetPos[0] - myPos[0];
+  const ry = targetPos[1] - myPos[1];
+  const fwd = rx * d[0] + ry * d[1];               // 前向投影（facing 轴）
+  const lat = rx * Math.abs(d[1]) + ry * Math.abs(d[0]); // 横向分量（另一轴）
+  return fwd > 0 && fwd >= Math.abs(lat);
+}
+
+
+/**
+ * 子弹溯源：沿 bullet.direction 反方向从 bullet.position 逐格回溯，推断敌人藏身锚点。
+ * 敌人蹲草("o")/隐身(cloak) 时 enemy.tank=null 看不见本体，但它射出的子弹可见——
+ * 子弹必在敌人所在的同一行/列上，回溯即可锁定那条火线轴 + 估计藏身格。
+ *   - 遇第一个草丛 "o" → 该格即藏身锚点（蹲草狙击）
+ *   - 遇墙/土块 "x"/"m" 或越界 → 锚点取遮挡前一格（敌只能在遮挡我侧）
+ *   - 一路空地到上限 → 锚点取最远扫到的合法格（轴确定，具体格不确定）
+ * 返回 { axis:'row'|'col', line, anchor:[x,y], side, dir } 或 null。
+ */
+function traceBulletToAnchor(bullet, game) {
+  if (!bullet || !bullet.position || !bullet.direction) return null;
+  const d = DIR_DELTAS[bullet.direction];
+  if (!d) return null;
+  const rev = [-d[0], -d[1]]; // 反方向（朝敌人方向回溯）
+  const start = bullet.position;
+  const MAX_TRACE = 12; // 子弹 2 格/帧，首见已离源若干格，放宽上限
+  let anchor = start.slice();
+  let cur = start.slice();
+  for (let i = 0; i < MAX_TRACE; i++) {
+    const next = [cur[0] + rev[0], cur[1] + rev[1]];
+    const t = tileAt(game, next);
+    if (t === "o") { anchor = next; break; }       // 草丛藏身格
+    if (t === "x" || t === "m") { anchor = cur; break; } // 遮挡前一格（cur 仍是合法格）
+    cur = next;
+    anchor = next;                                  // 空地：继续推进，记最远合法格
+  }
+  const vertical = (bullet.direction === "up" || bullet.direction === "down");
+  return {
+    axis: vertical ? "col" : "row",
+    line: vertical ? start[0] : start[1],
+    anchor: anchor,
+    side: OPP_DIR[bullet.direction],                // 敌人在子弹飞来侧
+    dir: bullet.direction
+  };
 }
 
 
@@ -2587,17 +2644,23 @@ function shouldCounterShootThenDodge(me, enemy, enemyTank, enemyBullets, game, e
   // 先手干净击杀：哪怕开火后自己躲不掉，只要这一炮先反杀敌人(且不锁死平局/不被盾吃)，就先射。
   if (counterShootKillsCleanly(me, enemy, enemyTank, enemyBullets, game, enemyPos)) return true;
 
-  const bullets = enemyBullets || [];
-  const incoming = minBulletFramesTo(bullets, me.tank.position, game);
-  if (incoming < 2) return false; // 子弹 0~1 帧即到，开火占掉本帧必来不及躲，老实躲
+  return canFireThenStillDodge(me.tank.position, me.tank.direction, enemyBullets, game, enemyPos, enemyTank);
+}
 
-  // 时序验算（用户要求）：开火占掉当前帧、子弹随之推进 1 帧(BULLET_SPEED 格)，剩下的就是一个
-  // 全新的"躲子弹"问题。我必朝敌(沿弹道轴)，脱离只能垂直=必先转向一帧再移动，所以唯有
-  // "转向帧+移动帧 < 子弹(含双弹)命中帧"时才躲得掉。直接复用 hasTimedDodge 的时序铁律
-  // (需转向要求剩余 incoming>=3，等价于开火前 incoming>=4)对**推进后的全部子弹**(已含过载配对弹)
-  // 做存在性校验：开火后仍存在来得及的躲位才值得先射，否则白送一发又躲不掉(见用户复盘)。
+
+/**
+ * 反击安全闸（从 shouldCounterShootThenDodge 抽出，反推反击共用）：
+ * 时序铁律——开火占掉当前帧、子弹随之推进 1 帧(BULLET_SPEED 格)，剩下就是个全新"躲子弹"问题。
+ * 我必朝敌(沿弹道轴)，脱离只能垂直=必先转向一帧再移动，所以唯有"转向帧+移动帧 < 子弹命中帧"才躲得掉。
+ * 对推进后的全部子弹(已含过载配对弹)做存在性校验：开火后仍存在来得及的躲位才值得先射。
+ * 反推场景下敌不可见，enemyTank 传 null、enemyPos 传 anchor。
+ */
+function canFireThenStillDodge(myPos, myDir, enemyBullets, game, enemyPos, enemyTank) {
+  const bullets = enemyBullets || [];
+  const incoming = minBulletFramesTo(bullets, myPos, game);
+  if (incoming < 2) return false; // 子弹 0~1 帧即到，开火占掉本帧必来不及躲，老实躲
   const advanced = advanceBullets(bullets, BULLET_SPEED);
-  return hasTimedDodge(me.tank.position, me.tank.direction, advanced, game, enemyPos, enemyTank);
+  return hasTimedDodge(myPos, myDir, advanced, game, enemyPos, enemyTank);
 }
 
 
@@ -3153,6 +3216,54 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
 }
 
 
+/**
+ * 反推反击开火（需求 B 的开火端）：敌全程不可见，凭反推锚点反打。
+ * 我已与 anchor 同轴 + 视线净空 + 炮管就绪时，复用 canFireThenStillDodge 时序闸——
+ * 开火后还躲得掉才射(anchor 当 enemyPos、enemyTank=null)，否则不白送一炮。
+ * 未对准则先转向(转向会旋转视锥，让后续敌弹能进锥)。返回 {fire}|{dir}|null。
+ */
+function findSniperCounterShot(me, enemy, game, inferred, enemyBullets) {
+  if (!inferred || !inferred.anchor) return null;
+  if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
+  if (enemy && enemy.status && enemy.status.overloaded) return null; // 过载握双弹太险，交躲避
+  const myPos = me.tank.position;
+  const anchor = inferred.anchor;
+  const fireDir = clearShotDirection(myPos, anchor, game); // 同行/列且无遮挡
+  if (!fireDir) return null;
+  const d = manhattan(myPos, anchor);
+  if (d > 9) return null;                                  // 太远不值得
+  // 未对准：转向对准(不发弹)。转向那帧视锥旋转，可能让后续敌弹进锥被看到。
+  if (me.tank.direction !== fireDir) return { dir: fireDir };
+  // 已对准：开火安全闸。
+  const bullets = enemyBullets || [];
+  const incoming = minBulletFramesTo(bullets, myPos, game);
+  if (incoming < 0) return { fire: true };               // 空窗(无来袭弹)：抓住暴露火线直接反打
+  if (!canFireThenStillDodge(myPos, me.tank.direction, bullets, game, anchor, null)) return null;
+  return { fire: true };
+}
+
+
+/**
+ * 反推安全逼近（需求 B 的走位端）：把 anchor 当敌位代理，找一条"走过去能对锚点开火"的安全轨道。
+ * 复用 nextStepToFiringLane 找轨道格下一步，每一步必过 isSafeStep(逐格安全)。
+ * 无安全轨道返回 null → 交防御兜底。inferred 过期由调用方(传感器)把关。
+ * overload 双弹流不主动逼近(穿其行列进副弹带太险)。返回下一步格 或 null。
+ */
+function findSniperApproachStep(me, game, inferred, enemyBullets, enemy) {
+  if (!inferred || !inferred.anchor) return null;
+  if (enemyDoubleLaneThreat(enemy)) return null;          // 双弹流不逼近
+  const myPos = me.tank.position;
+  const anchor = inferred.anchor;
+  const standoff = safeStandoffDistance(enemy);
+  // 已经同轴且视线净空：无需再走，交给开火端
+  if (clearShotDirection(myPos, anchor, game)) return null;
+  const step = nextStepToFiringLane(myPos, anchor, game, standoff);
+  if (!step) return null;
+  if (!isSafeStep(step, myPos, anchor, game, enemy, standoff, false, enemyBullets)) return null;
+  return step;
+}
+
+
 function findBombDodge(myPos, bombs, game, enemyPos, enemyBullets, frame) {
   if (!bombs || bombs.length === 0) return null;
   let threatened = false;
@@ -3356,6 +3467,61 @@ function findAmbushGrassScan(myPos, myDir, star, game, state) {
  * 安全站位核心：根据敌方威胁动态决定与敌人的"最小安全间距"，避免走进会被秒的近身死区；
  * 隐身敌人按最后已知位置避让；逼近敌人时停在能开火又留有躲弹余地的距离。
  */
+/**
+ * 落点是否踩在"新鲜反推火线轴"上（敌全程不可见时的假安全修复）。
+ * 追星/巡逻只靠 isSafeStep(看可见弹)会漏判——侧后狙击手的后续弹进不了我视锥，
+ * 但它就守在反推出的那条轴上。step 落在该轴 + 锚点到 step 无遮挡 = 会撞进狙击线。
+ */
+function crossesFreshInferredLine(step, memory, game, frame) {
+  if (!step || !memory) return false;
+  var inf = memory.inferredEnemy;
+  if (!inf || (frame - (inf.seenFrame || -999)) > 8) return false;
+  var onAxis = inf.axis === 'col' ? (step[0] === inf.line) : (step[1] === inf.line);
+  if (!onAxis) return false;
+  return clearBetween(inf.anchor, step, game); // 无遮挡才危险（有墙挡子弹则不算）
+}
+/**
+ * 落点是否踩在"可见敌新鲜连射轴"上。crossesFreshInferredLine 的可见敌版：
+ * 敌可见且坐桩沿某轴连射时，isSafeStep 只看此刻可见弹会漏判（敌射完轴上暂时没弹/切新轴新轴没弹），
+ * 抢完星 patrol 撞进敌刚连射过的轴被秒（mat_FHkUaoghaom2a8Qo7）。memory.recentFireLines 记着这些轴，
+ * 落点踩在某条新鲜轴 + 敌锚点到落点无遮挡 = 会被敌随时再射的连射弹打到。
+ */
+function crossesRecentFireLine(step, memory, game, frame) {
+  if (!step || !memory || !memory.recentFireLines) return false;
+  var lines = memory.recentFireLines;
+  for (var i = 0; i < lines.length; i++) {
+    var l = lines[i];
+    if ((frame - (l.seenFrame || -999)) > 6) continue;
+    var onAxis = l.axis === 'col' ? (step[0] === l.line) : (step[1] === l.line);
+    if (!onAxis) continue;
+    if (clearBetween(l.anchor, step, game)) return true; // 无遮挡才危险
+  }
+  return false;
+}
+/**
+ * 落点是否踩进"目击敌消失点的行/列±1 邻域"（钻草游走偷袭手的盲区修复）。
+ * crossesRecentFireLine/crossesFreshInferredLine 都要"证据"（看见开火/追到子弹）才记，
+ * 但敌人空手钻进草丛消失时没有证据——它会沿原行/列平移一两格来对齐我再开火
+ * （mat_8L9T87lNESh9yTvg3：现身[6,6]→钻草→平移到[6,7] 沿 y=7 行截杀）。
+ * 把消失点行/列各 ±1 当短期危险带（敌 1 帧 1 格，±1 覆盖钻草后的平移量），
+ * 落点踩进该带 + 对齐到该带的锚点到落点无遮挡 = 会被它平移对齐后一炮打到。避让克制：只挡落点，不绕路。
+ */
+function crossesVanishZone(step, memory, game, frame) {
+  if (!step || !memory) return false;
+  var vp = memory.vanishPoint;
+  if (!vp || (frame - (memory.vanishFrame || -999)) > 6) return false;
+  // 行邻域：step 的 y 落在消失点 y±1，敌可平移到 step 的行来对齐
+  if (Math.abs(step[1] - vp[1]) <= 1) {
+    var rowAnchor = [vp[0], step[1]]; // 敌平移到 step 所在行后的代理位置
+    if (clearBetween(rowAnchor, step, game)) return true;
+  }
+  // 列邻域：step 的 x 落在消失点 x±1
+  if (Math.abs(step[0] - vp[0]) <= 1) {
+    var colAnchor = [step[0], vp[1]];
+    if (clearBetween(colAnchor, step, game)) return true;
+  }
+  return false;
+}
 /**
  * 步伐安全守门：next 格不进死区且不踏入敌能封锁的死胡同。
  * 各分支的死区复检统一走这里，消除重复的 stepEntersKillZone + stepIntoSealedDeadEnd 调用。
@@ -3869,6 +4035,10 @@ function getMatchState(game) {
       lastChosenType: null,
       phantomBullets: [],
       myBombs: [],
+      inferredEnemy: null,
+      recentFireLines: [],
+      vanishPoint: null,
+      vanishFrame: -999,
     };
   }
   MATCH_STATE.lastFrame = frame;
@@ -3987,10 +4157,11 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
  * 放宽追星竞争条件——不再等"我比敌更近"才追，直接抢（敌根本不进攻，优先拿分）。
  */
 function trackEnemy(state, enemyTank, myPos, game) {
+  const curFrame = (game && game.frames) || 0;
   if (enemyTank && enemyTank.position) {
     var prevPos = state.lastEnemyPos;
     state.lastEnemyPos = enemyTank.position.slice();
-    state.lastEnemySeenFrame = (game && game.frames) || 0;
+    state.lastEnemySeenFrame = curFrame;
     if (prevPos && samePos(prevPos, enemyTank.position)) {
       state.enemyStationaryFrames = (state.enemyStationaryFrames || 0) + 1;
     } else {
@@ -4012,7 +4183,108 @@ function trackEnemy(state, enemyTank, myPos, game) {
     }
   } else {
     state.enemyFleeFrames = 0;
+    // 目击敌人"刚消失"（上帧还可见，本帧不可见）→ 记下消失点。敌人钻草/转出视锥后会沿原行/列
+    // 平移一两格来对齐我开火（mat_8L9T87lNESh9yTvg3：f31 现身[6,6]，钻草平移到[6,7]截杀我 y=7 行）。
+    // 落点规避用：把消失点行/列±1 邻域当短期危险带，覆盖它平移对齐的范围。
+    if (state.lastEnemyPos && state.lastEnemySeenFrame === curFrame - 1) {
+      state.vanishPoint = state.lastEnemyPos.slice();
+      state.vanishFrame = curFrame;
+    }
   }
+}
+
+/**
+ * 子弹溯源追踪：敌人整局蹲草/隐身狙击时 enemyTank 恒为 null，trackEnemy 永远不写 lastEnemyPos，
+ * 所有依赖它的避线/反击都不触发（mat_1TyhhQEjQZK4Hlyeu 被白白狙死的根因）。这里补上唯一的信息来源：
+ * 从可见敌弹反推敌人所在火线轴 + 藏身锚点，写入 state.inferredEnemy。
+ *   - 仅在 enemyTank 为 null（敌不可见）时推断，敌可见时用真实 enemyPos，不污染。
+ *   - 跳过 _inferred（过载配对弹是我方推算的，不能当溯源源头）。
+ *   - 超过 DECAY 帧未更新则清空（信息过期，避免凭旧轴乱避/乱打）。
+ */
+function trackBulletOrigin(state, visibleBullets, enemyTank, game) {
+  const frame = (game && game.frames) || 0;
+  const DECAY = 10;
+  // 敌可见：不依赖反推，清掉旧推断避免与真实位置冲突
+  if (enemyTank && enemyTank.position) { state.inferredEnemy = null; return; }
+  let best = null;
+  if (visibleBullets) {
+    for (let i = 0; i < visibleBullets.length; i++) {
+      const b = visibleBullets[i];
+      if (!b || b._inferred || !b.position || !b.direction) continue;
+      const traced = traceBulletToAnchor(b, game);
+      if (!traced) continue;
+      // 多发时取锚点离我更近的（更紧迫的威胁）
+      if (!best || (state.lastMyPos &&
+          manhattan(traced.anchor, state.lastMyPos) < manhattan(best.anchor, state.lastMyPos))) {
+        best = traced;
+      }
+    }
+  }
+  if (best) {
+    const prev = state.inferredEnemy;
+    best.seenFrame = frame;
+    best.confidence = (prev && prev.axis === best.axis && prev.line === best.line)
+      ? (prev.confidence || 0) + 1 : 1;
+    state.inferredEnemy = best;
+  } else if (state.inferredEnemy) {
+    // 无新命中：过期则清空
+    if (frame - (state.inferredEnemy.seenFrame || -999) > DECAY) state.inferredEnemy = null;
+  }
+}
+
+/**
+ * 可见敌连射轴记忆：敌可见且坐桩沿某轴连射时，trackBulletOrigin 不写（敌可见就清空 inferredEnemy），
+ * 现有 isSafeStep 只看"此刻可见弹"，敌射完后轴上暂时没弹/敌切新轴时新轴还没弹 → 漏判。
+ * 我抢完星 patrol 一头撞进敌刚连射过的轴被秒（mat_FHkUaoghaom2a8Qo7 / Riftwalker r3 同型死因）。
+ * 这里记下"敌可见时在哪条行/列连过火"，即使此刻无弹也把该轴当危险带，落点规避用。
+ *   - 仅在 enemyTank 可见时记录（不可见交给 inferredEnemy）。
+ *   - 用敌真实位置当锚点（比反推锚点更准）；按 (axis,line) 去重，命中则刷新 seenFrame。
+ *   - 超过 FRESH 帧未续命的轴移除；上限 4 条防膨胀。
+ */
+function trackVisibleFireLines(state, visibleBullets, enemyTank, game) {
+  const frame = (game && game.frames) || 0;
+  const FRESH = 6;
+  if (!state.recentFireLines) state.recentFireLines = [];
+  // 敌不可见：仅做过期清理，不新增（此刻交给 inferredEnemy）
+  if (!(enemyTank && enemyTank.position)) {
+    state.recentFireLines = pruneFireLines(state.recentFireLines, frame, FRESH);
+    return;
+  }
+  const ep = enemyTank.position;
+  if (visibleBullets) {
+    for (let i = 0; i < visibleBullets.length; i++) {
+      const b = visibleBullets[i];
+      if (!b || b._inferred || !b.position || !b.direction) continue;
+      const vertical = (b.direction === "up" || b.direction === "down");
+      // 子弹必须真的从敌位置那条轴射出（同行/同列），否则不是这敌人的火线
+      const axis = vertical ? "col" : "row";
+      const line = vertical ? b.position[0] : b.position[1];
+      const enemyOnAxis = vertical ? (ep[0] === line) : (ep[1] === line);
+      if (!enemyOnAxis) continue;
+      let existing = null;
+      for (let j = 0; j < state.recentFireLines.length; j++) {
+        const l = state.recentFireLines[j];
+        if (l.axis === axis && l.line === line) { existing = l; break; }
+      }
+      if (existing) {
+        existing.seenFrame = frame;
+        existing.anchor = ep.slice();
+      } else {
+        state.recentFireLines.push({ axis: axis, line: line, anchor: ep.slice(), seenFrame: frame });
+      }
+    }
+  }
+  state.recentFireLines = pruneFireLines(state.recentFireLines, frame, FRESH);
+}
+
+// 过期清理 + 限长（保留最新的 4 条），供 trackVisibleFireLines 复用。
+function pruneFireLines(lines, frame, fresh) {
+  const kept = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (frame - lines[i].seenFrame <= fresh) kept.push(lines[i]);
+  }
+  kept.sort(function (a, b) { return b.seenFrame - a.seenFrame; });
+  return kept.slice(0, 4);
 }
 
 /**
@@ -4259,6 +4531,10 @@ function refreshBlackboard(bb, me, enemy, game) {
   recordAssassinOutcome(bb.memory, enemy, bb.enemyTank, game);
   trackEnemy(bb.memory, bb.enemyTank, bb.myPos, game);
   trackStuck(bb.memory, bb.myPos);
+  // 子弹溯源：敌不可见时从可见敌弹反推火线轴+藏身锚点（须在幽灵弹混入前，源头最干净）
+  trackBulletOrigin(bb.memory, bb.enemyBullets, bb.enemyTank, game);
+  // 可见敌连射轴记忆：敌可见坐桩连射时记下火线轴，供落点规避（同样须在幽灵弹混入前，用真实可见弹）
+  trackVisibleFireLines(bb.memory, bb.enemyBullets, bb.enemyTank, game);
   cleanExpiredBombs(bb.memory, bb.frame);
   // 幽灵弹补偿：推算视锥外不可见的子弹位置（必须在 memory 初始化之后）
   var phantoms = updatePhantomBullets(bb.memory, bb.enemyBullets, game);
@@ -4350,6 +4626,32 @@ function senseCloakPreFire(bb) {
   });
 }
 
+// 反推反击开火：敌全程不可见，凭新鲜反推锚点反打（同轴+净空+开火后还躲得掉）。
+function senseSniperCounter(bb) {
+  return sense(bb, 'sniperCounter', function () {
+    if (bb.enemyPos) return null;
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    return findSniperCounterShot(bb.me, bb.enemy, bb.game, inf, bb.enemyBullets);
+  });
+}
+
+// 守望转身：脱离反推火线后，锚点不在我视锥内时返回朝锚点的转向(让后续敌弹进锥)。
+// 仅无星可抢时触发(不抢追星帧)，且已对准/已在锥内则返回 null(防止原地空转)。
+function senseInferredScan(bb) {
+  return sense(bb, 'inferredScan', function () {
+    if (bb.enemyPos || bb.star) return null;            // 敌可见 或 有星可抢 -> 不做
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    if (inVisionCone(bb.myPos, bb.myDir, inf.anchor)) return null; // 锚点已在视锥，无需转
+    // 朝锚点的主轴方向转炮口
+    var dx = inf.anchor[0] - bb.myPos[0], dy = inf.anchor[1] - bb.myPos[1];
+    var dir = Math.abs(dx) >= Math.abs(dy) ? (dx < 0 ? 'left' : 'right') : (dy < 0 ? 'up' : 'down');
+    if (dir === bb.myDir) return null;                  // 已朝该向
+    return dir;
+  });
+}
+
 function senseGuardLineShot(bb) {
   return sense(bb, 'guardLineShot', function () {
     return findGuardLineShot(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos, bb.memory);
@@ -4393,6 +4695,39 @@ function senseMoveCandidate(bb) {
 function senseSafeNeighbor(bb) {
   return sense(bb, 'safeNeighbor', function () {
     return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+  });
+}
+
+// 反推火线逃离：敌全程不可见且有新鲜反推轴、我恰在该火线轴上无遮挡时，返回横向脱离步。
+// cloak 流藏身高度不确定 -> 之字斜逃；普通蹲草 -> 横移脱线。无安全步返回 null。
+function senseInferredAvoid(bb) {
+  return sense(bb, 'inferredAvoid', function () {
+    if (bb.enemyPos) return null;                       // 敌可见时交给既有分支
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    // 我是否在反推火线轴上
+    var onAxis = inf.axis === 'col' ? (bb.myPos[0] === inf.line) : (bb.myPos[1] === inf.line);
+    if (!onAxis) return null;
+    if (!clearBetween(inf.anchor, bb.myPos, bb.game)) return null; // 中间有墙 -> 子弹打不到，不必躲
+    var standoff = safeStandoffDistance(bb.enemy);
+    // cloak 流：藏身位置高度不确定，之字斜逃打乱任意直线狙击
+    if (enemyIsCloakType(bb.enemy)) {
+      var zig = diagonalEvadeStep(bb.myPos, inf.anchor, bb.game, bb.memory);
+      if (zig && isSafeStep(zig, bb.myPos, null, bb.game, bb.enemy, standoff, false, bb.enemyBullets)) return zig;
+    }
+    var step = escapeAmbushLine(bb.myPos, inf.anchor, bb.game, bb.enemyBullets);
+    if (step && isSafeStep(step, bb.myPos, null, bb.game, bb.enemy, standoff, false, bb.enemyBullets)) return step;
+    return null;
+  });
+}
+
+// 反推安全逼近：敌全程不可见且有新鲜反推锚点时，找一条走过去能反打的安全轨道下一步。
+function senseSniperApproach(bb) {
+  return sense(bb, 'sniperApproach', function () {
+    if (bb.enemyPos) return null;
+    var inf = bb.memory.inferredEnemy;
+    if (!inf || (bb.frame - (inf.seenFrame || -999)) > 8) return null;
+    return findSniperApproachStep(bb.me, bb.game, inf, bb.enemyBullets, bb.enemy);
   });
 }
 
@@ -4899,6 +5234,18 @@ function createAttackTree(profile) {
     ])
   );
 
+  // 反推反击：敌全程不可见(蹲草/隐身狙击)，凭敌弹反推锚点反打——同轴净空且开火后还躲得掉才射
+  children.push(
+    Sequence('sniper-counter', [
+      Guard('has-sniper-counter', function (bb) { return !!senseSniperCounter(bb); }),
+      Action('do-sniper-counter', function (bb) {
+        var shot = senseSniperCounter(bb);
+        if (shot.fire) { bbSpeak(bb, '反推!'); bbFire(bb); }
+        else bbTurnToward(bb, shot.dir);
+      })
+    ])
+  );
+
   // cloak 敌刚隐身时预射（仅对隐身流启用）
   if (profile.prefireOnDisappear) {
     children.push(
@@ -5050,6 +5397,17 @@ function createAttackTree(profile) {
       ])
     );
   }
+
+  // 守望转身（最低优先级）：脱离反推火线后，若锚点不在我前方视锥内，转炮口朝锚点——
+  // 让狙击手后续敌弹能进我 90° 视锥被看到(否则侧后弹永远收不到)。仅无星可抢时做，不抢追星帧。
+  children.push(
+    Sequence('scan-inferred', [
+      Guard('has-scan', function (bb) { return !!senseInferredScan(bb); }),
+      Action('do-scan-inferred', function (bb) {
+        bbTurnToward(bb, senseInferredScan(bb));
+      })
+    ])
+  );
 
   return Selector('attack', children);
 }
@@ -5484,6 +5842,14 @@ function createMovementTree(profile) {
       Guard('star-step-safe', function (bb) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
+        // 敌不可见时，落点踩进新鲜反推火线轴也算危险（可见弹扫描漏判侧后狙击）
+        if (!bb.enemyPos && crossesFreshInferredLine(starPath.step, bb.memory, bb.game, bb.frame)) return false;
+        // 敌可见坐桩连射时，落点踩进它刚连射过的轴也算危险（除非落点就是星本身，不因噎废食）
+        if (!samePos(starPath.step, bb.star) &&
+            crossesRecentFireLine(starPath.step, bb.memory, bb.game, bb.frame)) return false;
+        // 目击敌钻草消失：落点踩进消失点行/列±1邻域也危险（敌平移对齐后截杀）。落点是星本身则放行
+        if (!bb.enemyPos && !samePos(starPath.step, bb.star) &&
+            crossesVanishZone(starPath.step, bb.memory, bb.game, bb.frame)) return false;
         return isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
           bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets);
       }),
@@ -5651,6 +6017,35 @@ function createMovementTree(profile) {
     ])
   );
 
+  // ---- 反推火线逃离：敌全程不可见(蹲草/隐身狙击)，从敌弹反推出的火线轴上逃离 ----
+  // 专治 lastEnemyPos===null 的纯狙击手场景（mat_1TyhhQEjQZK4Hlyeu）。视锥盲区下"没看见≠安全"：
+  // 不要求本帧仍见弹，凭新鲜的反推轴决定避让（侧后续弹本就进不了前方视锥）。
+  children.push(
+    Sequence('escape-inferred-line', [
+      Guard('inferred-line-active', function (bb) {
+        return !!senseInferredAvoid(bb);
+      }),
+      Action('do-escape-inferred-line', function (bb) {
+        bbMoveToward(bb, senseInferredAvoid(bb));
+      })
+    ])
+  );
+
+  // ---- 反推安全逼近：避线优先后，若有安全轨道则走过去反打狙击手；不安全则 FAILURE 落防御 ----
+  children.push(
+    Sequence('sniper-approach', [
+      Guard('has-sniper-approach', function (bb) {
+        var step = senseSniperApproach(bb);
+        if (!step) return false;
+        bb._cache._sniperApproachStep = step;
+        return true;
+      }),
+      Action('do-sniper-approach', function (bb) {
+        bbMoveToward(bb, bb._cache._sniperApproachStep);
+      })
+    ])
+  );
+
   // ---- 巡逻 ----
   children.push(
     Sequence('patrol', [
@@ -5659,6 +6054,12 @@ function createMovementTree(profile) {
         if (!vt) return false;
         var step = nextStepToward(bb.myPos, vt, bb.game, null);
         if (!step) return false;
+        // 巡逻也别走进新鲜反推火线轴（敌不可见时）
+        if (!bb.enemyPos && crossesFreshInferredLine(step, bb.memory, bb.game, bb.frame)) return false;
+        // 也别走进可见敌刚连射过的轴（抢完星 patrol 撞轴被秒的死因）
+        if (crossesRecentFireLine(step, bb.memory, bb.game, bb.frame)) return false;
+        // 也别走进目击敌钻草消失点的行/列±1邻域（钻草游走偷袭手）
+        if (!bb.enemyPos && crossesVanishZone(step, bb.memory, bb.game, bb.frame)) return false;
         bb._cache._patrolStep = step;
         return true;
       }),
