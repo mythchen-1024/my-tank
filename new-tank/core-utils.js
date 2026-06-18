@@ -794,7 +794,7 @@ function pathDistance(start, target, game, blockPos) {
 /**
  * 寻找当前位置周围最安全的一个可行走邻接格子
  */
-function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
+function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy, avoidStep) {
   let best = null;
   let bestScore = -9999;
   const bullets = enemyBullets || [];
@@ -806,6 +806,8 @@ function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
     // 连下一帧扫过的轨道也不能碰，免得“看起来安全”的邻格把自己送进弹道。
     if (stepIntoBulletPath(bullets, p, game)) continue;
     if (predictedOverloadThreatens(enemy, p, game)) continue;
+    // 可选回避：踩目击敌钻草消失点行/列邻域等短期危险带的格子直接跳过（全踩则返回 null 交兜底原地转）。
+    if (avoidStep && avoidStep(p)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;

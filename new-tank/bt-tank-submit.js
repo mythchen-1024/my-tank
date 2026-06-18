@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T13:13:41.371Z
+// 构建时间: 2026-06-18T13:50:11.714Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -800,7 +800,7 @@ function pathDistance(start, target, game, blockPos) {
 /**
  * 寻找当前位置周围最安全的一个可行走邻接格子
  */
-function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
+function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy, avoidStep) {
   let best = null;
   let bestScore = -9999;
   const bullets = enemyBullets || [];
@@ -812,6 +812,8 @@ function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
     // 连下一帧扫过的轨道也不能碰，免得“看起来安全”的邻格把自己送进弹道。
     if (stepIntoBulletPath(bullets, p, game)) continue;
     if (predictedOverloadThreatens(enemy, p, game)) continue;
+    // 可选回避：踩目击敌钻草消失点行/列邻域等短期危险带的格子直接跳过（全踩则返回 null 交兜底原地转）。
+    if (avoidStep && avoidStep(p)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;
@@ -4694,7 +4696,12 @@ function senseMoveCandidate(bb) {
 
 function senseSafeNeighbor(bb) {
   return sense(bb, 'safeNeighbor', function () {
-    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    // 敌不可见时，兜底徘徊也别踩进目击敌钻草消失点的行/列±1邻域（敌平移对齐后截杀）。
+    // 与 star-chase/patrol 同样克制：仅 !enemyPos 时启用，全踩雷返回 null 交原地转兜底。
+    var avoid = !bb.enemyPos
+      ? function (p) { return crossesVanishZone(p, bb.memory, bb.game, bb.frame); }
+      : null;
+    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy, avoid);
   });
 }
 

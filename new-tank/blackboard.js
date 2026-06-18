@@ -261,7 +261,12 @@ function senseMoveCandidate(bb) {
 
 function senseSafeNeighbor(bb) {
   return sense(bb, 'safeNeighbor', function () {
-    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    // 敌不可见时，兜底徘徊也别踩进目击敌钻草消失点的行/列±1邻域（敌平移对齐后截杀）。
+    // 与 star-chase/patrol 同样克制：仅 !enemyPos 时启用，全踩雷返回 null 交原地转兜底。
+    var avoid = !bb.enemyPos
+      ? function (p) { return crossesVanishZone(p, bb.memory, bb.game, bb.frame); }
+      : null;
+    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy, avoid);
   });
 }
 
