@@ -26,7 +26,11 @@ function createMovementTree(profile) {
       }),
       Action('do-ambush-hold', function (bb) {
         var a = bb.memory.ambushState;
+        // 选择蹲守朝向：对星射线 > 对敌方最后已知位置射线
         var faceDir = clearShotDirection(bb.myPos, a.star, bb.game);
+        if (!faceDir && bb.memory.lastEnemyPos) {
+          faceDir = clearShotDirection(bb.myPos, bb.memory.lastEnemyPos, bb.game);
+        }
         // 敌人进入射线：直接开火
         if (bb.enemyTank && bb.gunIsReady) {
           var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
@@ -35,8 +39,15 @@ function createMovementTree(profile) {
             else { bbTurnToward(bb, shotDir); }
             return;
           }
+          // 预射击：敌人下一步将进入我的射线
+          var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          if (preDir) {
+            if (bb.myDir === preDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+            else { bbTurnToward(bb, preDir); }
+            return;
+          }
         }
-        // 否则面朝星等待
+        // 面朝最佳射线方向等待
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);
         }

@@ -374,6 +374,50 @@ function findBushPreFireTarget(me, enemy, enemyTank, game, state) {
 }
 
 
+/**
+ * 通用草丛盲射：敌人消失后，朝其最后位置附近的草丛开枪（不限星附近）。
+ * 触发条件：敌人不可见 + 最后出现 ≤ 8 帧前 + 枪就绪 + 安全（无来袭子弹）。
+ * 返回 { dir, target } 或 null。
+ */
+function findBlindBushShot(me, enemy, enemyTank, enemyBullets, game, state) {
+  if (enemyTank) return null;
+  if (!canShoot(me, enemy)) return null;
+  if (!state || !state.lastEnemyPos) return null;
+  var frame = (game && game.frames) || 0;
+  if (frame - state.lastEnemySeenFrame > 8) return null;
+  if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null;
+
+  var myPos = me.tank.position;
+  var ePos = state.lastEnemyPos;
+  var w = game.map.length, h = game.map[0].length;
+  var best = null, bestScore = -9999;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (game.map[x][y] !== "o") continue;
+      var c = [x, y];
+      // 草丛须在敌人最后位置附近（≤5步可达）
+      var distToEnemy = manhattan(c, ePos);
+      if (distToEnemy > 5) continue;
+      // 我须有清晰射线能打到该草丛
+      var dir = clearShotDirection(myPos, c, game);
+      if (!dir) continue;
+      // 距离合理（不浪费远距弹）
+      var distToMe = manhattan(myPos, c);
+      if (distToMe > 7) continue;
+      // 不朝自己脚下射（别打到自己旁边）
+      if (distToMe < 2) continue;
+      // 评分：距敌最后位置越近越可能藏人
+      var score = (6 - distToEnemy) * 20 + (8 - distToMe) * 5;
+      // 朝向即射线方向时优先（不用转向，出手更快）
+      if (dir === me.tank.direction) score += 50;
+      if (score > bestScore) { bestScore = score; best = { dir: dir, target: c }; }
+    }
+  }
+  return best;
+}
+
+
 function cloakStarGuardStep(me, game, state) {
   const myPos = me.tank.position;
   const ePos = state.lastEnemyPos;
@@ -1992,17 +2036,12 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!teleportReady(me) || !game.star) return null;
   var myPos = me.tank.position;
   var enemyPos = enemyTank ? enemyTank.position : null;
-  var walkDist = pathDistance(myPos, game.star, game, enemyPos);
-  if (walkDist >= 0 && walkDist <= 5) return null;
+  // 已在草丛且有射线则不需要传送
   if (iAmHidden(me, game) && clearShotDirection(myPos, game.star, game)) return null;
-  // 敌人可见且比我更近星时不蹲人——直接抢星更优
-  if (enemyPos) {
-    var enemyToStar = manhattan(enemyPos, game.star);
-    if (enemyToStar <= 5) return null;
-  }
-  // 敌人可见时：只要距星 > 5 步，传送蹲人仍有价值（开局距离远时尤其如此）
 
   var w = game.map.length, h = game.map[0].length;
+  var star = game.star;
+  var enemyHasTp = enemyHasTeleport(enemy);
   var best = null, bestScore = -9999;
 
   for (var x = 0; x < w; x++) {
@@ -2010,13 +2049,50 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
       if (game.map[x][y] !== "o") continue;
       var c = [x, y];
       if (samePos(c, myPos)) continue;
-      var distToStar = manhattan(c, game.star);
-      if (distToStar < 2 || distToStar > 4) continue;
-      if (!clearShotDirection(c, game.star, game)) continue;
+      var distToStar = manhattan(c, star);
+      // 传送敌：蹲星附近(2-5)；非传送敌：可蹲必经路线(2-8)
+      var maxDist = enemyHasTp ? 5 : 8;
+      if (distToStar < 2 || distToStar > maxDist) continue;
       if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, enemy)) continue;
-      var score = 100 + (5 - distToStar) * 20;
-      if (enemyPos) score += manhattan(c, enemyPos) * 5;
-      score += distanceFromEdges(c, game) * 3;
+      // 必须有至少一条清晰射线（任意方向）
+      var shotToStar = clearShotDirection(c, star, game);
+      var hasAnyLine = !!shotToStar;
+      if (!hasAnyLine) {
+        for (var di = 0; di < DIRS.length; di++) {
+          var dp = DIRS[di];
+          var probe = [c[0] + dp.dx, c[1] + dp.dy];
+          if (isPassable(game, probe, null) && clearShotDirection(c, probe, game)) {
+            hasAnyLine = true; break;
+          }
+        }
+      }
+      if (!hasAnyLine) continue;
+
+      // 评分
+      var score = 0;
+      // Tier 1：直接对星有射线（最高价值）
+      if (shotToStar) score += 100;
+      // Tier 2：射线方向与敌→星路径交叉
+      else if (enemyPos) {
+        // 草丛是否在敌人走向星的 "中间通道" 上
+        var enemyStarDx = star[0] - enemyPos[0];
+        var enemyStarDy = star[1] - enemyPos[1];
+        // 如果草丛 x 在 enemy.x 和 star.x 之间，或 y 在之间 → 必经通道
+        var xBetween = (enemyStarDx > 0) ? (c[0] >= enemyPos[0] && c[0] <= star[0]) :
+                       (enemyStarDx < 0) ? (c[0] <= enemyPos[0] && c[0] >= star[0]) : (c[0] === star[0]);
+        var yBetween = (enemyStarDy > 0) ? (c[1] >= enemyPos[1] && c[1] <= star[1]) :
+                       (enemyStarDy < 0) ? (c[1] <= enemyPos[1] && c[1] >= star[1]) : (c[1] === star[1]);
+        if (xBetween || yBetween) score += 60;
+        else score += 30;
+      } else {
+        score += 30;
+      }
+      // 距星近加分
+      score += (maxDist + 1 - distToStar) * 15;
+      // 远离敌人（避免传送被发现）
+      if (enemyPos) score += Math.min(manhattan(c, enemyPos), 10) * 3;
+      // 远离地图边缘
+      score += distanceFromEdges(c, game) * 2;
       if (score > bestScore) { bestScore = score; best = c; }
     }
   }

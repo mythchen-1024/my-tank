@@ -280,6 +280,12 @@ function senseBushPreFire(bb) {
   });
 }
 
+function senseBlindBushShot(bb) {
+  return sense(bb, 'blindBushShot', function () {
+    return findBlindBushShot(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.memory);
+  });
+}
+
 // ============================================================
 // 动作包装器（统一从 bb 取参数，简化节点代码）
 // ============================================================

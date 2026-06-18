@@ -148,6 +148,22 @@ function createAttackTree(profile) {
     ])
   );
 
+  // 通用草丛盲射：敌人消失后朝其最后位置附近的草丛开枪
+  children.push(
+    Sequence('blind-bush-shot', [
+      Guard('enemy-gone', function (bb) { return !bb.enemyTank; }),
+      Guard('has-blind-target', function (bb) { return !!senseBlindBushShot(bb); }),
+      Guard('i-am-safe', function (bb) {
+        return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+      }),
+      Action('do-blind-bush', function (bb) {
+        var shot = senseBlindBushShot(bb);
+        if (bb.myDir === shot.dir) { bbSpeak(bb, '盲射!'); bbFire(bb); }
+        else bbTurnToward(bb, shot.dir);
+      })
+    ])
+  );
+
   // 草丛攻防：预射打草惊蛇 / 草丛伏击
   if (profile.attackAggression === 'high') {
     children.push(

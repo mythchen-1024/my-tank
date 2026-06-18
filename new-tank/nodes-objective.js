@@ -42,10 +42,11 @@ function createObjectiveTree(profile) {
     Sequence('star-bush-ambush', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
-      // 不要求枪立刻就绪——传送后等几帧枪也会好，不应因此跳过伏击
-      // 敌人不可见，或可见但距星 > 5（传送到草丛后仍有时间蹲守）
-      Guard('enemy-far-from-star', function (bb) {
-        return !bb.enemyTank || manhattan(bb.enemyPos, bb.star) > 5;
+      // 敌人不可见，或可见但不是传送流距星 > 5，或敌人是传送流（双方都传星 → 蹲守更优）
+      Guard('enemy-allows-ambush', function (bb) {
+        if (!bb.enemyTank) return true;
+        if (enemyHasTeleport(bb.enemy)) return true;
+        return manhattan(bb.enemyPos, bb.star) > 5;
       }),
       Guard('not-losing-badly', function (bb) {
         return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
@@ -54,7 +55,11 @@ function createObjectiveTree(profile) {
       Guard('has-ambush-pos', function (bb) { return !!senseStarBushAmbush(bb); }),
       Action('do-star-ambush', function (bb) {
         var pos = senseStarBushAmbush(bb);
+        // 选择预瞄方向：优先对星射线，其次对敌来路方向
         var faceDir = clearShotDirection(pos, bb.star, bb.game);
+        if (!faceDir && bb.enemyPos) {
+          faceDir = clearShotDirection(pos, bb.enemyPos, bb.game);
+        }
         // 枪未就绪：先转向对准射击线等待，下帧枪好后再传送
         if (!bb.gunIsReady) {
           if (faceDir && bb.myDir !== faceDir) bbTurnToward(bb, faceDir);
