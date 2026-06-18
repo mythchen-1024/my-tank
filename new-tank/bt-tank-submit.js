@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T04:28:02.330Z
+// 构建时间: 2026-06-18T04:51:34.037Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1118,6 +1118,12 @@ function canEscapeAfterBomb(myPos, myDir, game, enemyPos, bombs, state, frame) {
   return false;
 }
 
+function isPerpendicularDir(d1, d2) {
+  var horiz = { left: true, right: true };
+  var vert = { up: true, down: true };
+  return (!!horiz[d1] && !!vert[d2]) || (!!vert[d1] && !!horiz[d2]);
+}
+
 
 // ===== tactics.js =====
 // ============================================================
@@ -2123,7 +2129,7 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist, enemy) {
   // 避免落点离敌人太近（曼哈顿距离<=4会被开火锁定，且易被对射）
   if (minEnemyDist > 0 && enemyPos && manhattan(p, enemyPos) <= minEnemyDist) return false;
   // 避免落在敌方清晰炮线上的近距(<=4)：敌人转身即可开火，我落地多半来不及脱离（闪现送死，见 mat_JYuX/mat_1BN）
-  if (enemyPos && manhattan(p, enemyPos) <= 4 && clearShotDirection(enemyPos, p, game)) return false;
+  if (enemyPos && manhattan(p, enemyPos) <= 6 && clearShotDirection(enemyPos, p, game)) return false;
   // 过载敌人：落点不能进双弹覆盖带(敌同行/列 或 相邻±1 行/列且近距)——副弹走相邻列，严格同线判定会漏(mat_EHR 传 [17,10] 距敌3格相邻列被秒)
   if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, p, 6)) return false;
   if (predictedOverloadThreatens(enemy, p, game)) return false;
@@ -3223,6 +3229,8 @@ function findBushBomb(me, enemy, enemyTank, game, state, frame) {
 
 function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!teleportReady(me) || !game.star) return null;
+  var frame = game.frames || 0;
+  if (state && state.ambushCooldown && frame - state.ambushCooldown < 20) return null;
   var myPos = me.tank.position;
   var enemyPos = enemyTank ? enemyTank.position : null;
   // 已在草丛且有射线则不需要传送
@@ -3282,6 +3290,8 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
       if (enemyPos) score += Math.min(manhattan(c, enemyPos), 10) * 3;
       // 远离地图边缘
       score += distanceFromEdges(c, game) * 2;
+      // 扣分：落点与星同行/列 → 敌方传送流蹲星对面时容易同线被扫草命中
+      if (c[0] === star[0] || c[1] === star[1]) score -= 40;
       if (score > bestScore) { bestScore = score; best = c; }
     }
   }
@@ -5288,7 +5298,7 @@ function createMovementTree(profile) {
         if (!a) return false;
         var timeout = 15;
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
-        if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; return false; }
+        if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; bb.memory.ambushCooldown = bb.frame; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         // 敌人比我更快到星且我射线不通 → 放弃伏击去追星
         if (bb.enemyTank && bb.star) {
@@ -5314,9 +5324,14 @@ function createMovementTree(profile) {
         if (bb.enemyTank && bb.gunIsReady) {
           var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
           if (shotDir) {
-            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
-            else { bbTurnToward(bb, shotDir); }
-            return;
+            var dist = manhattan(bb.myPos, bb.enemyPos);
+            var perpendicular = dist >= 4 && isPerpendicularDir(shotDir, bb.enemyTank.direction);
+            if (!perpendicular) {
+              if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+              else { bbTurnToward(bb, shotDir); }
+              return;
+            }
+            if (bb.myDir !== shotDir) { bbTurnToward(bb, shotDir); return; }
           }
           // 预射击：敌人下一步将进入我的射线
           var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);

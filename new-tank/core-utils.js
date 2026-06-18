@@ -1111,3 +1111,9 @@ function canEscapeAfterBomb(myPos, myDir, game, enemyPos, bombs, state, frame) {
   }
   return false;
 }
+
+function isPerpendicularDir(d1, d2) {
+  var horiz = { left: true, right: true };
+  var vert = { up: true, down: true };
+  return (!!horiz[d1] && !!vert[d2]) || (!!vert[d1] && !!horiz[d2]);
+}

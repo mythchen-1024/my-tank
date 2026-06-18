@@ -19,7 +19,7 @@ function createMovementTree(profile) {
         if (!a) return false;
         var timeout = 15;
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
-        if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; return false; }
+        if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; bb.memory.ambushCooldown = bb.frame; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         // 敌人比我更快到星且我射线不通 → 放弃伏击去追星
         if (bb.enemyTank && bb.star) {
@@ -45,9 +45,14 @@ function createMovementTree(profile) {
         if (bb.enemyTank && bb.gunIsReady) {
           var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
           if (shotDir) {
-            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
-            else { bbTurnToward(bb, shotDir); }
-            return;
+            var dist = manhattan(bb.myPos, bb.enemyPos);
+            var perpendicular = dist >= 4 && isPerpendicularDir(shotDir, bb.enemyTank.direction);
+            if (!perpendicular) {
+              if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+              else { bbTurnToward(bb, shotDir); }
+              return;
+            }
+            if (bb.myDir !== shotDir) { bbTurnToward(bb, shotDir); return; }
           }
           // 预射击：敌人下一步将进入我的射线
           var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
