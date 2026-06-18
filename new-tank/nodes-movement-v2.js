@@ -17,7 +17,9 @@ function createMovementTree(profile) {
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;
         if (!a) return false;
-        if (bb.frame - a.frame > 15) { bb.memory.ambushState = null; return false; }
+        var timeout = 15;
+        if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
+        if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),
@@ -41,10 +43,34 @@ function createMovementTree(profile) {
           }
           // 预射击：敌人下一步将进入我的射线
           var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          if (!preDir) {
+            preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          }
           if (preDir) {
             if (bb.myDir === preDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
             else { bbTurnToward(bb, preDir); }
             return;
+          }
+        }
+        // 障碍清除：星方向有土块挡住射线 → 打碎它
+        if (bb.gunIsReady && bb.star) {
+          var starLineDir = null;
+          if (bb.star[0] === bb.myPos[0]) starLineDir = bb.star[1] < bb.myPos[1] ? 'up' : 'down';
+          else if (bb.star[1] === bb.myPos[1]) starLineDir = bb.star[0] < bb.myPos[0] ? 'left' : 'right';
+          if (starLineDir && !clearShotDirection(bb.myPos, bb.star, bb.game)) {
+            var dd = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[starLineDir];
+            var cx = bb.myPos[0] + dd[0], cy = bb.myPos[1] + dd[1];
+            var foundBlock = false;
+            while (tileAt(bb.game, [cx, cy]) !== 'x') {
+              if (tileAt(bb.game, [cx, cy]) === 'm') { foundBlock = true; break; }
+              if (cx === bb.star[0] && cy === bb.star[1]) break;
+              cx += dd[0]; cy += dd[1];
+            }
+            if (foundBlock) {
+              if (bb.myDir === starLineDir) { bbSpeak(bb, '清障!'); bbFire(bb); }
+              else { bbTurnToward(bb, starLineDir); }
+              return;
+            }
           }
         }
         // 面朝最佳射线方向等待
@@ -91,6 +117,9 @@ function createMovementTree(profile) {
             }
             // 敌下一步将进入炮线：提前转向等待
             var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+            if (!preDir) {
+              preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+            }
             if (preDir) {
               if (bb.myDir === preDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
               bbTurnToward(bb, preDir); return;

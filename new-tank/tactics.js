@@ -1806,6 +1806,61 @@ function canPreemptiveShot(myPos, myDir, enemyTank, game) {
 }
 
 
+function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
+  if (!enemyTank) return null;
+  var ePos = enemyTank.position;
+  var eDir = enemyTank.direction;
+  var d = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[eDir];
+  if (!d) return null;
+
+  var shotDir = null;
+  var bulletDist = 0;
+  var enemySteps = 0;
+
+  if (d[1] !== 0 && ePos[0] !== myPos[0]) {
+    var rowDiff = myPos[1] - ePos[1];
+    if ((d[1] > 0 && rowDiff > 0) || (d[1] < 0 && rowDiff < 0)) {
+      enemySteps = Math.abs(rowDiff);
+      var colDiff = ePos[0] - myPos[0];
+      bulletDist = Math.abs(colDiff);
+      shotDir = colDiff > 0 ? 'right' : 'left';
+    }
+  } else if (d[0] !== 0 && ePos[1] !== myPos[1]) {
+    var colDiff2 = myPos[0] - ePos[0];
+    if ((d[0] > 0 && colDiff2 > 0) || (d[0] < 0 && colDiff2 < 0)) {
+      enemySteps = Math.abs(colDiff2);
+      var rowDiff2 = ePos[1] - myPos[1];
+      bulletDist = Math.abs(rowDiff2);
+      shotDir = rowDiff2 > 0 ? 'down' : 'up';
+    }
+  }
+
+  if (!shotDir || bulletDist === 0 || enemySteps === 0) return null;
+  if (bulletDist > 7 || enemySteps > 7) return null;
+
+  var bulletFrames = Math.ceil(bulletDist / BULLET_SPEED);
+  var turnFrames = turnDistance(myDir, shotDir);
+  var totalBulletFrames = turnFrames + bulletFrames;
+
+  if (totalBulletFrames > enemySteps + 1) return null;
+  if (totalBulletFrames < enemySteps - 1) return null;
+
+  var intersection = (d[1] !== 0)
+    ? [ePos[0], myPos[1]]
+    : [myPos[0], ePos[1]];
+  if (!clearBetween(myPos, intersection, game)) return null;
+
+  var checkPos = ePos.slice();
+  for (var i = 0; i < enemySteps; i++) {
+    checkPos = [checkPos[0] + d[0], checkPos[1] + d[1]];
+    var t = tileAt(game, checkPos);
+    if (t === 'x' || t === 'm') return null;
+  }
+
+  return shotDir;
+}
+
+
 function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾

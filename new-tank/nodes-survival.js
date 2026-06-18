@@ -101,6 +101,9 @@ function createSoftSurvivalTree(profile) {
   // 通用：防范敌方瞄准（敌炮口正对我，提前移动离线）
   children.push(
     Sequence('aim-dodge', [
+      Guard('not-ambushing', function (bb) {
+        return !(bb.memory.ambushState && iAmHidden(bb.me, bb.game));
+      }),
       Guard('has-aim-dodge', function (bb) { return !!senseAimDodge(bb); }),
       Action('do-aim-dodge', function (bb) {
         bbMoveToward(bb, senseAimDodge(bb));
@@ -111,6 +114,9 @@ function createSoftSurvivalTree(profile) {
   // 通用：近距对射规避（近距同线且我不占先手，侧移离线）
   children.push(
     Sequence('line-duel-dodge', [
+      Guard('not-ambushing', function (bb) {
+        return !(bb.memory.ambushState && iAmHidden(bb.me, bb.game));
+      }),
       Guard('has-line-duel', function (bb) { return !!senseLineDuelDodge(bb); }),
       Action('do-line-duel-dodge', function (bb) {
         bbMoveToward(bb, senseLineDuelDodge(bb));

@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T01:45:41.848Z
+// 构建时间: 2026-06-18T02:06:41.932Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -2928,6 +2928,61 @@ function canPreemptiveShot(myPos, myDir, enemyTank, game) {
 }
 
 
+function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
+  if (!enemyTank) return null;
+  var ePos = enemyTank.position;
+  var eDir = enemyTank.direction;
+  var d = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[eDir];
+  if (!d) return null;
+
+  var shotDir = null;
+  var bulletDist = 0;
+  var enemySteps = 0;
+
+  if (d[1] !== 0 && ePos[0] !== myPos[0]) {
+    var rowDiff = myPos[1] - ePos[1];
+    if ((d[1] > 0 && rowDiff > 0) || (d[1] < 0 && rowDiff < 0)) {
+      enemySteps = Math.abs(rowDiff);
+      var colDiff = ePos[0] - myPos[0];
+      bulletDist = Math.abs(colDiff);
+      shotDir = colDiff > 0 ? 'right' : 'left';
+    }
+  } else if (d[0] !== 0 && ePos[1] !== myPos[1]) {
+    var colDiff2 = myPos[0] - ePos[0];
+    if ((d[0] > 0 && colDiff2 > 0) || (d[0] < 0 && colDiff2 < 0)) {
+      enemySteps = Math.abs(colDiff2);
+      var rowDiff2 = ePos[1] - myPos[1];
+      bulletDist = Math.abs(rowDiff2);
+      shotDir = rowDiff2 > 0 ? 'down' : 'up';
+    }
+  }
+
+  if (!shotDir || bulletDist === 0 || enemySteps === 0) return null;
+  if (bulletDist > 7 || enemySteps > 7) return null;
+
+  var bulletFrames = Math.ceil(bulletDist / BULLET_SPEED);
+  var turnFrames = turnDistance(myDir, shotDir);
+  var totalBulletFrames = turnFrames + bulletFrames;
+
+  if (totalBulletFrames > enemySteps + 1) return null;
+  if (totalBulletFrames < enemySteps - 1) return null;
+
+  var intersection = (d[1] !== 0)
+    ? [ePos[0], myPos[1]]
+    : [myPos[0], ePos[1]];
+  if (!clearBetween(myPos, intersection, game)) return null;
+
+  var checkPos = ePos.slice();
+  for (var i = 0; i < enemySteps; i++) {
+    checkPos = [checkPos[0] + d[0], checkPos[1] + d[1]];
+    var t = tileAt(game, checkPos);
+    if (t === 'x' || t === 'm') return null;
+  }
+
+  return shotDir;
+}
+
+
 function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
@@ -4718,6 +4773,9 @@ function createSoftSurvivalTree(profile) {
   // 通用：防范敌方瞄准（敌炮口正对我，提前移动离线）
   children.push(
     Sequence('aim-dodge', [
+      Guard('not-ambushing', function (bb) {
+        return !(bb.memory.ambushState && iAmHidden(bb.me, bb.game));
+      }),
       Guard('has-aim-dodge', function (bb) { return !!senseAimDodge(bb); }),
       Action('do-aim-dodge', function (bb) {
         bbMoveToward(bb, senseAimDodge(bb));
@@ -4728,6 +4786,9 @@ function createSoftSurvivalTree(profile) {
   // 通用：近距对射规避（近距同线且我不占先手，侧移离线）
   children.push(
     Sequence('line-duel-dodge', [
+      Guard('not-ambushing', function (bb) {
+        return !(bb.memory.ambushState && iAmHidden(bb.me, bb.game));
+      }),
       Guard('has-line-duel', function (bb) { return !!senseLineDuelDodge(bb); }),
       Action('do-line-duel-dodge', function (bb) {
         bbMoveToward(bb, senseLineDuelDodge(bb));
@@ -5164,7 +5225,9 @@ function createMovementTree(profile) {
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;
         if (!a) return false;
-        if (bb.frame - a.frame > 15) { bb.memory.ambushState = null; return false; }
+        var timeout = 15;
+        if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
+        if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),
@@ -5188,10 +5251,34 @@ function createMovementTree(profile) {
           }
           // 预射击：敌人下一步将进入我的射线
           var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          if (!preDir) {
+            preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          }
           if (preDir) {
             if (bb.myDir === preDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
             else { bbTurnToward(bb, preDir); }
             return;
+          }
+        }
+        // 障碍清除：星方向有土块挡住射线 → 打碎它
+        if (bb.gunIsReady && bb.star) {
+          var starLineDir = null;
+          if (bb.star[0] === bb.myPos[0]) starLineDir = bb.star[1] < bb.myPos[1] ? 'up' : 'down';
+          else if (bb.star[1] === bb.myPos[1]) starLineDir = bb.star[0] < bb.myPos[0] ? 'left' : 'right';
+          if (starLineDir && !clearShotDirection(bb.myPos, bb.star, bb.game)) {
+            var dd = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[starLineDir];
+            var cx = bb.myPos[0] + dd[0], cy = bb.myPos[1] + dd[1];
+            var foundBlock = false;
+            while (tileAt(bb.game, [cx, cy]) !== 'x') {
+              if (tileAt(bb.game, [cx, cy]) === 'm') { foundBlock = true; break; }
+              if (cx === bb.star[0] && cy === bb.star[1]) break;
+              cx += dd[0]; cy += dd[1];
+            }
+            if (foundBlock) {
+              if (bb.myDir === starLineDir) { bbSpeak(bb, '清障!'); bbFire(bb); }
+              else { bbTurnToward(bb, starLineDir); }
+              return;
+            }
           }
         }
         // 面朝最佳射线方向等待
@@ -5238,6 +5325,9 @@ function createMovementTree(profile) {
             }
             // 敌下一步将进入炮线：提前转向等待
             var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+            if (!preDir) {
+              preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+            }
             if (preDir) {
               if (bb.myDir === preDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
               bbTurnToward(bb, preDir); return;
