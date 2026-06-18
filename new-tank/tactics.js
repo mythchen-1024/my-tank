@@ -1001,7 +1001,7 @@ function isTeleportSafe(p, enemyTank, enemyBullets, game, minEnemyDist, enemy) {
   // 避免落点离敌人太近（曼哈顿距离<=4会被开火锁定，且易被对射）
   if (minEnemyDist > 0 && enemyPos && manhattan(p, enemyPos) <= minEnemyDist) return false;
   // 避免落在敌方清晰炮线上的近距(<=4)：敌人转身即可开火，我落地多半来不及脱离（闪现送死，见 mat_JYuX/mat_1BN）
-  if (enemyPos && manhattan(p, enemyPos) <= 6 && clearShotDirection(enemyPos, p, game)) return false;
+  if (enemyPos && manhattan(p, enemyPos) <= 4 && clearShotDirection(enemyPos, p, game)) return false;
   // 过载敌人：落点不能进双弹覆盖带(敌同行/列 或 相邻±1 行/列且近距)——副弹走相邻列，严格同线判定会漏(mat_EHR 传 [17,10] 距敌3格相邻列被秒)
   if (enemyPos && enemyDoubleLaneThreat(enemy) && inDoubleLaneBand(enemyPos, p, 6)) return false;
   if (predictedOverloadThreatens(enemy, p, game)) return false;
