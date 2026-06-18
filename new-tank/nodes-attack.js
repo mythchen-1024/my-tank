@@ -62,6 +62,10 @@ function createAttackTree(profile) {
       Sequence('fire-direct', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-ambush-far', function (bb) {
+          if (!bb.memory.ambushState) return true;
+          return bb.distToEnemy <= 3;
+        }),
         // shield 流特殊处理：需要确认打完能侧移躲开回敬
         Guard('shield-safe', function (bb) {
           if (!enemyHasShieldSkill(bb.enemy)) return true;
@@ -103,6 +107,10 @@ function createAttackTree(profile) {
       Sequence('fire-risky', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-ambush-far', function (bb) {
+          if (!bb.memory.ambushState) return true;
+          return bb.distToEnemy <= 3;
+        }),
         Guard('shield-ok', function (bb) {
           return !enemyHasShieldSkill(bb.enemy) ||
             canShootThenEvadeShieldCounter(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos);

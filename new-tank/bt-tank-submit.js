@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T03:59:51.906Z
+// 构建时间: 2026-06-18T04:19:47.826Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -3313,7 +3313,7 @@ function findAmbushGrassScan(myPos, myDir, star, game, state) {
     var grassDist = 0;
     while (true) {
       var t = tileAt(game, [cx, cy]);
-      if (t === 'x') break;
+      if (t === 'x' || t === 'm') break;
       if (t === 'o') { hasGrass = true; grassDist = manhattan(myPos, [cx, cy]); break; }
       cx += d[0]; cy += d[1];
       if (manhattan(myPos, [cx, cy]) > 10) break;
@@ -4925,6 +4925,10 @@ function createAttackTree(profile) {
       Sequence('fire-direct', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-ambush-far', function (bb) {
+          if (!bb.memory.ambushState) return true;
+          return bb.distToEnemy <= 3;
+        }),
         // shield 流特殊处理：需要确认打完能侧移躲开回敬
         Guard('shield-safe', function (bb) {
           if (!enemyHasShieldSkill(bb.enemy)) return true;
@@ -4966,6 +4970,10 @@ function createAttackTree(profile) {
       Sequence('fire-risky', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-ambush-far', function (bb) {
+          if (!bb.memory.ambushState) return true;
+          return bb.distToEnemy <= 3;
+        }),
         Guard('shield-ok', function (bb) {
           return !enemyHasShieldSkill(bb.enemy) ||
             canShootThenEvadeShieldCounter(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos);

@@ -2191,7 +2191,7 @@ function findAmbushGrassScan(myPos, myDir, star, game, state) {
     var grassDist = 0;
     while (true) {
       var t = tileAt(game, [cx, cy]);
-      if (t === 'x') break;
+      if (t === 'x' || t === 'm') break;
       if (t === 'o') { hasGrass = true; grassDist = manhattan(myPos, [cx, cy]); break; }
       cx += d[0]; cy += d[1];
       if (manhattan(myPos, [cx, cy]) > 10) break;
