@@ -1,0 +1,1035 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/26.2.2 Chrome/134.0.6998.178 Electron/35.1.2 Safari/537.36" version="26.2.2" pages="4">
+  <diagram id="p1" name="行为树总览">
+    <mxGraphModel dx="1389" dy="701" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1654" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="eo4" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="obj" target="o4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eo5" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="o3" target="o5" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ea9" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="atk" target="a9" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ea1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="atk" target="a1" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="242" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ea2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="atk" target="a2" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="433" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ea4" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="atk" target="a4" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="490" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ea5" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="atk" target="a5" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="370" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ea6" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="atk" target="a6" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="540" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ea7" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="a3" target="a7" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ea8" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="atk" target="a8" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1110" y="595" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="root" value="Root · Selector" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=13;" parent="1" vertex="1">
+          <mxGeometry x="730" y="19" width="180" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="fc" value="① frozen-check [Sequence] 被冻时原地等待" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="hs" value="② hard-survival [Selector] 硬生存·最高优先" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="175" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="sg" value="③ star-grab [Sequence] 传送后补吃星" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="320" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ss" value="④ soft-survival [Selector] 软生存·预防躲避" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="465" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="lcs" value="⑤ last-chance-star [When ≤10帧] 最后10帧冲星" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="610" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="esb" value="⑥ endgame-star-boost [When ≤20帧+落后] 终局落后提权" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="755" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="msa" value="⑦ max-star-aggression [When max模式] 极致模式提权" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="900" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="atk" value="⑧ attack [Selector] 炮弹攻击" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="1045" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="bomb" value="⑨ bomb-attack [Selector] 主动放弹" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="1190" y="120" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="obj" value="⑩ objective [Selector] 目标层·星/刺杀" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="1428" y="117" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="mov" value="⑪ movement [Selector] 移动/兜底16策略" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="1692" y="117" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="fc" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="hs" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="sg" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="ss" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="lcs" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="esb" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="msa" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="atk" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="bomb" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="obj" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="root" target="mov" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="hs1" value="counter-shoot 反击先射后走" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="82" y="240" width="115" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="hs2" value="bullet-dodge 子弹路径躲避" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="269" y="240" width="115" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="hs3" value="escape-teleport 紧急传送逃生" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="82" y="300" width="115" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="hs4" value="two-step-escape 两步脱困" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="269" y="300" width="115" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="hs5" value="desperate-dodge 绝境横移" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="82" y="360" width="115" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="hs6" value="bomb-dodge 炸弹爆炸区逃离" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="269" y="360" width="115" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="ehs1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="hs" target="hs1" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="240" y="263" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ehs2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="hs" target="hs2" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="240" y="263" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ehs3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="hs" target="hs3" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="240" y="323" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ehs4" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="hs" target="hs4" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="240" y="323" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ehs5" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="hs" target="hs5" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="240" y="383" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ehs6" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="hs" target="hs6" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="240" y="383" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ss1" value="[dodgeBand] overload-lane-dodge 双弹带提前脱离" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="390" y="240" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ss2" value="[freezeZoneAvoid] freeze-zone-avoid 冰冻致死区回避" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="545" y="240" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="ss3" value="aim-dodge 敌炮口预瞄时离线" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="390" y="323" width="130" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="ss4" value="line-duel-dodge 近距对射侧移离线" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="545" y="323" width="130" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="ess1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ss" target="ss1" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ess2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ss" target="ss2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ess3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ss" target="ss3" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="530" y="307" />
+              <mxPoint x="455" y="307" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ess4" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ss" target="ss4" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="530" y="308" />
+              <mxPoint x="595" y="308" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a1" value="open-shot 空窗期抢射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="953" y="218" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a2" value="[prefireOnDisappear] cloak-prefire 隐身预射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="943" y="410" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a4" value="[≠low] fire-direct 安全直射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="953" y="467.5" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a5" value="[≠low] fire-risky 非安全直射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="953" y="350" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a6" value="[med/high] guard-line 守线预瞄" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="943" y="521" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a7" value="bush-prefire 远距清草预射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="803" y="285" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a8" value="blind-bush-shot 草丛盲射" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="943" y="574" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="a9" value="[high] bush-shot 草丛攻防" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1045" y="630" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="b1" value="retreat-bomb 堵路炸弹" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1138" y="240" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" value="star-bomb 抢星封路" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1200" y="302.5" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" value="bush-bomb 草丛陷阱" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1266" y="240" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="eb1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="bomb" target="b1" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eb2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="bomb" target="b2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eb3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="bomb" target="b3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="o1" value="cloak-star-trap [Sel] 隐身守星防陷阱" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1262" y="390" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cIwJygnVtM9u1whJpTdx-3" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;" edge="1" parent="1" source="o2" target="o4">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="o2" value="star-bush-ambush 草丛伏击传送" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1262" y="551" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="o4" value="star-guard 争夺预瞄守点" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1428" y="551" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="o5" value="[enableAssassination] assassination 刺杀" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1428" y="615" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="o1a" value="cloak-guard 移到守位格" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1586" y="240" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="o1b" value="cloak-trap-hold 原地等待" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1591" y="287" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="eo1" style="edgeStyle=orthogonalEdgeStyle;entryX=0.954;entryY=-0.006;entryDx=0;entryDy=0;entryPerimeter=0;exitX=0.293;exitY=0.987;exitDx=0;exitDy=0;exitPerimeter=0;" parent="1" source="obj" target="o1" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1476" y="407" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="1466" y="220" />
+              <mxPoint x="1386" y="220" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="eo2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="obj" target="o2" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1493" y="457" />
+              <mxPoint x="1327" y="457" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="eo3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="obj" target="o3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="eo1a" style="edgeStyle=orthogonalEdgeStyle;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.25;exitDx=0;exitDy=0;" parent="1" source="o1" target="o1a" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1413" y="400" />
+              <mxPoint x="1413" y="260" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="eo1b" style="edgeStyle=orthogonalEdgeStyle;entryX=0;entryY=0.581;entryDx=0;entryDy=0;entryPerimeter=0;exitX=0.998;exitY=0.479;exitDx=0;exitDy=0;exitPerimeter=0;" parent="1" source="o1" target="m3" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1401" y="366" as="sourcePoint" />
+            <mxPoint x="1554" y="326" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="1426" y="409" />
+              <mxPoint x="1426" y="310" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m1" value="ambush-shift 传送落点偏移" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1586" y="193" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m2" value="ambush-shift-confirm 偏移完成确认" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1826" y="193" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m3" value="ambush-hold 伏击蹲守+扫草+清障" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1581" y="287" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m4" value="[bushCamp] bush-hold 蹲草等星" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1826" y="283" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m5" value="short-intent 短期意图续跑防横跳" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1581" y="337" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m6" value="star-chase 追星" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1826" y="333" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m7" value="band-escape 脱离双弹覆盖带" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1586" y="387" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m8" value="[≠bushCamp] occupy-lane 占射击线" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1821" y="383" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m9" value="maintain-standoff 保持安全交火距离" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1586" y="437" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m10" value="[bushCamp] seek-bush 寻草" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1821" y="435" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m11" value="cloak-defense 防隐身之字走位" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1586" y="487" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m12" value="escape-ambush 伏击线逃离" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1821" y="484" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m13" value="patrol 虚拟目标点巡逻" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1586" y="537" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m14" value="dig 破墙开路" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1821" y="534" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m15" value="safe-neighbor 安全邻格徘徊" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1586" y="587" width="110" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="m16" value="turn-right ⚡终极兜底右转" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="1821" y="582" width="120" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="em1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m1" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="208" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m2" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="208" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m3" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="311" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em4" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m4" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="309" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em5" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m5" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="361" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em6" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m6" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="359" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em7" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m7" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="409" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em8" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m8" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="408" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em9" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m9" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="457" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em10" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m10" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="455" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em11" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m11" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="507" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em12" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m12" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="503" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em13" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m13" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="560" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em14" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m14" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="556" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em15" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m15" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="607" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="em16" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="mov" target="m16" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1757" y="605" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="leg1" value="图例" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;spacingLeft=4;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="30" y="440" width="60" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="leg2" value="Selector (选择器)" style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="30" y="475" width="130" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg3" value="Sequence/Action (序列/动作)" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="170" y="475" width="160" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg4" value="Profile条件节点 (可选挂载)" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="340" y="475" width="160" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg5" value="When装饰器 (动态提权)" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="510" y="475" width="150" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="leg6" value="Root (蓝色)" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="670" y="475" width="100" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="cIwJygnVtM9u1whJpTdx-2" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="atk" target="a3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1110" y="175" as="sourcePoint" />
+            <mxPoint x="1040" y="568" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="1110" y="303" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="a3" value="[shieldBait] shield-preaim 骗盾预瞄" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="943" y="285" width="130" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="cIwJygnVtM9u1whJpTdx-4" value="" style="edgeStyle=orthogonalEdgeStyle;" edge="1" parent="1" source="obj" target="o3">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1493" y="172" as="sourcePoint" />
+            <mxPoint x="1493" y="615" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="o3" value="star-teleport 传送抢星" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="1428" y="487" width="130" height="40" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="9xorrafy-pvi3" name="黑板感知系统">
+    <mxGraphModel dx="953" dy="481" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="Blackboard 黑板感知系统 — 每帧刷新流程" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;spacingLeft=4;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+          <mxGeometry x="300" y="10" width="700" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="rb" value="refreshBlackboard(bb, me, enemy, game)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;" parent="1" vertex="1">
+          <mxGeometry x="350" y="60" width="350" height="45" as="geometry" />
+        </mxCell>
+        <mxCell id="s1" value="① 原始数据绑定 (O(1)每帧必做)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="100" y="145" width="250" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="s1d" value="&lt;div&gt;bb.me / bb.enemy / bb.game&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.myPos = me.tank.position&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.myDir = me.tank.direction&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.enemyTank / bb.enemyPos&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.enemyBullets = collectEnemyBullets()&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.star = game.star&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.bombs = game.bombs&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffc0;strokeColor=#d6b656;fontSize=10;align=left;" parent="1" vertex="1">
+          <mxGeometry x="100" y="185" width="250" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="s2" value="② 廉价派生感知 (O(1)每帧必算)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="390" y="145" width="270" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="s2d" value="&lt;div&gt;bb.gunIsReady = gunReady(me)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.teleportIsReady = teleportReady(me)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.bombIsReady = bombReady(me)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.shotDir = clearShotDirection(myPos, enemyPos)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.distToEnemy = manhattan(myPos, enemyPos)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.distToStar = manhattan(myPos, star)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.framesLeft = MAX_FRAMES - frame&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.myStars / bb.enmStars&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb.isLosing / bb.isWinning / bb.isTied&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5f0d5;strokeColor=#82b366;fontSize=10;align=left;" parent="1" vertex="1">
+          <mxGeometry x="390" y="185" width="270" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="s3" value="③ 跨帧记忆更新 (state-store)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="700" y="145" width="250" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="s3d" value="&lt;div&gt;bb.memory = getMatchState(game)&amp;nbsp;&lt;/div&gt;&lt;div&gt;recordAssassinOutcome() 刺杀结果记录&amp;nbsp;&lt;/div&gt;&lt;div&gt;trackEnemy() 记录敌人最后已知位置&amp;nbsp;&lt;/div&gt;&lt;div&gt;trackStuck() 检测卡死帧数&amp;nbsp;&lt;/div&gt;&lt;div&gt;cleanExpiredBombs() 清过期炸弹&amp;nbsp;&lt;/div&gt;&lt;div&gt;updatePhantomBullets() 幽灵弹补偿推算&amp;nbsp;&lt;/div&gt;&lt;div&gt;合并 myBombs → bombs 列表&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffc0c0;strokeColor=#b85450;fontSize=10;align=left;" parent="1" vertex="1">
+          <mxGeometry x="700" y="185" width="250" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="s4" value="④ 清空惰性缓存 _cache={}" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="990" y="145" width="220" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="s4d" value="&lt;div&gt;bb._cache = {} (每帧重建)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb._trace = [] (调试追踪)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bb._lastAction = null&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e8d5f0;strokeColor=#9673a6;fontSize=10;align=left;" parent="1" vertex="1">
+          <mxGeometry x="990" y="185" width="220" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="erb" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="rb" target="s1" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="erb2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="rb" target="s2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="erb3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="rb" target="s3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="erb4" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="rb" target="s4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="lazy_title" value="惰性传感器 sense(bb, key, fn)  — 首次访问时计算，本帧内复用" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=13;" parent="1" vertex="1">
+          <mxGeometry x="30" y="350" width="700" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ls_title" value="生存传感器" style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="30" y="390" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ls_d" value="&lt;div&gt;senseBulletDodge() → findBulletDodge() ↳ 预判弹道，找相邻安全格&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseCounterShoot() → shouldCounterShootThenDodge() ↳ 反击后还能躲开？&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseEscapeTeleport() → findEscapeTeleport() ↳ 常规无法躲时找传送落点&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseTwoStepEscape() → findTwoStepEscape() ↳ 双弹夹击的两步脱困路径&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseDesperateDodge() → findDesperateDodge() ↳ 绝境时垂直弹道方向横移&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseBombThreat() → findBombDodge() ↳ 炸弹爆炸范围内逃离方向&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffc0c0;strokeColor=#b85450;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="30" y="425" width="280" height="185" as="geometry" />
+        </mxCell>
+        <mxCell id="ss_title" value="软生存传感器" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="325" y="390" width="130" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ss_d" value="&lt;div&gt;senseOverloadLaneDodge() → findOverloadLaneDodge() ↳ 双弹覆盖带提前脱离格&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseAimDodge() → findAimDodge() ↳ 敌炮口已瞄准我，预判侧移&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseLineDuelDodge() → findLineDuelDodge() ↳ 近距同线时我不占先手，侧移离线&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e8d5f0;strokeColor=#9673a6;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="325" y="425" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="as_title" value="攻击传感器" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="640" y="390" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="as_d" value="&lt;div&gt;senseOpenShot() → findEnemyBulletOpenShot() ↳ 敌弹刚射出(炮管空)+我与敌同线&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseCloakPreFire() → findCloakPreFireShot() ↳ 隐身流刚消失时的预射方向&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseGuardLineShot() → findGuardLineShot() ↳ 预判敌/星将经过的路线守线&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseBushLineShot() → findBushLineShot() ↳ 草丛内伏击射线&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseBushPreFire() → findBushPreFireTarget() ↳ 草丛陷阱预射目标&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseBlindBushShot() → findBlindBushShot() ↳ 敌消失后草丛盲射目标&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#d5f0d5;strokeColor=#82b366;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="640" y="425" width="310" height="185" as="geometry" />
+        </mxCell>
+        <mxCell id="ts_title" value="目标传感器" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="965" y="390" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ts_d" value="&lt;div&gt;senseStarTeleport() → findStarTeleport() ↳ 传送落点+安全性综合评分&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseStarGuard() → findContestedStarGuard() ↳ 星竞争时预瞄守点方向&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseAssassination() → findAssassinationPlan() ↳ 传送刺杀最优落点+射击方向&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseStarBushAmbush() → findStarBushAmbush() ↳ 星点附近草丛伏击传送位&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffffc0;strokeColor=#d6b656;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="965" y="425" width="285" height="130" as="geometry" />
+        </mxCell>
+        <mxCell id="bs_title" value="炸弹传感器" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="325" y="540" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="bs_d" value="&lt;div&gt;senseRetreatBomb() → findRetreatBomb() ↳ 敌追我时，身后放弹堵路时机&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseStarBomb() → findStarBomb() ↳ 星附近封锁敌来路时机&amp;nbsp;&lt;/div&gt;&lt;div&gt;senseBushBomb() → findBushBomb() ↳ 蹲草时放陷阱时机&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#c0d8ff;strokeColor=#6c8ebf;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="325" y="575" width="275" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="ms_title" value="移动传感器" style="rounded=1;fillColor=#f0e6ff;strokeColor=#9673a6;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="640" y="620" width="120" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ms_d" value="senseSafeNeighbor() → bestSafeNeighbor()   ↳ 无任何策略时最安全邻格 senseDigDirection() → findDigDirection()   ↳ 朝星/敌/中心方向的破墙目标" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e8d0ff;strokeColor=#9673a6;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="640" y="655" width="285" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="act_title" value="动作包装器 bbXxx(bb, ...) — 节点统一入口" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontStyle=1;fontSize=13;" parent="1" vertex="1">
+          <mxGeometry x="30" y="660" width="500" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="act_d" value="&lt;div&gt;bbFire(bb) → me.fire()&amp;nbsp;&lt;/div&gt;&lt;div&gt;bbTeleport(bb, pos) → me.teleport(x, y)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bbMoveToward(bb, target) → moveToward(me, game, target, ...)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bbTurnToward(bb, dir) → turnToward(me, dir)&amp;nbsp;&lt;/div&gt;&lt;div&gt;bbThrowBomb(bb) → me.throwBomb() + 记录到 memory.myBombs&amp;nbsp;&lt;/div&gt;&lt;div&gt;bbDirectGo(bb, target) → directionBetween() + me.go()&amp;nbsp;&lt;/div&gt;&lt;div&gt;bbSpeak(bb, msg) → me.speak(msg) (调试显示)&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=10;align=left;" parent="1" vertex="1">
+          <mxGeometry x="30" y="695" width="420" height="115" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="xpztjlss-rw40" name="敌情识别Profile">
+    <mxGraphModel dx="1389" dy="701" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="enemy-profiler 敌情识别系统" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+          <mxGeometry x="300" y="10" width="600" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="entry" value="每帧: updatePlaystyleObservation(bb)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="380" y="55" width="280" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="detect" value="buildProfile(bb) ← detectPlaystyle(bb)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="380" y="115" width="280" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="factory" value="tree-factory.js 按 profile 组装子树" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="380" y="175" width="280" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="ee1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="entry" target="detect" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="detect" target="factory" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="obs_title" value="打法风格观察 (memory._profiler)" style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="30" y="57.5" width="260" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="obs_d" value="enemyVisibleFrames    敌人可见总帧数&amp;nbsp;&lt;div&gt;enemyFacingMeFrames   敌人朝向我帧数&amp;nbsp;&lt;/div&gt;&lt;div&gt;enemyFleeingFrames    逃跑帧数&amp;nbsp;&lt;/div&gt;&lt;div&gt;enemyStarRushCount    新星刷新立刻冲次数&lt;/div&gt;&lt;div&gt;lastStarPos           上一颗星位置  检测阈值 (PROFILER_DETECT_AFTER_FRAME=15帧后才判断):&amp;nbsp;&lt;/div&gt;&lt;div&gt;facingMe/visible &amp;gt; 40% → AGGRESSIVE (莽夫)&amp;nbsp;&lt;/div&gt;&lt;div&gt;fleeing/visible  &amp;gt; 35% → DEFENSIVE  (跑路型)&amp;nbsp;&lt;/div&gt;&lt;div&gt;starRush &amp;gt;= 2次         → STAR_RUSHER (抢星型)&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ffc0c0;strokeColor=#b85450;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="30" y="107.5" width="310" height="175" as="geometry" />
+        </mxCell>
+        <mxCell id="eobs" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="obs_title" target="entry" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="fix_title" value="动态打法修正" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=11;" parent="1" vertex="1">
+          <mxGeometry x="700" y="55" width="160" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="fix_d" value="AGGRESSIVE → standoffDist=max(dist,5), aggression降级&amp;nbsp;&lt;div&gt;DEFENSIVE  → standoffDist=min(dist,3), starAggression=max&amp;nbsp;&lt;/div&gt;&lt;div&gt;STAR_RUSHER → starAggression=max&amp;nbsp;&lt;/div&gt;&lt;div&gt;终局修正:&amp;nbsp;&lt;/div&gt;&lt;div&gt;framesLeft≤20 &amp;amp;&amp;amp; isLosing → starAgg=max, atk=low&amp;nbsp;&lt;/div&gt;&lt;div&gt;framesLeft≤10            → starAgg=max, atk=none&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e8d5f0;strokeColor=#9673a6;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="870" y="50" width="330" height="105" as="geometry" />
+        </mxCell>
+        <mxCell id="efix" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="detect" target="fix_title" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="skill_title" value="8 种技能静态 Profile" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=13;" parent="1" vertex="1">
+          <mxGeometry x="30" y="290" width="280" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th" value="技能类型" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="325" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th2" value="standoff距离" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="325" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th3" value="attackAggr" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="325" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th4" value="starAggr" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="325" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th5" value="bushCamp" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="325" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="th6" value="特殊开关" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="420" y="325" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r1" value="overload 双弹流" style="rounded=0;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="355" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r1a" value="6" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="355" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r1b" value="low" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="355" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r1c" value="high" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="355" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r1d" value="✓ true" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="355" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r1e" value="dodgeBand=true" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="355" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r2" value="shield 护盾流" style="rounded=0;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="385" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r2a" value="3" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="385" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r2b" value="cautious" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="385" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r2c" value="high" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="385" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r2d" value="✗ false" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="385" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r2e" value="shieldBait=true" style="rounded=0;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="385" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r3" value="freeze 冰冻流" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="415" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r3a" value="5" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="415" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r3b" value="medium" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="415" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r3c" value="high" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="415" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r3d" value="✗ false" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="415" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r3e" value="freezeZoneAvoid=true, assassination=true" style="rounded=0;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="415" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r4" value="cloak 隐身流" style="rounded=0;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="445" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r4a" value="4" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="445" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r4b" value="medium" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="445" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r4c" value="high" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="445" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r4d" value="✗ false" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="445" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r4e" value="zigzagEscape=true, prefireOnDisappear=true, assassination=true" style="rounded=0;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="445" width="270" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r5" value="teleport 传送流" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="475" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r5a" value="3" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="475" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r5b" value="medium" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="475" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r5c" value="high" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="475" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r5d" value="✗ false" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="475" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r5e" value="centerControl=true" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="475" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r6" value="poison 毒雾流" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="505" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r6a" value="4" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="505" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r6b" value="medium" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="505" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r6c" value="high" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="505" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r6d" value="✗ false" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="505" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r6e" value="assassination=true" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="505" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r7" value="stun 眩晕流" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="535" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r7a" value="4" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="535" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r7b" value="medium" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="535" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r7c" value="high" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="535" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r7d" value="✗ false" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="535" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r7e" value="assassination=true" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="535" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r8" value="boost 加速流" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="565" width="90" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r8a" value="4" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="120" y="565" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r8b" value="high" style="rounded=0;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="200" y="565" width="80" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r8c" value="medium" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="280" y="565" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r8d" value="✗ false" style="rounded=0;fillColor=#fff;strokeColor=#ccc;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="350" y="565" width="70" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="r8e" value="assassination=true" style="rounded=0;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="420" y="565" width="220" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="impact_title" value="Profile 参数 → 子树挂载控制" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontStyle=1;fontSize=12;" parent="1" vertex="1">
+          <mxGeometry x="700" y="225" width="330" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="impact_d" value="attackAggression 值   → 攻击节点挂载范围:&amp;nbsp;&lt;div&gt;none     仅frozen/survival/objective/movement&amp;nbsp;&lt;/div&gt;&lt;div&gt;low      + open-shot&amp;nbsp;&lt;/div&gt;&lt;div&gt;cautious + shield-preaim + fire-direct/risky&amp;nbsp;&lt;/div&gt;&lt;div&gt;medium   + guard-line&amp;nbsp;&lt;/div&gt;&lt;div&gt;high     + cloak-prefire + bush-shot&amp;nbsp;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;div&gt;dodgeBand=true         → 挂载 overload-lane-dodge&amp;nbsp;&lt;/div&gt;&lt;div&gt;freezeZoneAvoid=true   → 挂载 freeze-zone-avoid&amp;nbsp;&lt;/div&gt;&lt;div&gt;prefireOnDisappear=true → 挂载 cloak-prefire&amp;nbsp;&lt;/div&gt;&lt;div&gt;shieldBait=true        → 挂载 shield-preaim&amp;nbsp;&lt;/div&gt;&lt;div&gt;bushCamp=true          → 挂载 bush-hold + seek-bush                           屏蔽 occupy-lane enableAssassination=true → 挂载 assassination  starAggression 值      → objective 层行为:   low  → 敌近星时不传送   high → 正常传送抢星   max  → 目标层提权到攻击前&lt;/div&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="700" y="260" width="360" height="310" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="l46yjnj0-wslt" name="节点流转示例">
+    <mxGraphModel dx="2788" dy="989" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="节点流转示例 — 典型场景每帧决策路径" style="text;html=1;strokeColor=none;fillColor=none;align=center;fontStyle=1;fontSize=15;" parent="1" vertex="1">
+          <mxGeometry x="200" y="10" width="800" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="ex1_title" value="场景 ①  普通帧：子弹来袭，有星，与敌同线可射" style="text;html=1;strokeColor=none;fillColor=#fff2cc;align=left;fontStyle=1;fontSize=12;rounded=1;strokeColor=#d6b656;" parent="1" vertex="1">
+          <mxGeometry x="30" y="60" width="520" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex1_1" value="Root.tick()" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="-200" y="110" width="100" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex1_2" value="① frozen-check Guard is-frozen → FALSE" style="rounded=1;fillColor=#f5f5f5;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="-60" y="110" width="175" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex1_3" value="② hard-survival Selector tick..." style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="235" y="117.5" width="130" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex1_4" value="counter-shoot Seq has-bullet-dodge→TRUE can-counter→TRUE ✅ Action: bbFire() 反击!" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="435" y="85" width="140" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="ex1_5" value="🔚 返回 SUCCESS，本帧结束" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="30" y="155" width="250" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex1_note" value="注：子弹躲避 &gt; 抢星 &gt; 攻击，说：反击!" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;fontStyle=2;" parent="1" vertex="1">
+          <mxGeometry x="30" y="188" width="400" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="ee1_1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex1_1" target="ex1_2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee1_2" value="FAILURE" style="edgeStyle=orthogonalEdgeStyle;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;" parent="1" source="ex1_2" target="ex1_3" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="240" y="115" as="targetPoint" />
+            <Array as="points">
+              <mxPoint x="177" y="125" />
+              <mxPoint x="177" y="133" />
+              <mxPoint x="220" y="133" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ee1_3" style="edgeStyle=orthogonalEdgeStyle;entryX=0;entryY=0.75;entryDx=0;entryDy=0;" parent="1" source="ex1_3" target="ex1_4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee1_4" value="SUCCESS" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex1_4" target="ex1_5" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="505" y="170" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ex2_title" value="场景 ②  无威胁帧：传送就绪，有星，无伏击陷阱" style="text;html=1;strokeColor=none;fillColor=#dae8fc;align=left;fontStyle=1;fontSize=12;rounded=1;strokeColor=#6c8ebf;" parent="1" vertex="1">
+          <mxGeometry x="30" y="220" width="520" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex2_1" value="Root.tick()" style="rounded=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" parent="1" vertex="1">
+          <mxGeometry x="30" y="260" width="100" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex2_2" value="①frozen-check→FAIL ②hard-survival→FAIL ③star-grab→has-pending=FALSE FAIL ④soft-survival→FAIL" style="rounded=1;fillColor=#f5f5f5;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="145" y="255" width="180" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ex2_3" value="⑤last-chance-star framesLeft&gt;10→FAIL" style="rounded=1;fillColor=#f5f5f5;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="340" y="260" width="130" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex2_4" value="⑧attack Selector open-shot→FAIL fire-direct:shotDir存在,gunReady can-shoot→TRUE safe-to-fire→TRUE ✅ Action: 转向+开炮!" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="30" y="340" width="180" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="ex2_note" value="注：若此帧炮没冷却，attack全FAIL → 流入 objective → star-teleport传送抢星" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;fontStyle=2;" parent="1" vertex="1">
+          <mxGeometry x="30" y="435" width="550" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="ee2_1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex2_1" target="ex2_2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee2_2" value="全FAIL" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex2_2" target="ex2_3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee2_3" value="FAIL→⑥⑦也FAIL→⑧" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex2_3" target="ex2_4" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="405" y="320" />
+              <mxPoint x="120" y="320" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ex3_title" value="场景 ③  终局帧：framesLeft=8，我方落后，有星" style="text;html=1;strokeColor=none;fillColor=#f8cecc;align=left;fontStyle=1;fontSize=12;rounded=1;strokeColor=#b85450;" parent="1" vertex="1">
+          <mxGeometry x="600" y="60" width="540" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex3_1" value="buildProfile() framesLeft≤10 → attackAgg=none → starAgg=max" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="600" y="100" width="130" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="ex3_2" value="tree-factory attack子树=null(none) last-chance-star挂入" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="745" y="100" width="140" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="ex3_3" value="Root.tick() ①frozen→FAIL ②hard-survival→FAIL ③star-grab→FAIL" style="rounded=1;fillColor=#f5f5f5;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="900" y="100" width="130" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="ex3_4" value="⑤ last-chance-star When: framesLeft≤10 → TRUE   → tick objective子树   → star-teleport   → 传送到星旁! ✅ 说：传星!" style="rounded=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="1045" y="85" width="145" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="ex3_note" value="注：attack子树因profile.attackAggression=none被tree-factory设为null，完全跳过攻击直接冲星" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;fontStyle=2;" parent="1" vertex="1">
+          <mxGeometry x="600" y="195" width="620" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="ee3_1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex3_1" target="ex3_2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee3_2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex3_2" target="ex3_3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee3_3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex3_3" target="ex3_4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ex4_title" value="场景 ④  双弹流敌人 (overload)：我在草丛，敌进射线" style="text;html=1;strokeColor=none;fillColor=#e1d5e7;align=left;fontStyle=1;fontSize=12;rounded=1;strokeColor=#9673a6;" parent="1" vertex="1">
+          <mxGeometry x="600" y="225" width="540" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex4_1" value="Profile: overload attackAgg=low bushCamp=true dodgeBand=true" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="600" y="265" width="130" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="ex4_2" value="①~④ 全FAIL (无子弹/无瞄准) ⑤~⑦ When条件不满足" style="rounded=1;fillColor=#f5f5f5;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="745" y="265" width="140" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="ex4_3" value="⑧ attack(low) open-shot→无空窗FAIL (其余均未挂载) → FAIL整个attack" style="rounded=1;fillColor=#f5f5f5;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="900" y="265" width="130" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="ex4_4" value="⑪ movement → ambush-hold Seq    in-ambush=TRUE(蹲草中)    still-safe=TRUE(无弹)    shotDir存在→ 敌入射线! ✅ bbFire() 说：伏击!" style="rounded=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="1045" y="250" width="145" height="95" as="geometry" />
+        </mxCell>
+        <mxCell id="ex4_note" value="注：伏击开火在 movement 层执行，不受 attackAggression=low 限制，这是蹲草流的关键设计" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=9;fontStyle=2;" parent="1" vertex="1">
+          <mxGeometry x="600" y="360" width="630" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="ee4_1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex4_1" target="ex4_2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee4_2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex4_2" target="ex4_3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee4_3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex4_3" target="ex4_4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ex5_title" value="场景 ⑤  极端帧：无星、无敌可见、所有策略均失败" style="text;html=1;strokeColor=none;fillColor=#f5f5f5;align=left;fontStyle=1;fontSize=12;rounded=1;strokeColor=#666;" parent="1" vertex="1">
+          <mxGeometry x="30" y="470" width="540" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex5_flow" value="Root→①FAIL→②FAIL→③FAIL→④FAIL→⑤⑥⑦FAIL→⑧FAIL→⑨FAIL→⑩FAIL →⑪ movement Selector:    ambush-shift/confirm/hold → 无ambushState，FAIL    bush-hold → 非overload敌 or 不在草丛，FAIL    short-intent → 无缓存意图，FAIL    star-chase → !bb.star, FAIL    band-escape → 无overload威胁，FAIL    occupy-lane → 无敌可见，FAIL    maintain-standoff → 无敌可见，FAIL    cloak-defense → 无cloak记录，FAIL    escape-ambush → 无最近敌位，FAIL    patrol → virtualPatrolTarget()找到目标格，SUCCESS!    → bbMoveToward(patrolStep) 巡逻移动" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666;fontSize=9;align=left;" parent="1" vertex="1">
+          <mxGeometry x="30" y="510" width="540" height="195" as="geometry" />
+        </mxCell>
+        <mxCell id="ex5_note" value="兜底保底：patrol失败→dig→safe-neighbor→turn-right，100%有输出，不会挂机" style="text;html=1;strokeColor=none;fillColor=none;align=left;fontSize=10;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="30" y="710" width="540" height="25" as="geometry" />
+        </mxCell>
+        <mxCell id="ex6_title" value="场景 ⑥  护盾流 (shield)：敌盾激活中，距离≤3，有射线" style="text;html=1;strokeColor=none;fillColor=#fff2cc;align=left;fontStyle=1;fontSize=12;rounded=1;strokeColor=#d6b656;" parent="1" vertex="1">
+          <mxGeometry x="600" y="395" width="540" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex6_1" value="Profile: shield shieldBait=true attackAgg=cautious" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="600" y="435" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ex6_2" value="①~④ 全FAIL" style="rounded=1;fillColor=#f5f5f5;strokeColor=#ccc;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="745" y="435" width="100" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ex6_3" value="⑧ attack Selector: open-shot→FAIL(有盾) shield-preaim Seq:   enemy-shielded→TRUE   has-clear-shot→TRUE   close-range(≤3)→TRUE ✅ 转向对准(不开火) 等待下帧盾消失" style="rounded=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="860" y="420" width="165" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="ex6_4" value="下一帧：盾消失 → fire-direct:   safe-to-fire=TRUE ✅ bbFire() 直射!" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="1045" y="435" width="130" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ee6_1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex6_1" target="ex6_2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee6_2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex6_2" target="ex6_3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee6_3" value="盾消失" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex6_3" target="ex6_4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ex7_title" value="场景 ⑦  传送伏击完整流程：有星，传送就绪，附近有草丛" style="text;html=1;strokeColor=none;fillColor=#d5e8d4;align=left;fontStyle=1;fontSize=12;rounded=1;strokeColor=#82b366;" parent="1" vertex="1">
+          <mxGeometry x="600" y="555" width="560" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="ex7_1" value="帧N: objective→ star-bush-ambush Seq star-exists→TRUE tp-ready→TRUE enemy-allows→TRUE has-ambush-pos→TRUE ✅ bbTeleport(草丛格) 记录 ambushState" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="600" y="595" width="150" height="115" as="geometry" />
+        </mxCell>
+        <mxCell id="ex7_2" value="帧N+1: movement→ ambush-shift Seq needs-shift=TRUE(刚传) shift-safe=TRUE ✅ 移到相邻草丛格" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="765" y="595" width="150" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="ex7_3" value="帧N+2: movement→ ambush-shift-confirm → 到达shiftTarget → shifted=true" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" parent="1" vertex="1">
+          <mxGeometry x="930" y="595" width="150" height="75" as="geometry" />
+        </mxCell>
+        <mxCell id="ex7_4" value="帧N+3..M: movement→ ambush-hold Seq in-ambush=TRUE 敌进入射线时: ✅ bbFire() 说：伏击!" style="rounded=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;fontStyle=1;" parent="1" vertex="1">
+          <mxGeometry x="1095" y="595" width="150" height="85" as="geometry" />
+        </mxCell>
+        <mxCell id="ee7_1" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex7_1" target="ex7_2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee7_2" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex7_2" target="ex7_3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ee7_3" style="edgeStyle=orthogonalEdgeStyle;" parent="1" source="ex7_3" target="ex7_4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

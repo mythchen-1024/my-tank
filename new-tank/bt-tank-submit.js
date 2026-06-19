@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-19T06:47:54.159Z
+// 构建时间: 2026-06-19T14:24:02.627Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -5385,6 +5385,9 @@ function createMovementTree(profile) {
         if (a.shiftTarget && !a.shifted) return false;
         var timeout = 15;
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
+        if (bb.enemyTank && bb.memory.lastEnemyPos && manhattan(bb.enemyPos, bb.myPos) < manhattan(bb.memory.lastEnemyPos, bb.myPos)) {
+          timeout = Math.max(timeout, 25);
+        }
         if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; bb.memory.ambushCooldown = bb.frame; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         // 敌人比我更快到星且我射线不通 → 放弃伏击去追星

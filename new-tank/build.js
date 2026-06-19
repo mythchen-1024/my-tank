@@ -35,7 +35,7 @@ const MODULE_ORDER = [
   { file: 'core-utils.js',       base: dir },
   { file: 'tactics.js',          base: dir },
   { file: 'movement-engine.js',  base: dir },
-  { file: 'state-store.js',      base: parentDir },
+  { file: 'state-store.js',      base: dir },
   // 行为树框架
   { file: 'bt-core.js',         base: dir },
   { file: 'blackboard.js',      base: dir },

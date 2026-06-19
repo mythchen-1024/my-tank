@@ -72,6 +72,9 @@ function createMovementTree(profile) {
         if (a.shiftTarget && !a.shifted) return false;
         var timeout = 15;
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
+        if (bb.enemyTank && bb.memory.lastEnemyPos && manhattan(bb.enemyPos, bb.myPos) < manhattan(bb.memory.lastEnemyPos, bb.myPos)) {
+          timeout = Math.max(timeout, 25);
+        }
         if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; bb.memory.ambushCooldown = bb.frame; return false; }
         if (!bb.star || !samePos(bb.star, a.star)) { bb.memory.ambushState = null; return false; }
         // 敌人比我更快到星且我射线不通 → 放弃伏击去追星
