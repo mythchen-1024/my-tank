@@ -11,12 +11,65 @@
 function createMovementTree(profile) {
   var children = [];
 
+  // ---- 传送落点偏移：传送后首帧立即移到相邻草丛 ----
+  children.push(
+    Sequence('ambush-shift', [
+      Guard('needs-shift', function (bb) {
+        var a = bb.memory.ambushState;
+        if (!a) return false;
+        if (bb.frame - a.frame > 1) return false;
+        if (a.shifted) return false;
+        return samePos(bb.myPos, a.pos);
+      }),
+      Guard('shift-safe', function (bb) {
+        return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+      }),
+      Action('do-ambush-shift', function (bb) {
+        var a = bb.memory.ambushState;
+        var shiftTarget = findPostTeleportShift(a.pos, a.star, bb.game, bb.enemyBullets);
+        if (!shiftTarget) {
+          a.shifted = true;
+          return;
+        }
+        bbDirectGo(bb, shiftTarget);
+        a.shiftTarget = shiftTarget;
+      })
+    ])
+  );
+
+  // ---- 传送落点偏移完成确认 ----
+  children.push(
+    Sequence('ambush-shift-confirm', [
+      Guard('has-shift-target', function (bb) {
+        var a = bb.memory.ambushState;
+        if (!a || !a.shiftTarget) return false;
+        if (a.shifted) return false;
+        return true;
+      }),
+      Action('confirm-shift', function (bb) {
+        var a = bb.memory.ambushState;
+        if (samePos(bb.myPos, a.shiftTarget)) {
+          a.pos = a.shiftTarget.slice();
+          a.shifted = true;
+          a.shiftTarget = null;
+        } else if (bb.frame - a.frame > 3) {
+          a.pos = bb.myPos.slice();
+          a.shifted = true;
+          a.shiftTarget = null;
+        } else {
+          bbDirectGo(bb, a.shiftTarget);
+        }
+      })
+    ])
+  );
+
   // ---- 伏击蹲守：传送到伏击位后原地等待射击 ----
   children.push(
     Sequence('ambush-hold', [
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;
         if (!a) return false;
+        if (a.shiftTarget && !a.shifted) return false;
         var timeout = 15;
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
         if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; bb.memory.ambushCooldown = bb.frame; return false; }

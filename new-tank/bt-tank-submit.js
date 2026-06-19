@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-18T05:15:32.507Z
+// 构建时间: 2026-06-19T06:47:54.159Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -3292,8 +3292,42 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
       score += distanceFromEdges(c, game) * 2;
       // 扣分：落点与星同行/列 → 敌方传送流蹲星对面时容易同线被扫草命中
       if (c[0] === star[0] || c[1] === star[1]) score -= 40;
+      // 加分：有相邻草丛邻居且对星有射线（可供传送后偏移）
+      var adjGrassCount = 0;
+      for (var di2 = 0; di2 < DIRS.length; di2++) {
+        var adj = [c[0] + DIRS[di2].dx, c[1] + DIRS[di2].dy];
+        if (tileAt(game, adj) === 'o' && clearShotDirection(adj, star, game)) adjGrassCount++;
+      }
+      if (adjGrassCount > 0) score += 15 + adjGrassCount * 5;
       if (score > bestScore) { bestScore = score; best = c; }
     }
+  }
+  return best;
+}
+
+
+function findPostTeleportShift(landingPos, star, game, enemyBullets) {
+  var candidates = [];
+  for (var i = 0; i < DIRS.length; i++) {
+    var d = DIRS[i];
+    var np = [landingPos[0] + d.dx, landingPos[1] + d.dy];
+    if (tileAt(game, np) !== 'o') continue;
+    if (!clearShotDirection(np, star, game)) continue;
+    if (anyBulletThreatens(enemyBullets, np, game)) continue;
+    candidates.push(np);
+  }
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  var dx = star[0] - landingPos[0];
+  var dy = star[1] - landingPos[1];
+  var mainAxis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+  var best = candidates[0], bestDist = 0;
+  for (var j = 0; j < candidates.length; j++) {
+    var c = candidates[j];
+    var dist = mainAxis === 'x'
+      ? Math.abs(c[1] - landingPos[1])
+      : Math.abs(c[0] - landingPos[0]);
+    if (dist > bestDist) { bestDist = dist; best = c; }
   }
   return best;
 }
@@ -5171,7 +5205,7 @@ function createObjectiveTree(profile) {
         } else {
           bbSpeak(bb, '伏击!');
           bbTeleport(bb, pos);
-          bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame };
+          bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame, shifted: false, shiftTarget: null };
           bb.memory.ambushScannedDirs = {};
         }
       })
@@ -5290,12 +5324,65 @@ function createStarGrabNode() {
 function createMovementTree(profile) {
   var children = [];
 
+  // ---- 传送落点偏移：传送后首帧立即移到相邻草丛 ----
+  children.push(
+    Sequence('ambush-shift', [
+      Guard('needs-shift', function (bb) {
+        var a = bb.memory.ambushState;
+        if (!a) return false;
+        if (bb.frame - a.frame > 1) return false;
+        if (a.shifted) return false;
+        return samePos(bb.myPos, a.pos);
+      }),
+      Guard('shift-safe', function (bb) {
+        return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+      }),
+      Action('do-ambush-shift', function (bb) {
+        var a = bb.memory.ambushState;
+        var shiftTarget = findPostTeleportShift(a.pos, a.star, bb.game, bb.enemyBullets);
+        if (!shiftTarget) {
+          a.shifted = true;
+          return;
+        }
+        bbDirectGo(bb, shiftTarget);
+        a.shiftTarget = shiftTarget;
+      })
+    ])
+  );
+
+  // ---- 传送落点偏移完成确认 ----
+  children.push(
+    Sequence('ambush-shift-confirm', [
+      Guard('has-shift-target', function (bb) {
+        var a = bb.memory.ambushState;
+        if (!a || !a.shiftTarget) return false;
+        if (a.shifted) return false;
+        return true;
+      }),
+      Action('confirm-shift', function (bb) {
+        var a = bb.memory.ambushState;
+        if (samePos(bb.myPos, a.shiftTarget)) {
+          a.pos = a.shiftTarget.slice();
+          a.shifted = true;
+          a.shiftTarget = null;
+        } else if (bb.frame - a.frame > 3) {
+          a.pos = bb.myPos.slice();
+          a.shifted = true;
+          a.shiftTarget = null;
+        } else {
+          bbDirectGo(bb, a.shiftTarget);
+        }
+      })
+    ])
+  );
+
   // ---- 伏击蹲守：传送到伏击位后原地等待射击 ----
   children.push(
     Sequence('ambush-hold', [
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;
         if (!a) return false;
+        if (a.shiftTarget && !a.shifted) return false;
         var timeout = 15;
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
         if (bb.frame - a.frame > timeout) { bb.memory.ambushState = null; bb.memory.ambushCooldown = bb.frame; return false; }

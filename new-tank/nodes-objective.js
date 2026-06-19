@@ -70,7 +70,7 @@ function createObjectiveTree(profile) {
         } else {
           bbSpeak(bb, '伏击!');
           bbTeleport(bb, pos);
-          bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame };
+          bb.memory.ambushState = { pos: pos.slice(), star: bb.star.slice(), frame: bb.frame, shifted: false, shiftTarget: null };
           bb.memory.ambushScannedDirs = {};
         }
       })

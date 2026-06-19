@@ -2164,8 +2164,42 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
       score += distanceFromEdges(c, game) * 2;
       // 扣分：落点与星同行/列 → 敌方传送流蹲星对面时容易同线被扫草命中
       if (c[0] === star[0] || c[1] === star[1]) score -= 40;
+      // 加分：有相邻草丛邻居且对星有射线（可供传送后偏移）
+      var adjGrassCount = 0;
+      for (var di2 = 0; di2 < DIRS.length; di2++) {
+        var adj = [c[0] + DIRS[di2].dx, c[1] + DIRS[di2].dy];
+        if (tileAt(game, adj) === 'o' && clearShotDirection(adj, star, game)) adjGrassCount++;
+      }
+      if (adjGrassCount > 0) score += 15 + adjGrassCount * 5;
       if (score > bestScore) { bestScore = score; best = c; }
     }
+  }
+  return best;
+}
+
+
+function findPostTeleportShift(landingPos, star, game, enemyBullets) {
+  var candidates = [];
+  for (var i = 0; i < DIRS.length; i++) {
+    var d = DIRS[i];
+    var np = [landingPos[0] + d.dx, landingPos[1] + d.dy];
+    if (tileAt(game, np) !== 'o') continue;
+    if (!clearShotDirection(np, star, game)) continue;
+    if (anyBulletThreatens(enemyBullets, np, game)) continue;
+    candidates.push(np);
+  }
+  if (candidates.length === 0) return null;
+  if (candidates.length === 1) return candidates[0];
+  var dx = star[0] - landingPos[0];
+  var dy = star[1] - landingPos[1];
+  var mainAxis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+  var best = candidates[0], bestDist = 0;
+  for (var j = 0; j < candidates.length; j++) {
+    var c = candidates[j];
+    var dist = mainAxis === 'x'
+      ? Math.abs(c[1] - landingPos[1])
+      : Math.abs(c[0] - landingPos[0]);
+    if (dist > bestDist) { bestDist = dist; best = c; }
   }
   return best;
 }
