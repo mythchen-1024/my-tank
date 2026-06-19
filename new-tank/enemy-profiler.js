@@ -128,6 +128,7 @@ var SKILL_PROFILES = {
 var PLAYSTYLE_AGGRESSIVE  = 'aggressive';   // 频繁对线 + 开火
 var PLAYSTYLE_DEFENSIVE   = 'defensive';    // 跑路 + 保持距离
 var PLAYSTYLE_STAR_RUSHER = 'starRusher';   // 星刷新就冲
+var PLAYSTYLE_BUSH_CAMPER = 'bushCamper';   // 传送蹲草流
 var PLAYSTYLE_UNKNOWN     = 'unknown';      // 未识别
 
 // ---- 打法风格检测阈值 ----
@@ -187,6 +188,15 @@ function detectPlaystyle(bb) {
   if (p.enemyFacingMeFrames / vis > PROFILER_AGGRESSIVE_RATIO) return PLAYSTYLE_AGGRESSIVE;
   if (p.enemyFleeingFrames / vis > PROFILER_DEFENSIVE_RATIO) return PLAYSTYLE_DEFENSIVE;
   if (p.enemyStarRushCount >= 2) return PLAYSTYLE_STAR_RUSHER;
+
+  // 蹲草流检测：传送进草 1 次 + 蹲 5 帧，或走进草 2 次 + 蹲 8 帧，或从草丛开炮 2 次
+  var bs = m.bushCamperStats || {};
+  if ((bs.teleportIntoBush >= 1 && bs.bushStationaryFrames >= 5) ||
+      (bs.walkIntoBush >= 2 && bs.bushStationaryFrames >= 8) ||
+      (bs.fireFromBush >= 2)) {
+    return PLAYSTYLE_BUSH_CAMPER;
+  }
+
   return PLAYSTYLE_UNKNOWN;
 }
 
@@ -232,6 +242,14 @@ function buildProfile(bb) {
   if (playstyle === PLAYSTYLE_STAR_RUSHER) {
     // 对抢星型：提升抢星优先级、守星预瞄
     profile.starAggression = 'max';
+  }
+
+  if (playstyle === PLAYSTYLE_BUSH_CAMPER) {
+    // 对蹲草流：敌人蹲草不动 → 火力威胁来自固定炮线，安心吃星
+    profile.starAggression = 'high';
+    if (profile.attackAggression === 'low') profile.attackAggression = 'medium';
+    profile.bushCamperDefense = true;
+    profile.standoffDistance = Math.min(profile.standoffDistance, 4);
   }
 
   // 终局修正：最后 20 帧落后时，无论对手类型都全力抢星

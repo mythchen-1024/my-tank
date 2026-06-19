@@ -96,6 +96,7 @@ function refreshBlackboard(bb, me, enemy, game) {
   // ── 跨帧记忆更新 ──
   bb.memory = getMatchState(game);
   recordAssassinOutcome(bb.memory, enemy, bb.enemyTank, game);
+  trackEnemyBush(bb.memory, bb.enemyTank, bb.enemy, game);
   trackEnemy(bb.memory, bb.enemyTank, bb.myPos, game);
   trackStuck(bb.memory, bb.myPos);
   cleanExpiredBombs(bb.memory, bb.frame);
@@ -152,6 +153,16 @@ function senseTwoStepEscape(bb) {
 function senseDesperateDodge(bb) {
   return sense(bb, 'desperateDodge', function () {
     return findDesperateDodge(bb.me, bb.enemyBullets, bb.game, bb.enemyPos, bb.enemyTank);
+  });
+}
+
+// ---- 草丛蹲守传感器 ----
+
+function senseBushCamperDodge(bb) {
+  return sense(bb, 'bushCamperDodge', function () {
+    return findBushCamperFireLineDodge(
+      bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.memory
+    );
   });
 }
 

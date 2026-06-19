@@ -98,6 +98,19 @@ function createSoftSurvivalTree(profile) {
     );
   }
 
+  // 蹲草流防御：回避高概率草丛射击线
+  if (profile.bushCamperDefense) {
+    children.push(
+      Sequence('bush-camper-dodge', [
+        Guard('enemy-hidden', function (bb) { return !bb.enemyTank; }),
+        Guard('has-bush-dodge', function (bb) { return !!senseBushCamperDodge(bb); }),
+        Action('do-bush-camper-dodge', function (bb) {
+          bbMoveToward(bb, senseBushCamperDodge(bb));
+        })
+      ])
+    );
+  }
+
   // 通用：防范敌方瞄准（敌炮口正对我，提前移动离线）
   children.push(
     Sequence('aim-dodge', [

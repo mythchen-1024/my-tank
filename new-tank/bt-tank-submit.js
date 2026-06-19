@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-19T14:24:02.627Z
+// 构建时间: 2026-06-19T15:18:33.699Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1539,8 +1539,64 @@ function findBlindBushShot(me, enemy, enemyTank, enemyBullets, game, state) {
       var score = (6 - distToEnemy) * 20 + (8 - distToMe) * 5;
       // 朝向即射线方向时优先（不用转向，出手更快）
       if (dir === me.tank.direction) score += 50;
+      // 热力图加权：高概率草丛优先射击
+      if (state && state.bushHeatmap) {
+        var heat = state.bushHeatmap[key(c)];
+        if (heat) score += heat.score * 0.5;
+      }
       if (score > bestScore) { bestScore = score; best = { dir: dir, target: c }; }
     }
+  }
+  return best;
+}
+
+
+/**
+ * 草丛蹲守防御：当我处于高概率草丛的射击线上时，侧移到安全格。
+ * 仅在敌人不可见时触发（敌可见时交给 aim-dodge 处理）。
+ * 返回安全侧移目标格 或 null。
+ */
+function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, state) {
+  if (enemyTank) return null;
+  if (!state || !state.bushHeatmap) return null;
+  if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null;
+  var myPos = me.tank.position;
+  var hm = state.bushHeatmap;
+
+  // 收集所有高概率草丛（score >= 50）对我的射击线威胁
+  var threatened = false;
+  var dangerDirs = {};
+  for (var k in hm) {
+    if (!hm.hasOwnProperty(k) || hm[k].score < 50) continue;
+    var parts = k.split(',');
+    var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
+    var shotDir = clearShotDirection(bushPos, myPos, game);
+    if (shotDir && manhattan(bushPos, myPos) <= 8) {
+      threatened = true;
+      dangerDirs[shotDir] = true;
+    }
+  }
+  if (!threatened) return null;
+
+  // 找不在任何高概率草丛射击线上的安全相邻格
+  var best = null, bestScore = -9999;
+  for (var i = 0; i < DIRS.length; i++) {
+    var p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, null)) continue;
+    if (stepIntoBulletPath(enemyBullets || [], p, game)) continue;
+    // 检查新位置是否仍在某个高概率草丛射击线上
+    var stillDanger = false;
+    for (var kk in hm) {
+      if (!hm.hasOwnProperty(kk) || hm[kk].score < 50) continue;
+      var pp = kk.split(',');
+      var bp = [parseInt(pp[0]), parseInt(pp[1])];
+      if (clearShotDirection(bp, p, game) && manhattan(bp, p) <= 8) {
+        stillDanger = true; break;
+      }
+    }
+    if (stillDanger) continue;
+    var score = distanceFromEdges(p, game);
+    if (score > bestScore) { bestScore = score; best = p; }
   }
   return best;
 }
@@ -3903,6 +3959,15 @@ function getMatchState(game) {
       lastChosenType: null,
       phantomBullets: [],
       myBombs: [],
+      // ── 草丛热力图 ──
+      bushHeatmap: {},          // key(pos) → { score, lastFrame, source }
+      bushBulletSeen: false,    // 上帧是否有敌弹可见
+      bushCamperStats: {        // 蹲草流统计
+        teleportIntoBush: 0,
+        walkIntoBush: 0,
+        fireFromBush: 0,
+        bushStationaryFrames: 0,
+      },
     };
   }
   MATCH_STATE.lastFrame = frame;
@@ -4070,6 +4135,118 @@ function recordAssassinOutcome(state, enemy, enemyTank, game) {
   // 敌人消失（不可见）不等于“躲开了刺杀”：可能是被这次刺杀打死（成功）、隐身或进草丛。
   // 误把消失判为躲避会出现“刺杀成功反而禁用刺杀”的反逻辑，故此处不下结论——
   // 保留 pendingAssassin 继续观察，等敌人重新可见再裁决，或在 elapsed>3 时由上方逻辑自然清除。
+}
+
+
+/**
+ * 追踪敌方草丛位置热力图。三种收集途径：
+ *   1. 走进草丛：上帧可见 + 本帧不可见 + lastEnemyPos 在/邻近 "o" tile
+ *   2. 传送进草丛：本帧可见 + 在 "o" tile + 位置跳变 > 1（系统强制显示一帧）
+ *   3. 草丛开炮：新子弹出现 + 敌不可见 → 反向回溯弹道找 "o" tile
+ *
+ * 热力图每帧衰减 score -= 2，score <= 0 时删除。
+ */
+function trackEnemyBush(state, enemyTank, enemy, game) {
+  if (!game || !game.map) return;
+  var frame = (game && game.frames) || 0;
+  var hm = state.bushHeatmap;
+  var stats = state.bushCamperStats;
+
+  // ── 敌方出草重置：可见且不在草丛 → 清空热力图 ──
+  if (enemyTank && enemyTank.position && tileAt(game, enemyTank.position) !== "o") {
+    for (var k in hm) {
+      if (hm.hasOwnProperty(k)) delete hm[k];
+    }
+    stats.bushStationaryFrames = 0;
+    // 更新子弹可见标记，防止下次进草时误判已有老弹为"草丛新开炮"
+    state.bushBulletSeen = !!(enemy && enemy.bullet && enemy.bullet.position);
+    return;
+  }
+
+  // ── 衰减所有条目 ──
+  for (var k in hm) {
+    if (hm.hasOwnProperty(k)) {
+      hm[k].score -= 2;
+      if (hm[k].score <= 0) delete hm[k];
+    }
+  }
+
+  // ── 途径 1：走进草丛 ──
+  // 上帧可见（lastEnemyPos 有值且 lastEnemySeenFrame 是上一帧），本帧不可见
+  if (!enemyTank && state.lastEnemyPos && state.lastEnemySeenFrame >= frame - 1) {
+    var lp = state.lastEnemyPos;
+    if (tileAt(game, lp) === "o") {
+      _bushHeatAdd(hm, lp, 80, frame, 'walk');
+      stats.walkIntoBush++;
+    } else {
+      // 相邻格有草丛：敌人走一步就进了草
+      var adjFound = false;
+      for (var i = 0; i < DIRS.length; i++) {
+        var adj = [lp[0] + DIRS[i].dx, lp[1] + DIRS[i].dy];
+        if (tileAt(game, adj) === "o") {
+          _bushHeatAdd(hm, adj, 60, frame, 'walk');
+          adjFound = true;
+        }
+      }
+      if (adjFound) stats.walkIntoBush++;
+    }
+  }
+
+  // ── 途径 2：传送进草丛 ──
+  // 本帧可见 + 在草丛 tile + 位置跳变 > 1（上帧位置不相邻 或 上帧不可见）
+  if (enemyTank && enemyTank.position && tileAt(game, enemyTank.position) === "o") {
+    var jumped = !state.lastEnemyPos ||
+      manhattan(state.lastEnemyPos, enemyTank.position) > 1 ||
+      state.lastEnemySeenFrame < frame - 1;
+    if (jumped) {
+      _bushHeatAdd(hm, enemyTank.position, 100, frame, 'teleport');
+      stats.teleportIntoBush++;
+    }
+  }
+
+  // ── 途径 3：草丛开炮推算 ──
+  var hasBullet = !!(enemy && enemy.bullet && enemy.bullet.position);
+  if (hasBullet && !state.bushBulletSeen && !enemyTank) {
+    var b = enemy.bullet;
+    var rd = { up: [0, 1], down: [0, -1], left: [1, 0], right: [-1, 0] }[b.direction];
+    if (rd) {
+      var cx = b.position[0], cy = b.position[1];
+      for (var step = 1; step <= 10; step++) {
+        cx += rd[0]; cy += rd[1];
+        var tp = [cx, cy];
+        if (!inBounds(tp, game)) break;
+        var tile = tileAt(game, tp);
+        if (tile === "x" || tile === "m") break;
+        if (tile === "o") {
+          var addScore = Math.max(20, 50 - step * 5);
+          _bushHeatAdd(hm, tp, addScore, frame, 'fire');
+        }
+      }
+      stats.fireFromBush++;
+    }
+  }
+  state.bushBulletSeen = hasBullet;
+
+  // ── 蹲草不动统计 ──
+  if (!enemyTank) {
+    var hasHighHeat = false;
+    for (var k in hm) {
+      if (hm.hasOwnProperty(k) && hm[k].score >= 40) { hasHighHeat = true; break; }
+    }
+    if (hasHighHeat) stats.bushStationaryFrames++;
+  }
+}
+
+
+function _bushHeatAdd(hm, pos, score, frame, source) {
+  var k = key(pos);
+  if (hm[k]) {
+    hm[k].score = Math.min(200, hm[k].score + score);
+    hm[k].lastFrame = frame;
+    hm[k].source = source;
+  } else {
+    hm[k] = { score: score, lastFrame: frame, source: source };
+  }
 }
 
 
@@ -4291,6 +4468,7 @@ function refreshBlackboard(bb, me, enemy, game) {
   // ── 跨帧记忆更新 ──
   bb.memory = getMatchState(game);
   recordAssassinOutcome(bb.memory, enemy, bb.enemyTank, game);
+  trackEnemyBush(bb.memory, bb.enemyTank, bb.enemy, game);
   trackEnemy(bb.memory, bb.enemyTank, bb.myPos, game);
   trackStuck(bb.memory, bb.myPos);
   cleanExpiredBombs(bb.memory, bb.frame);
@@ -4347,6 +4525,16 @@ function senseTwoStepEscape(bb) {
 function senseDesperateDodge(bb) {
   return sense(bb, 'desperateDodge', function () {
     return findDesperateDodge(bb.me, bb.enemyBullets, bb.game, bb.enemyPos, bb.enemyTank);
+  });
+}
+
+// ---- 草丛蹲守传感器 ----
+
+function senseBushCamperDodge(bb) {
+  return sense(bb, 'bushCamperDodge', function () {
+    return findBushCamperFireLineDodge(
+      bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.memory
+    );
   });
 }
 
@@ -4651,6 +4839,7 @@ var SKILL_PROFILES = {
 var PLAYSTYLE_AGGRESSIVE  = 'aggressive';   // 频繁对线 + 开火
 var PLAYSTYLE_DEFENSIVE   = 'defensive';    // 跑路 + 保持距离
 var PLAYSTYLE_STAR_RUSHER = 'starRusher';   // 星刷新就冲
+var PLAYSTYLE_BUSH_CAMPER = 'bushCamper';   // 传送蹲草流
 var PLAYSTYLE_UNKNOWN     = 'unknown';      // 未识别
 
 // ---- 打法风格检测阈值 ----
@@ -4710,6 +4899,15 @@ function detectPlaystyle(bb) {
   if (p.enemyFacingMeFrames / vis > PROFILER_AGGRESSIVE_RATIO) return PLAYSTYLE_AGGRESSIVE;
   if (p.enemyFleeingFrames / vis > PROFILER_DEFENSIVE_RATIO) return PLAYSTYLE_DEFENSIVE;
   if (p.enemyStarRushCount >= 2) return PLAYSTYLE_STAR_RUSHER;
+
+  // 蹲草流检测：传送进草 1 次 + 蹲 5 帧，或走进草 2 次 + 蹲 8 帧，或从草丛开炮 2 次
+  var bs = m.bushCamperStats || {};
+  if ((bs.teleportIntoBush >= 1 && bs.bushStationaryFrames >= 5) ||
+      (bs.walkIntoBush >= 2 && bs.bushStationaryFrames >= 8) ||
+      (bs.fireFromBush >= 2)) {
+    return PLAYSTYLE_BUSH_CAMPER;
+  }
+
   return PLAYSTYLE_UNKNOWN;
 }
 
@@ -4755,6 +4953,14 @@ function buildProfile(bb) {
   if (playstyle === PLAYSTYLE_STAR_RUSHER) {
     // 对抢星型：提升抢星优先级、守星预瞄
     profile.starAggression = 'max';
+  }
+
+  if (playstyle === PLAYSTYLE_BUSH_CAMPER) {
+    // 对蹲草流：敌人蹲草不动 → 火力威胁来自固定炮线，安心吃星
+    profile.starAggression = 'high';
+    if (profile.attackAggression === 'low') profile.attackAggression = 'medium';
+    profile.bushCamperDefense = true;
+    profile.standoffDistance = Math.min(profile.standoffDistance, 4);
   }
 
   // 终局修正：最后 20 帧落后时，无论对手类型都全力抢星
@@ -4869,6 +5075,19 @@ function createSoftSurvivalTree(profile) {
         Guard('has-aim-dodge', function (bb) { return !!senseAimDodge(bb); }),
         Action('escape-freeze-zone', function (bb) {
           bbMoveToward(bb, senseAimDodge(bb));
+        })
+      ])
+    );
+  }
+
+  // 蹲草流防御：回避高概率草丛射击线
+  if (profile.bushCamperDefense) {
+    children.push(
+      Sequence('bush-camper-dodge', [
+        Guard('enemy-hidden', function (bb) { return !bb.enemyTank; }),
+        Guard('has-bush-dodge', function (bb) { return !!senseBushCamperDodge(bb); }),
+        Action('do-bush-camper-dodge', function (bb) {
+          bbMoveToward(bb, senseBushCamperDodge(bb));
         })
       ])
     );
@@ -5976,6 +6195,7 @@ function isKeyActionForSpeak(actionName) {
     'do-star-tp': true,
     'do-assassination': true,
     'do-bush-hold': true,
+    'do-bush-camper-dodge': true,
     'frozen-wait': true,
   };
   return !!keyActions[actionName];

@@ -411,8 +411,64 @@ function findBlindBushShot(me, enemy, enemyTank, enemyBullets, game, state) {
       var score = (6 - distToEnemy) * 20 + (8 - distToMe) * 5;
       // 朝向即射线方向时优先（不用转向，出手更快）
       if (dir === me.tank.direction) score += 50;
+      // 热力图加权：高概率草丛优先射击
+      if (state && state.bushHeatmap) {
+        var heat = state.bushHeatmap[key(c)];
+        if (heat) score += heat.score * 0.5;
+      }
       if (score > bestScore) { bestScore = score; best = { dir: dir, target: c }; }
     }
+  }
+  return best;
+}
+
+
+/**
+ * 草丛蹲守防御：当我处于高概率草丛的射击线上时，侧移到安全格。
+ * 仅在敌人不可见时触发（敌可见时交给 aim-dodge 处理）。
+ * 返回安全侧移目标格 或 null。
+ */
+function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, state) {
+  if (enemyTank) return null;
+  if (!state || !state.bushHeatmap) return null;
+  if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null;
+  var myPos = me.tank.position;
+  var hm = state.bushHeatmap;
+
+  // 收集所有高概率草丛（score >= 50）对我的射击线威胁
+  var threatened = false;
+  var dangerDirs = {};
+  for (var k in hm) {
+    if (!hm.hasOwnProperty(k) || hm[k].score < 50) continue;
+    var parts = k.split(',');
+    var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
+    var shotDir = clearShotDirection(bushPos, myPos, game);
+    if (shotDir && manhattan(bushPos, myPos) <= 8) {
+      threatened = true;
+      dangerDirs[shotDir] = true;
+    }
+  }
+  if (!threatened) return null;
+
+  // 找不在任何高概率草丛射击线上的安全相邻格
+  var best = null, bestScore = -9999;
+  for (var i = 0; i < DIRS.length; i++) {
+    var p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, null)) continue;
+    if (stepIntoBulletPath(enemyBullets || [], p, game)) continue;
+    // 检查新位置是否仍在某个高概率草丛射击线上
+    var stillDanger = false;
+    for (var kk in hm) {
+      if (!hm.hasOwnProperty(kk) || hm[kk].score < 50) continue;
+      var pp = kk.split(',');
+      var bp = [parseInt(pp[0]), parseInt(pp[1])];
+      if (clearShotDirection(bp, p, game) && manhattan(bp, p) <= 8) {
+        stillDanger = true; break;
+      }
+    }
+    if (stillDanger) continue;
+    var score = distanceFromEdges(p, game);
+    if (score > bestScore) { bestScore = score; best = p; }
   }
   return best;
 }

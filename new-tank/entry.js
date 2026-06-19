@@ -75,6 +75,7 @@ function isKeyActionForSpeak(actionName) {
     'do-star-tp': true,
     'do-assassination': true,
     'do-bush-hold': true,
+    'do-bush-camper-dodge': true,
     'frozen-wait': true,
   };
   return !!keyActions[actionName];
