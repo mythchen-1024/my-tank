@@ -2285,6 +2285,20 @@ function wallBlocksEnemyShot(next, enemyPos, game) {
 }
 
 
+function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
+  if (!memory || !memory.lastEnemyPos) return false;
+  var frame = (game && game.frames) || 0;
+  if (frame - memory.lastEnemySeenFrame > 12) return false;
+  var dangerPos = memory.lastEnemyPos;
+  if (clearShotDirection(dangerPos, myPos, game)) return false;
+  if (!clearShotDirection(dangerPos, next, game)) return false;
+  var dist = manhattan(dangerPos, next);
+  if (dist <= 4) return true;
+  if (dist <= 6 && !isStar) return true;
+  return false;
+}
+
+
 /**
  * next 是否能横向(垂直于敌我连线)脱离双弹覆盖带：
  * 至少一侧能连走两格(第一格脱出敌人正列/行进入相邻列、第二格再跨出相邻列)到 dx>=2(或 dy>=2)的安全格。
@@ -3488,18 +3502,20 @@ function findAmbushGrassScan(myPos, myDir, star, game, state) {
  * 各分支的死区复检统一走这里，消除重复的 stepEntersKillZone + stepIntoSealedDeadEnd 调用。
  * allowStarDeadEnd：星就在死格里时仍允许进入（不因噎废食）。
  */
-function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadEnd, enemyBullets) {
+function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadEnd, enemyBullets, memory) {
   if (!next) return false;
   if (enemyPos && stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff)) return false;
   if (stepIntoSealedDeadEnd(next, enemyPos, game) && !allowStarDeadEnd) return false;
-  // M1/M2: overload 流时，走进"横向出口<=1格且无法跨出双弹带"的窄兜也视为危险。
+  // M1/M2: overload 流时，走进”横向出口<=1格且无法跨出双弹带”的窄兜也视为危险。
   // 副弹封相邻列时角落里横向根本跑不掉（mat_8xLQ/mat_Ae1A：[17,13]仅[16,13]一个出口被副弹封死）。
   if (enemyPos && enemyIsOverloadType(enemy) && !allowStarDeadEnd) {
     if (!hasDoubleLaneEscapeAt(next, enemyPos, game) && inDoubleLaneBand(enemyPos, next, standoff + 2)) return false;
   }
-  // 还要排除下一帧会扫到的子弹轨道，避免“当前安全、下一拍吃弹”的假安全。
+  // 还要排除下一帧会扫到的子弹轨道，避免”当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
   if (predictedOverloadThreatens(enemy, next, game)) return false;
+  // 隐身敌射线检查：敌不可见时避免走入其最后已知位置的射击线
+  if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(next, myPos, game, memory, allowStarDeadEnd)) return false;
   return true;
 }
 
@@ -5960,7 +5976,7 @@ function createMovementTree(profile) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
         return isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
-          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets);
+          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory);
       }),
       Action('do-star-chase', function (bb) {
         var starPath = bb._cache._starPath;
@@ -6086,14 +6102,14 @@ function createMovementTree(profile) {
         // 尝试 zigzag
         var zigStep = diagonalEvadeStep(bb.myPos, dangerPos, bb.game, bb.memory);
         if (zigStep && isSafeStep(zigStep, bb.myPos, bb.enemyPos, bb.game,
-            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets)) {
+            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets, bb.memory)) {
           bbMoveToward(bb, zigStep);
           return;
         }
         // 尝试 ambush escape
         var ambushStep = escapeAmbushLine(bb.myPos, dangerPos, bb.game, bb.enemyBullets);
         if (ambushStep && isSafeStep(ambushStep, bb.myPos, bb.enemyPos, bb.game,
-            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets)) {
+            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets, bb.memory)) {
           bbMoveToward(bb, ambushStep);
           return;
         }

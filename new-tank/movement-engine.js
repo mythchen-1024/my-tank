@@ -17,18 +17,20 @@
  * 各分支的死区复检统一走这里，消除重复的 stepEntersKillZone + stepIntoSealedDeadEnd 调用。
  * allowStarDeadEnd：星就在死格里时仍允许进入（不因噎废食）。
  */
-function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadEnd, enemyBullets) {
+function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadEnd, enemyBullets, memory) {
   if (!next) return false;
   if (enemyPos && stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff)) return false;
   if (stepIntoSealedDeadEnd(next, enemyPos, game) && !allowStarDeadEnd) return false;
-  // M1/M2: overload 流时，走进"横向出口<=1格且无法跨出双弹带"的窄兜也视为危险。
+  // M1/M2: overload 流时，走进”横向出口<=1格且无法跨出双弹带”的窄兜也视为危险。
   // 副弹封相邻列时角落里横向根本跑不掉（mat_8xLQ/mat_Ae1A：[17,13]仅[16,13]一个出口被副弹封死）。
   if (enemyPos && enemyIsOverloadType(enemy) && !allowStarDeadEnd) {
     if (!hasDoubleLaneEscapeAt(next, enemyPos, game) && inDoubleLaneBand(enemyPos, next, standoff + 2)) return false;
   }
-  // 还要排除下一帧会扫到的子弹轨道，避免“当前安全、下一拍吃弹”的假安全。
+  // 还要排除下一帧会扫到的子弹轨道，避免”当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
   if (predictedOverloadThreatens(enemy, next, game)) return false;
+  // 隐身敌射线检查：敌不可见时避免走入其最后已知位置的射击线
+  if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(next, myPos, game, memory, allowStarDeadEnd)) return false;
   return true;
 }
 

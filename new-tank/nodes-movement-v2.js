@@ -276,7 +276,7 @@ function createMovementTree(profile) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
         return isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
-          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets);
+          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory);
       }),
       Action('do-star-chase', function (bb) {
         var starPath = bb._cache._starPath;
@@ -402,14 +402,14 @@ function createMovementTree(profile) {
         // 尝试 zigzag
         var zigStep = diagonalEvadeStep(bb.myPos, dangerPos, bb.game, bb.memory);
         if (zigStep && isSafeStep(zigStep, bb.myPos, bb.enemyPos, bb.game,
-            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets)) {
+            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets, bb.memory)) {
           bbMoveToward(bb, zigStep);
           return;
         }
         // 尝试 ambush escape
         var ambushStep = escapeAmbushLine(bb.myPos, dangerPos, bb.game, bb.enemyBullets);
         if (ambushStep && isSafeStep(ambushStep, bb.myPos, bb.enemyPos, bb.game,
-            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets)) {
+            bb.enemy, safeStandoffDistance(bb.enemy), false, bb.enemyBullets, bb.memory)) {
           bbMoveToward(bb, ambushStep);
           return;
         }

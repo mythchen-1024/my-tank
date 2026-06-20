@@ -1158,6 +1158,25 @@ function wallBlocksEnemyShot(next, enemyPos, game) {
 
 
 /**
+ * 隐身敌射线检查：敌人不可见但有最近传送/消失位置时，
+ * 判断走到 next 是否会进入该位置的射击线（同行/列无墙遮挡）。
+ * 近距（manhattan ≤ 4）直接拒绝，中距（≤ 6）除非 next 是星否则也拒绝。
+ */
+function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
+  if (!memory || !memory.lastEnemyPos) return false;
+  var frame = (game && game.frames) || 0;
+  if (frame - memory.lastEnemySeenFrame > 12) return false;
+  var dangerPos = memory.lastEnemyPos;
+  if (clearShotDirection(dangerPos, myPos, game)) return false;
+  if (!clearShotDirection(dangerPos, next, game)) return false;
+  var dist = manhattan(dangerPos, next);
+  if (dist <= 4) return true;
+  if (dist <= 6 && !isStar) return true;
+  return false;
+}
+
+
+/**
  * next 是否能横向(垂直于敌我连线)脱离双弹覆盖带：
  * 至少一侧能连走两格(第一格脱出敌人正列/行进入相邻列、第二格再跨出相邻列)到 dx>=2(或 dy>=2)的安全格。
  * 走廊贴墙时一侧是墙、另一侧仅一格就撞回主弹列 -> 无此脱离 -> 双弹夹死(mat_73I 沿 x=17 走廊被相邻列副弹追死)。
