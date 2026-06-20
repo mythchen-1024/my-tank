@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-20T08:22:13.410Z
+// 构建时间: 2026-06-20T09:19:34.105Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -3116,16 +3116,36 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, s
   if (shieldEnemy) return null;
 
   // 敌人很近(<=3)，预判它将从哪条轴进入我的枪线，提前转炮口对准那个轴向。
+  // 方向锁定：选定预瞄方向后锁住 N 帧不切换，防止 |dx|≈|dy| 时逐帧翻转抖动。
+  var GUARD_PREAIM_LOCK = 3;
+  var curFrame = game.frame || 0;
+  if (state && state.guardPreAimDir && state.guardPreAimFrame != null &&
+      curFrame - state.guardPreAimFrame <= GUARD_PREAIM_LOCK) {
+    if (me.tank.direction !== state.guardPreAimDir) return { dir: state.guardPreAimDir };
+    return null;
+  }
+
   const dx = enemyPos[0] - myPos[0];
   const dy = enemyPos[1] - myPos[1];
-  // 选”垂直偏移更小”的轴：敌人更快能与我对齐的方向
-  if (Math.abs(dx) <= Math.abs(dy)) {
-    const dir = dy < 0 ? "up" : "down";
-    if (me.tank.direction !== dir) return { dir: dir };
+  var preAimDir;
+  if (Math.abs(dx) < Math.abs(dy)) {
+    preAimDir = dy < 0 ? 'up' : 'down';
+  } else if (Math.abs(dx) > Math.abs(dy)) {
+    preAimDir = dx < 0 ? 'left' : 'right';
   } else {
-    const dir = dx < 0 ? "left" : "right";
-    if (me.tank.direction !== dir) return { dir: dir };
+    // |dx|===|dy|：优先沿用上次方向，消除边界抖动
+    if (state && state.guardPreAimDir) {
+      preAimDir = state.guardPreAimDir;
+    } else {
+      preAimDir = dy < 0 ? 'up' : 'down';
+    }
   }
+
+  if (state) {
+    state.guardPreAimDir = preAimDir;
+    state.guardPreAimFrame = curFrame;
+  }
+  if (me.tank.direction !== preAimDir) return { dir: preAimDir };
   return null;
 }
 
@@ -4035,7 +4055,7 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
   const bullets = enemyBullets || [];
 
   if (intent.kind === "hold") {
-    const stillHidden = iAmHidden(me, game) && teleportReady(me) &&
+    const stillHidden = iAmHidden(me, game) && !game.star && teleportReady(me) &&
       (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&
       (!enemyTank || !enemyAimsAt(myPos, enemyTank, game)) &&
       !anyBulletThreatens(bullets, myPos, game);
