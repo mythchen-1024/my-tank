@@ -62,6 +62,11 @@ function createAttackTree(profile) {
       Sequence('fire-direct', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        // 近距被逼且需多帧转向 → 放弃攻击让 movement 后撤(mat_4FgtrkWtGANKtI2mX)
+        Guard('not-cornered-turning', function (bb) {
+          if (bb.distToEnemy >= safeStandoffDistance(bb.enemy)) return true;
+          return turnDistance(bb.myDir, bb.shotDir) < 2;
+        }),
         // shield 流特殊处理：需要确认打完能侧移躲开回敬
         Guard('shield-safe', function (bb) {
           if (!enemyHasShieldSkill(bb.enemy)) return true;
@@ -103,6 +108,11 @@ function createAttackTree(profile) {
       Sequence('fire-risky', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        // 近距被逼且需多帧转向 → 放弃攻击让 movement 后撤
+        Guard('not-cornered-turning', function (bb) {
+          if (bb.distToEnemy >= safeStandoffDistance(bb.enemy)) return true;
+          return turnDistance(bb.myDir, bb.shotDir) < 2;
+        }),
         Guard('shield-ok', function (bb) {
           return !enemyHasShieldSkill(bb.enemy) ||
             canShootThenEvadeShieldCounter(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos);
@@ -124,6 +134,10 @@ function createAttackTree(profile) {
     children.push(
       Sequence('guard-line', [
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
+        Guard('not-cornered-guard', function (bb) {
+          if (!bb.enemyTank) return true;
+          return bb.distToEnemy >= safeStandoffDistance(bb.enemy);
+        }),
         Action('do-guard-line', function (bb) {
           var shot = senseGuardLineShot(bb);
           if (shot.fire) { bbSpeak(bb, '守线!'); bbFire(bb); }

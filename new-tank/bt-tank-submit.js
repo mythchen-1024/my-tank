@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-20T09:36:42.569Z
+// 构建时间: 2026-06-20T10:23:41.722Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1928,6 +1928,7 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
   return best;
 }
 
+
 /**
  * 中央星点的双 teleport 竞星：若星点在开阔中心、敌当前炮线并未锁星，
  * 贴星一格会让敌直接踩星后形成我方 fireLocked 的近距劣势（mat_C28）。
@@ -2293,6 +2294,11 @@ function wallBlocksEnemyShot(next, enemyPos, game) {
 }
 
 
+/**
+ * 隐身敌射线检查：敌人不可见但有最近传送/消失位置时，
+ * 判断走到 next 是否会进入该位置的射击线（同行/列无墙遮挡）。
+ * 近距（manhattan ≤ 4）直接拒绝，中距（≤ 6）除非 next 是星否则也拒绝。
+ */
 function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
   if (!memory || !memory.lastEnemyPos) return false;
   var frame = (game && game.frames) || 0;
@@ -5330,6 +5336,11 @@ function createAttackTree(profile) {
       Sequence('fire-direct', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        // 近距被逼且需多帧转向 → 放弃攻击让 movement 后撤(mat_4FgtrkWtGANKtI2mX)
+        Guard('not-cornered-turning', function (bb) {
+          if (bb.distToEnemy >= safeStandoffDistance(bb.enemy)) return true;
+          return turnDistance(bb.myDir, bb.shotDir) < 2;
+        }),
         // shield 流特殊处理：需要确认打完能侧移躲开回敬
         Guard('shield-safe', function (bb) {
           if (!enemyHasShieldSkill(bb.enemy)) return true;
@@ -5371,6 +5382,11 @@ function createAttackTree(profile) {
       Sequence('fire-risky', [
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        // 近距被逼且需多帧转向 → 放弃攻击让 movement 后撤
+        Guard('not-cornered-turning', function (bb) {
+          if (bb.distToEnemy >= safeStandoffDistance(bb.enemy)) return true;
+          return turnDistance(bb.myDir, bb.shotDir) < 2;
+        }),
         Guard('shield-ok', function (bb) {
           return !enemyHasShieldSkill(bb.enemy) ||
             canShootThenEvadeShieldCounter(bb.me, bb.enemy, bb.enemyTank, bb.enemyBullets, bb.game, bb.enemyPos);
@@ -5392,6 +5408,10 @@ function createAttackTree(profile) {
     children.push(
       Sequence('guard-line', [
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
+        Guard('not-cornered-guard', function (bb) {
+          if (!bb.enemyTank) return true;
+          return bb.distToEnemy >= safeStandoffDistance(bb.enemy);
+        }),
         Action('do-guard-line', function (bb) {
           var shot = senseGuardLineShot(bb);
           if (shot.fire) { bbSpeak(bb, '守线!'); bbFire(bb); }
