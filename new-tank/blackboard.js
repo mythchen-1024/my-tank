@@ -312,7 +312,12 @@ function bbTeleport(bb, pos) {
 function bbMoveToward(bb, target) {
   if (!bb.enemyPos && bb.memory && target &&
       stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
-        !!(bb.star && samePos(target, bb.star)))) return;
+        !!(bb.star && samePos(target, bb.star)))) {
+    var alt = _findSafeAlternativeStep(bb);
+    if (alt) moveToward(bb.me, bb.game, alt, null, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    else moveToward(bb.me, bb.game, target, null, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    return;
+  }
   moveToward(bb.me, bb.game, target, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
 }
 
@@ -335,8 +340,35 @@ function bbSpeak(bb, msg) {
 function bbDirectGo(bb, target) {
   if (!bb.enemyPos && bb.memory && target &&
       stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
-        !!(bb.star && samePos(target, bb.star)))) return;
+        !!(bb.star && samePos(target, bb.star)))) {
+    var alt = _findSafeAlternativeStep(bb);
+    if (alt) {
+      var altDir = directionBetween(bb.myPos, alt);
+      if (altDir === bb.myDir) bb.me.go();
+      else if (altDir) bbTurnToward(bb, altDir);
+    } else {
+      var dir = directionBetween(bb.myPos, target);
+      if (dir === bb.myDir) bb.me.go();
+      else if (dir) bbTurnToward(bb, dir);
+    }
+    return;
+  }
   var dir = directionBetween(bb.myPos, target);
   if (dir === bb.myDir) bb.me.go();
   else if (dir) bbTurnToward(bb, dir);
+}
+
+function _findSafeAlternativeStep(bb) {
+  var best = null, bestScore = -9999;
+  for (var i = 0; i < DIRS.length; i++) {
+    var p = [bb.myPos[0] + DIRS[i].dx, bb.myPos[1] + DIRS[i].dy];
+    if (!isPassable(bb.game, p, null)) continue;
+    if (stepIntoHiddenEnemyFireLine(p, bb.myPos, bb.game, bb.memory, false)) continue;
+    if (anyBulletThreatens(bb.enemyBullets, p, bb.game)) continue;
+    var score = 0;
+    if (bb.star) score += (manhattan(bb.myPos, bb.star) - manhattan(p, bb.star)) * 10;
+    if (bb.memory.lastEnemyPos) score += manhattan(p, bb.memory.lastEnemyPos);
+    if (score > bestScore) { bestScore = score; best = p; }
+  }
+  return best;
 }
