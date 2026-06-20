@@ -1825,6 +1825,10 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
   // 守星陷阱：敌握双弹且星在其覆盖带内时放弃传送（与 shouldChaseStar 走路判断用同一函数）
   if (isStarGuardTrap(enemyPos, enemy, game.star)) return null;
 
+  // 星在敌方近距射线上：传送后补吃必踏入射线送死(mat_GDXBfZAVR5e3xWW76)
+  if (enemyPos && enemyCanFireSoon(enemy) && clearShotDirection(enemyPos, game.star, game) &&
+      manhattan(enemyPos, game.star) <= 6) return null;
+
   // 隐身守星：先找贴最后隐身格的安全压迫位；找不到则放弃传星，避免直送星点。
   const hiddenCloakGrab = hiddenCloakStarTeleport(me, enemy, enemyTank, enemyBullets, game, state);
   if (hiddenCloakGrab) return hiddenCloakGrab;
@@ -1895,6 +1899,11 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
   if (!star) return null;
   const myPos = me.tank.position;
   const enemyPos = enemyTank ? enemyTank.position : null;
+  // 星点在敌方射线上且敌能近期开火 → 补吃那一步必踏入射线，所有十字落点都不安全
+  if (enemyPos && enemyCanFireSoon(enemy) && clearShotDirection(enemyPos, star, game)) {
+    var bulletDist = manhattan(enemyPos, star);
+    if (bulletDist <= 6) return null; // 子弹 3 帧内到达星点，补吃来不及脱离
+  }
   let best = null;
   let bestScore = -Infinity;
   for (let i = 0; i < DIRS.length; i++) {
@@ -1918,7 +1927,6 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
   }
   return best;
 }
-
 
 /**
  * 中央星点的双 teleport 竞星：若星点在开阔中心、敌当前炮线并未锁星，
