@@ -21,9 +21,13 @@ function onIdle(me, enemy, game) {
   updatePlaystyleObservation(bb);
 
   // ─── [3] Profile + 行为树构建/重建 ───
+  var enemyJustTeleportedToBush =
+    !!(bb.memory.bushCamperStats &&
+       bb.memory.bushCamperStats.lastTeleportIntoBushFrame === bb.frame);
   var needRebuild = !bb.tree ||
     !bb.profile ||
-    bb.frame - bb.profileFrame >= PROFILE_REBUILD_INTERVAL;
+    bb.frame - bb.profileFrame >= PROFILE_REBUILD_INTERVAL ||
+    enemyJustTeleportedToBush;
 
   if (needRebuild) {
     bb.profile = buildProfile(bb);

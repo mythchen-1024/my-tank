@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-19T15:18:33.699Z
+// 构建时间: 2026-06-20T05:20:41.308Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -3967,6 +3967,7 @@ function getMatchState(game) {
         walkIntoBush: 0,
         fireFromBush: 0,
         bushStationaryFrames: 0,
+        lastTeleportIntoBushFrame: -999,
       },
     };
   }
@@ -4201,6 +4202,7 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
     if (jumped) {
       _bushHeatAdd(hm, enemyTank.position, 100, frame, 'teleport');
       stats.teleportIntoBush++;
+      stats.lastTeleportIntoBushFrame = frame;
     }
   }
 
@@ -4888,27 +4890,99 @@ function updatePlaystyleObservation(bb) {
 }
 
 /**
- * 根据积累的观察数据判定敌方打法风格。
+ * 检测所有活跃特征标志（可同时激活多个）。
+ * isBushCamper 有即时响应路径，传送进草那帧立刻激活，无需等 15 帧观察期。
  */
-function detectPlaystyle(bb) {
+var BUSH_TELEPORT_RESPONSE_WINDOW = 12; // 传送进草后保持激活的帧数
+var TRAIT_HOLD_FRAMES = 32; // trait 一旦激活，至少保持 32 帧（2 个 rebuild 周期）防振荡
+
+function detectTraits(bb) {
+  var traits = {
+    isAggressive: false,
+    isDefensive:  false,
+    isStarRusher: false,
+    isBushCamper: false,
+  };
   var m = bb.memory;
-  if (!m._profiler || bb.frame < PROFILER_DETECT_AFTER_FRAME) return PLAYSTYLE_UNKNOWN;
-  var p = m._profiler;
-  var vis = Math.max(1, p.enemyVisibleFrames);
-
-  if (p.enemyFacingMeFrames / vis > PROFILER_AGGRESSIVE_RATIO) return PLAYSTYLE_AGGRESSIVE;
-  if (p.enemyFleeingFrames / vis > PROFILER_DEFENSIVE_RATIO) return PLAYSTYLE_DEFENSIVE;
-  if (p.enemyStarRushCount >= 2) return PLAYSTYLE_STAR_RUSHER;
-
-  // 蹲草流检测：传送进草 1 次 + 蹲 5 帧，或走进草 2 次 + 蹲 8 帧，或从草丛开炮 2 次
+  var frame = bb.frame;
   var bs = m.bushCamperStats || {};
-  if ((bs.teleportIntoBush >= 1 && bs.bushStationaryFrames >= 5) ||
-      (bs.walkIntoBush >= 2 && bs.bushStationaryFrames >= 8) ||
-      (bs.fireFromBush >= 2)) {
-    return PLAYSTYLE_BUSH_CAMPER;
+
+  // 滞后状态存储（首次初始化）
+  if (!m._traitHold) {
+    m._traitHold = { aggressive: -999, defensive: -999, starRusher: -999, bushCamper: -999 };
+  }
+  var hold = m._traitHold;
+
+  // ── 即时路径：传送进草 → 立刻激活 isBushCamper，不等 15 帧 ──
+  if ((bs.lastTeleportIntoBushFrame || -999) >= frame - BUSH_TELEPORT_RESPONSE_WINDOW) {
+    traits.isBushCamper = true;
+    hold.bushCamper = frame;
   }
 
-  return PLAYSTYLE_UNKNOWN;
+  // ── 常规路径：需满足 PROFILER_DETECT_AFTER_FRAME ──
+  if (m._profiler && frame >= PROFILER_DETECT_AFTER_FRAME) {
+    var p = m._profiler;
+    var vis = Math.max(1, p.enemyVisibleFrames);
+    var facingRatio = p.enemyFacingMeFrames / vis;
+    var fleeRatio = p.enemyFleeingFrames / vis;
+
+    // aggressive / defensive 互斥：取占比更高的那个
+    if (facingRatio > PROFILER_AGGRESSIVE_RATIO && facingRatio >= fleeRatio) {
+      traits.isAggressive = true;
+      hold.aggressive = frame;
+    }
+    if (fleeRatio > PROFILER_DEFENSIVE_RATIO && fleeRatio > facingRatio) {
+      traits.isDefensive = true;
+      hold.defensive = frame;
+    }
+
+    if (p.enemyStarRushCount >= 2) {
+      traits.isStarRusher = true;
+      hold.starRusher = frame;
+    }
+    if ((bs.teleportIntoBush >= 1 && bs.bushStationaryFrames >= 5) ||
+        (bs.walkIntoBush >= 2 && bs.bushStationaryFrames >= 8) ||
+        (bs.fireFromBush >= 2)) {
+      traits.isBushCamper = true;
+      hold.bushCamper = frame;
+    }
+  }
+
+  // ── 滞后保持：trait 激活后至少保持 TRAIT_HOLD_FRAMES 帧 ──
+  if (!traits.isAggressive && hold.aggressive >= frame - TRAIT_HOLD_FRAMES) traits.isAggressive = true;
+  if (!traits.isDefensive  && hold.defensive  >= frame - TRAIT_HOLD_FRAMES) traits.isDefensive  = true;
+  if (!traits.isStarRusher && hold.starRusher >= frame - TRAIT_HOLD_FRAMES) traits.isStarRusher = true;
+  if (!traits.isBushCamper && hold.bushCamper >= frame - TRAIT_HOLD_FRAMES) traits.isBushCamper = true;
+
+  // 滞后恢复后仍强制互斥（不会同时 aggressive + defensive）
+  if (traits.isAggressive && traits.isDefensive) {
+    if (hold.aggressive >= hold.defensive) traits.isDefensive = false;
+    else traits.isAggressive = false;
+  }
+
+  return traits;
+}
+
+
+/**
+ * starAggression 取较大值（low < medium < high < max）
+ */
+function starAggrMax(a, b) {
+  var order = ['low', 'medium', 'high', 'max'];
+  return order[Math.max(order.indexOf(a), order.indexOf(b))];
+}
+
+
+/**
+ * 将特征标志集转为可读摘要字符串，如 "starRusher+bushCamper"
+ */
+function _traitsSummary(traits) {
+  var active = [];
+  if (traits.isAggressive) active.push('aggressive');
+  if (traits.isDefensive)  active.push('defensive');
+  if (traits.isStarRusher) active.push('starRusher');
+  if (traits.isBushCamper) active.push('bushCamper');
+  return active.length ? active.join('+') : 'unknown';
 }
 
 /**
@@ -4934,32 +5008,34 @@ function buildProfile(bb) {
   }
   profile.skillType = skillType;
 
-  // 动态打法修正
-  var playstyle = detectPlaystyle(bb);
-  profile.playstyle = playstyle;
+  // 动态打法修正（多特征标志，各自独立叠加）
+  var traits = detectTraits(bb);
+  profile.traits = traits;
+  profile.playstyle = _traitsSummary(traits);  // 供 speak/debug 显示
 
-  if (playstyle === PLAYSTYLE_AGGRESSIVE) {
-    // 对莽夫：加大安全距离、降低攻击欲望、提升躲避
+  if (traits.isAggressive) {
+    // 对莽夫：加大安全距离、降低攻击欲望
     profile.standoffDistance = Math.max(profile.standoffDistance, 5);
     if (profile.attackAggression === 'high') profile.attackAggression = 'medium';
   }
 
-  if (playstyle === PLAYSTYLE_DEFENSIVE) {
+  if (traits.isDefensive) {
     // 对跑路型：缩小安全距离、全力抢星（它不打我）
     profile.standoffDistance = Math.min(profile.standoffDistance, 3);
-    profile.starAggression = 'max';
+    profile.starAggression = starAggrMax(profile.starAggression, 'max');
   }
 
-  if (playstyle === PLAYSTYLE_STAR_RUSHER) {
-    // 对抢星型：提升抢星优先级、守星预瞄
-    profile.starAggression = 'max';
+  if (traits.isStarRusher) {
+    // 对抢星型：提升抢星优先级
+    profile.starAggression = starAggrMax(profile.starAggression, 'max');
   }
 
-  if (playstyle === PLAYSTYLE_BUSH_CAMPER) {
-    // 对蹲草流：敌人蹲草不动 → 火力威胁来自固定炮线，安心吃星
-    profile.starAggression = 'high';
+  if (traits.isBushCamper) {
+    // 对蹲草流：固定炮线威胁，安心吃星 + 启用草丛炮线回避
+    profile.starAggression = starAggrMax(profile.starAggression, 'high');
     if (profile.attackAggression === 'low') profile.attackAggression = 'medium';
     profile.bushCamperDefense = true;
+    // aggressive(min 5) + bushCamper(min 4)：bushCamper 优先（蹲草敌不追人）
     profile.standoffDistance = Math.min(profile.standoffDistance, 4);
   }
 
@@ -5862,7 +5938,9 @@ function createMovementTree(profile) {
     Sequence('maintain-standoff', [
       Guard('enemy-visible', function (bb) { return !!bb.enemyPos; }),
       Guard('standoff-step', function (bb) {
-        var standoff = safeStandoffDistance(bb.enemy);
+        // 取 profile 期望距离与硬安全底线中的较大值
+        var profileStandoff = (bb.profile && bb.profile.standoffDistance) || 4;
+        var standoff = Math.max(profileStandoff, safeStandoffDistance(bb.enemy));
         var step = nextStepToStandoff(bb.myPos, bb.enemyPos, bb.game, standoff, bb.enemy, bb.enemyBullets);
         if (!step) return false;
         // 不进死胡同
@@ -6141,9 +6219,13 @@ function onIdle(me, enemy, game) {
   updatePlaystyleObservation(bb);
 
   // ─── [3] Profile + 行为树构建/重建 ───
+  var enemyJustTeleportedToBush =
+    !!(bb.memory.bushCamperStats &&
+       bb.memory.bushCamperStats.lastTeleportIntoBushFrame === bb.frame);
   var needRebuild = !bb.tree ||
     !bb.profile ||
-    bb.frame - bb.profileFrame >= PROFILE_REBUILD_INTERVAL;
+    bb.frame - bb.profileFrame >= PROFILE_REBUILD_INTERVAL ||
+    enemyJustTeleportedToBush;
 
   if (needRebuild) {
     bb.profile = buildProfile(bb);

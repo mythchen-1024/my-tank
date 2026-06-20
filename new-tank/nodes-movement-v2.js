@@ -330,7 +330,9 @@ function createMovementTree(profile) {
     Sequence('maintain-standoff', [
       Guard('enemy-visible', function (bb) { return !!bb.enemyPos; }),
       Guard('standoff-step', function (bb) {
-        var standoff = safeStandoffDistance(bb.enemy);
+        // 取 profile 期望距离与硬安全底线中的较大值
+        var profileStandoff = (bb.profile && bb.profile.standoffDistance) || 4;
+        var standoff = Math.max(profileStandoff, safeStandoffDistance(bb.enemy));
         var step = nextStepToStandoff(bb.myPos, bb.enemyPos, bb.game, standoff, bb.enemy, bb.enemyBullets);
         if (!step) return false;
         // 不进死胡同

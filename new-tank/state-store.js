@@ -60,6 +60,7 @@ function getMatchState(game) {
         walkIntoBush: 0,
         fireFromBush: 0,
         bushStationaryFrames: 0,
+        lastTeleportIntoBushFrame: -999,
       },
     };
   }
@@ -294,6 +295,7 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
     if (jumped) {
       _bushHeatAdd(hm, enemyTank.position, 100, frame, 'teleport');
       stats.teleportIntoBush++;
+      stats.lastTeleportIntoBushFrame = frame;
     }
   }
 
