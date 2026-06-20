@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-20T10:23:41.722Z
+// 构建时间: 2026-06-20T12:29:45.845Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -2300,10 +2300,29 @@ function wallBlocksEnemyShot(next, enemyPos, game) {
  * 近距（manhattan ≤ 4）直接拒绝，中距（≤ 6）除非 next 是星否则也拒绝。
  */
 function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
-  if (!memory || !memory.lastEnemyPos) return false;
+  if (!memory) return false;
   var frame = (game && game.frames) || 0;
-  if (frame - memory.lastEnemySeenFrame > 12) return false;
-  var dangerPos = memory.lastEnemyPos;
+
+  // 来源1: lastEnemyPos（12帧内有效）
+  if (memory.lastEnemyPos && frame - memory.lastEnemySeenFrame <= 12) {
+    if (_hiddenFireLineBlocked(memory.lastEnemyPos, next, myPos, game, isStar)) return true;
+  }
+
+  // 来源2: bushHeatmap 高置信度条目（蹲草敌持续有效，不受12帧限制）
+  var hm = memory.bushHeatmap;
+  if (hm) {
+    for (var k in hm) {
+      if (!hm.hasOwnProperty(k) || hm[k].score < 50) continue;
+      var parts = k.split(',');
+      var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
+      if (_hiddenFireLineBlocked(bushPos, next, myPos, game, isStar)) return true;
+    }
+  }
+
+  return false;
+}
+
+function _hiddenFireLineBlocked(dangerPos, next, myPos, game, isStar) {
   if (clearShotDirection(dangerPos, myPos, game)) return false;
   if (!clearShotDirection(dangerPos, next, game)) return false;
   var dist = manhattan(dangerPos, next);
@@ -2446,9 +2465,9 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     if (!needTurn) {
       if (incomingFrames < 1) continue;
     } else {
-      // 2. 如果需要转向，移动需要 2 帧（第 1 帧转身，第 2 帧离开）。
-      // 致命漏洞修复：转身帧必须保证我不死！
-      if (incomingFrames < 3) continue;
+      // 时序：转 N 次 + 走 1 步 = N+1 帧脱离。平手时仍尝试（引擎先移动再判碰撞）
+      var turns = turnDistance(me.tank.direction, d.name);
+      if (incomingFrames < turns + 1) continue;
       
       // 预演子弹再飞 1 帧（模拟完成转身，即将进行 go 的那个帧）
       // 必须保证那帧里，目标格子 p 不会被子弹扫过或占领
@@ -2824,7 +2843,7 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     // 反向(如 DOWN→UP, turns=2)需 3 帧，旧代码误算为 2 帧导致以为能逃实则来不及。
     const turns = needTurn ? turnDistance(me.tank.direction, d.name) : 0;
     const escapeFrames = turns === 0 ? 1 : turns + 1;
-    if (needTurn && escapeFrames >= enemyHitFrames) continue;
+    if (needTurn && escapeFrames > enemyHitFrames) continue;
 
     // 偏好当前朝向就能直接走的格子（1 帧脱离，最快）
     const facing = needTurn ? 0 : 100;
@@ -4297,6 +4316,34 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
   }
   state.bushBulletSeen = hasBullet;
 
+  // ── 途径 4：推断传送消失 ──
+  // 敌上帧可见于非草丛位、本帧消失、且无相邻草丛可解释(非走进草)、敌有传送技能
+  // → 推断敌传送进了某个草丛格，将全图草丛加入热力图
+  if (!enemyTank && state.lastEnemyPos && state.lastEnemySeenFrame >= frame - 1 &&
+      enemyHasTeleport(enemy)) {
+    var lp4 = state.lastEnemyPos;
+    if (tileAt(game, lp4) !== "o") {
+      var hasAdjGrass = false;
+      for (var i = 0; i < DIRS.length; i++) {
+        if (tileAt(game, [lp4[0] + DIRS[i].dx, lp4[1] + DIRS[i].dy]) === "o") {
+          hasAdjGrass = true; break;
+        }
+      }
+      if (!hasAdjGrass) {
+        var w = game.map.length, h = game.map[0].length;
+        for (var gx = 0; gx < w; gx++) {
+          for (var gy = 0; gy < h; gy++) {
+            if (tileAt(game, [gx, gy]) === "o") {
+              _bushHeatAdd(hm, [gx, gy], 80, frame, 'teleport-infer');
+            }
+          }
+        }
+        stats.teleportIntoBush++;
+        stats.lastTeleportIntoBushFrame = frame;
+      }
+    }
+  }
+
   // ── 蹲草不动统计 ──
   if (!enemyTank) {
     var hasHighHeat = false;
@@ -4752,6 +4799,9 @@ function bbTeleport(bb, pos) {
 }
 
 function bbMoveToward(bb, target) {
+  if (!bb.enemyPos && bb.memory && target &&
+      stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
+        !!(bb.star && samePos(target, bb.star)))) return;
   moveToward(bb.me, bb.game, target, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
 }
 
@@ -4772,6 +4822,9 @@ function bbSpeak(bb, msg) {
 }
 
 function bbDirectGo(bb, target) {
+  if (!bb.enemyPos && bb.memory && target &&
+      stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
+        !!(bb.star && samePos(target, bb.star)))) return;
   var dir = directionBetween(bb.myPos, target);
   if (dir === bb.myDir) bb.me.go();
   else if (dir) bbTurnToward(bb, dir);

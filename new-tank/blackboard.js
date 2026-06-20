@@ -310,6 +310,9 @@ function bbTeleport(bb, pos) {
 }
 
 function bbMoveToward(bb, target) {
+  if (!bb.enemyPos && bb.memory && target &&
+      stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
+        !!(bb.star && samePos(target, bb.star)))) return;
   moveToward(bb.me, bb.game, target, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
 }
 
@@ -330,6 +333,9 @@ function bbSpeak(bb, msg) {
 }
 
 function bbDirectGo(bb, target) {
+  if (!bb.enemyPos && bb.memory && target &&
+      stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
+        !!(bb.star && samePos(target, bb.star)))) return;
   var dir = directionBetween(bb.myPos, target);
   if (dir === bb.myDir) bb.me.go();
   else if (dir) bbTurnToward(bb, dir);

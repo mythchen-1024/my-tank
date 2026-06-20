@@ -322,6 +322,34 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
   }
   state.bushBulletSeen = hasBullet;
 
+  // ── 途径 4：推断传送消失 ──
+  // 敌上帧可见于非草丛位、本帧消失、且无相邻草丛可解释(非走进草)、敌有传送技能
+  // → 推断敌传送进了某个草丛格，将全图草丛加入热力图
+  if (!enemyTank && state.lastEnemyPos && state.lastEnemySeenFrame >= frame - 1 &&
+      enemyHasTeleport(enemy)) {
+    var lp4 = state.lastEnemyPos;
+    if (tileAt(game, lp4) !== "o") {
+      var hasAdjGrass = false;
+      for (var i = 0; i < DIRS.length; i++) {
+        if (tileAt(game, [lp4[0] + DIRS[i].dx, lp4[1] + DIRS[i].dy]) === "o") {
+          hasAdjGrass = true; break;
+        }
+      }
+      if (!hasAdjGrass) {
+        var w = game.map.length, h = game.map[0].length;
+        for (var gx = 0; gx < w; gx++) {
+          for (var gy = 0; gy < h; gy++) {
+            if (tileAt(game, [gx, gy]) === "o") {
+              _bushHeatAdd(hm, [gx, gy], 80, frame, 'teleport-infer');
+            }
+          }
+        }
+        stats.teleportIntoBush++;
+        stats.lastTeleportIntoBushFrame = frame;
+      }
+    }
+  }
+
   // ── 蹲草不动统计 ──
   if (!enemyTank) {
     var hasHighHeat = false;

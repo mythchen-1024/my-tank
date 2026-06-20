@@ -1172,10 +1172,29 @@ function wallBlocksEnemyShot(next, enemyPos, game) {
  * 近距（manhattan ≤ 4）直接拒绝，中距（≤ 6）除非 next 是星否则也拒绝。
  */
 function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
-  if (!memory || !memory.lastEnemyPos) return false;
+  if (!memory) return false;
   var frame = (game && game.frames) || 0;
-  if (frame - memory.lastEnemySeenFrame > 12) return false;
-  var dangerPos = memory.lastEnemyPos;
+
+  // 来源1: lastEnemyPos（12帧内有效）
+  if (memory.lastEnemyPos && frame - memory.lastEnemySeenFrame <= 12) {
+    if (_hiddenFireLineBlocked(memory.lastEnemyPos, next, myPos, game, isStar)) return true;
+  }
+
+  // 来源2: bushHeatmap 高置信度条目（蹲草敌持续有效，不受12帧限制）
+  var hm = memory.bushHeatmap;
+  if (hm) {
+    for (var k in hm) {
+      if (!hm.hasOwnProperty(k) || hm[k].score < 50) continue;
+      var parts = k.split(',');
+      var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
+      if (_hiddenFireLineBlocked(bushPos, next, myPos, game, isStar)) return true;
+    }
+  }
+
+  return false;
+}
+
+function _hiddenFireLineBlocked(dangerPos, next, myPos, game, isStar) {
   if (clearShotDirection(dangerPos, myPos, game)) return false;
   if (!clearShotDirection(dangerPos, next, game)) return false;
   var dist = manhattan(dangerPos, next);
