@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-20T12:29:45.845Z
+// 构建时间: 2026-06-20T12:55:50.355Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -4256,6 +4256,16 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
     if (hm.hasOwnProperty(k)) {
       hm[k].score -= 2;
       if (hm[k].score <= 0) delete hm[k];
+    }
+  }
+
+  // ── 看门狗续期：敌方持续隐身 → 热力图条目不衰减到阈值以下 ──
+  // 敌人还没出草，就不该"忘记"它的位置。出草时顶部重置逻辑会清空一切。
+  if (!enemyTank) {
+    for (var k in hm) {
+      if (hm.hasOwnProperty(k) && hm[k].score < 52 && hm[k].score > 0) {
+        hm[k].score = 52;
+      }
     }
   }
 

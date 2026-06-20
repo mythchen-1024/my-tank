@@ -265,6 +265,16 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
     }
   }
 
+  // ── 看门狗续期：敌方持续隐身 → 热力图条目不衰减到阈值以下 ──
+  // 敌人还没出草，就不该"忘记"它的位置。出草时顶部重置逻辑会清空一切。
+  if (!enemyTank) {
+    for (var k in hm) {
+      if (hm.hasOwnProperty(k) && hm[k].score < 52 && hm[k].score > 0) {
+        hm[k].score = 52;
+      }
+    }
+  }
+
   // ── 途径 1：走进草丛 ──
   // 上帧可见（lastEnemyPos 有值且 lastEnemySeenFrame 是上一帧），本帧不可见
   if (!enemyTank && state.lastEnemyPos && state.lastEnemySeenFrame >= frame - 1) {
