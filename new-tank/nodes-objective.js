@@ -100,6 +100,17 @@ function createObjectiveTree(profile) {
       }),
       Action('do-star-tp', function (bb) {
         var tp = senseStarTeleport(bb);
+        // 终局预转向：确保传送后面朝星方向，省去落地后的转向帧
+        if (bb.framesLeft <= 8 && bb.star) {
+          var postDir = directionBetween(tp, bb.star);
+          if (postDir && bb.myDir !== postDir) {
+            var turns = turnDistance(bb.myDir, postDir);
+            if (bb.framesLeft >= turns + 2) { // turns帧转 + 1传送 + 1走
+              bbTurnToward(bb, postDir);
+              return;
+            }
+          }
+        }
         var faceDir = teleportPreTurnDir(bb.me, tp, bb.enemy, bb.enemyTank, bb.game);
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);

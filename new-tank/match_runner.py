@@ -9,6 +9,7 @@
   python match_runner.py --delay 1.5                  # 每局间隔 1.5 秒（默认 0.5）
   python match_runner.py --save results.json          # 结果保存到 JSON 文件
   python match_runner.py --map grassy_field           # 固定地图（默认 random）
+  python match_runner.py --opponent tnk_8lbIwTIeW23JbJ9YF             # 指定对手坦克 ID（反复挑战同一人）
 
 比赛模式:
   --mode challenge   排名对战（默认，随机真实对手）
@@ -62,9 +63,48 @@ def api_post(path, tank_key, body=None):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def run_challenge(tank_key, map_id, my_tank_id_ref):
-    """发起排名挑战，返回 (tag, opponent, url_id, my_tank_id)"""
-    result = api_post("/api/agent/tank/challenge", tank_key, {"mapId": map_id})
+def api_get(path, tank_key):
+    headers = {
+        "Authorization": f"Bearer {tank_key}",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json, text/plain, */*",
+    }
+    req = urllib.request.Request(BASE_URL + path, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=60) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def resolve_opponent_id(tank_key, identifier):
+    """将对手标识（数字ID 或 tnk_字符串 或 坦克名）解析为数字 ID。"""
+    # 已经是纯数字
+    if identifier.isdigit():
+        return int(identifier)
+
+    # 从最近对局里按 tnk_ 或名字匹配
+    matches = api_get("/api/agent/tank/matches?limit=50&offset=0", tank_key)
+    for m in matches if isinstance(matches, list) else matches.get("matches", []):
+        # 检查对手字段
+        for field_id, field_name in [("defenderTankId", "defenderTankName"),
+                                     ("challengerTankId", "challengerTankName")]:
+            tid = m.get(field_id)
+            tname = m.get(field_name, "")
+            turl_id = m.get("defenderTankUrlId", "") or m.get("challengerTankUrlId", "")
+            if str(tid) == identifier or turl_id == identifier or tname == identifier:
+                return int(tid)
+
+    print(f"  警告: 无法解析对手 '{identifier}'，尝试直接当数字使用")
+    return int(identifier)
+
+
+def run_challenge(tank_key, map_id, my_tank_id_ref, opponent_id=None):
+    """发起排名挑战，返回 (tag, opponent, url_id)"""
+    body = {"mapId": map_id}
+    if opponent_id:
+        body["opponentTankId"] = opponent_id
+    else:
+        body["randomOpponent"] = True
+
+    result = api_post("/api/agent/tank/challenge", tank_key, body)
     url_id = result.get("urlId") or result.get("matchUrlId", "")
     winner = result.get("winnerTankId")
     opponent = result.get("defenderTankName", "?")
@@ -102,21 +142,32 @@ def run_simulate(tank_key, bot_name):
     return tag, bot_name, url_id
 
 
-def run_tank(tank_key, tank_name, rounds, mode, map_id, bot_name, delay):
+def run_tank(tank_key, tank_name, rounds, mode, map_id, bot_name, delay, opponent_id=None):
     """对单个坦克跑 rounds 场比赛，返回详细记录列表和统计。"""
     print(f"\n{'='*56}")
-    print(f"  {tank_name}  ({tank_key[:16]}...)  模式:{mode}  场次:{rounds}")
+    opponent_hint = f"  对手:{opponent_id}" if opponent_id else ""
+    print(f"  {tank_name}  ({tank_key[:16]}...)  模式:{mode}  场次:{rounds}{opponent_hint}")
     print(f"{'='*56}")
 
     wins = losses = draws = errors = 0
     records = []
     my_tank_id_ref = [None]
 
+    # 解析对手 ID（支持数字/tnk_字符串/坦克名）
+    resolved_opponent = None
+    if opponent_id:
+        try:
+            resolved_opponent = resolve_opponent_id(tank_key, opponent_id)
+            print(f"  对手数字 ID: {resolved_opponent}")
+        except Exception as e:
+            print(f"  解析对手 ID 失败: {e}，将直接使用原值")
+            resolved_opponent = int(opponent_id) if opponent_id.isdigit() else None
+
     for i in range(rounds):
         ts = datetime.now().strftime("%H:%M:%S")
         try:
             if mode == "challenge":
-                tag, opponent, url_id = run_challenge(tank_key, map_id, my_tank_id_ref)
+                tag, opponent, url_id = run_challenge(tank_key, map_id, my_tank_id_ref, resolved_opponent)
             else:
                 tag, opponent, url_id = run_simulate(tank_key, bot_name)
 
@@ -204,6 +255,8 @@ def main():
                         help="地图 ID（challenge 模式，默认: random）")
     parser.add_argument("--bot", default="azure-hunter",
                         help="机器人名（simulate 模式，默认: azure-hunter）")
+    parser.add_argument("--opponent", metavar="TANK_ID",
+                        help="指定对手（数字ID / tnk_字符串 / 坦克名，会自动从对局历史解析）")
     parser.add_argument("--save", metavar="FILE",
                         help="将详细结果保存为 JSON 文件（如 results.json）")
     args = parser.parse_args()
@@ -230,6 +283,7 @@ def main():
             map_id=args.map,
             bot_name=args.bot,
             delay=args.delay,
+            opponent_id=args.opponent,
         )
         all_stats.append(stats)
 

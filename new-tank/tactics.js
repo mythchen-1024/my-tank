@@ -896,9 +896,13 @@ function endgameStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist)
     if (framesLeft >= hitFrames) return null; // 敌来得及在终局前打到 -> 不强抢
   }
   // 传送削弱：直传星点被引擎随机重路由，需要额外 1 帧补吃
-  if (framesLeft < 2) return null; // 剩 1 帧：传送后没时间补吃
+  // 计算传送后到星需要多少帧：转向(0/1/2) + 移动 1 步
   const endgameAdj = crossAdjacentStarTeleport(me, enemyTank, enemyBullets || [], game, enemy);
-  return endgameAdj || star;
+  const landing = endgameAdj || star;
+  const landingToStarDir = directionBetween(landing, star);
+  const turnsNeeded = landingToStarDir ? turnDistance(me.tank.direction, landingToStarDir) : 0;
+  if (framesLeft < 1 + turnsNeeded + 1) return null; // 传送帧 + 转向帧 + 走上去
+  return landing;
 }
 
 
@@ -1786,7 +1790,9 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     const facing = d.name === me.tank.direction ? 100 : 0;
     // 侧移后仍能直射敌人(如侧方恰好同行/列)→ 保留反击机会，不白跑
     const counterLine = clearShotDirection(p, enemyPos, game) ? 15 : 0;
-    const score = facing + counterLine + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    // 优先留在草丛中（不暴露自己）
+    const stayHidden = (tileAt(game, myPos) === 'o' && tileAt(game, p) === 'o') ? 30 : 0;
+    const score = facing + counterLine + stayHidden + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
     if (score > bestScore) {
       bestScore = score;
       best = p;

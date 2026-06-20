@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-20T05:20:41.308Z
+// 构建时间: 2026-06-20T08:22:13.410Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -2024,9 +2024,13 @@ function endgameStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist)
     if (framesLeft >= hitFrames) return null; // 敌来得及在终局前打到 -> 不强抢
   }
   // 传送削弱：直传星点被引擎随机重路由，需要额外 1 帧补吃
-  if (framesLeft < 2) return null; // 剩 1 帧：传送后没时间补吃
+  // 计算传送后到星需要多少帧：转向(0/1/2) + 移动 1 步
   const endgameAdj = crossAdjacentStarTeleport(me, enemyTank, enemyBullets || [], game, enemy);
-  return endgameAdj || star;
+  const landing = endgameAdj || star;
+  const landingToStarDir = directionBetween(landing, star);
+  const turnsNeeded = landingToStarDir ? turnDistance(me.tank.direction, landingToStarDir) : 0;
+  if (framesLeft < 1 + turnsNeeded + 1) return null; // 传送帧 + 转向帧 + 走上去
+  return landing;
 }
 
 
@@ -2914,7 +2918,9 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     const facing = d.name === me.tank.direction ? 100 : 0;
     // 侧移后仍能直射敌人(如侧方恰好同行/列)→ 保留反击机会，不白跑
     const counterLine = clearShotDirection(p, enemyPos, game) ? 15 : 0;
-    const score = facing + counterLine + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
+    // 优先留在草丛中（不暴露自己）
+    const stayHidden = (tileAt(game, myPos) === 'o' && tileAt(game, p) === 'o') ? 30 : 0;
+    const score = facing + counterLine + stayHidden + manhattan(p, enemyPos) + distanceFromEdges(p, game) * 0.5;
     if (score > bestScore) {
       bestScore = score;
       best = p;
@@ -4029,7 +4035,7 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
   const bullets = enemyBullets || [];
 
   if (intent.kind === "hold") {
-    const stillHidden = iAmHidden(me, game) && !game.star && teleportReady(me) &&
+    const stillHidden = iAmHidden(me, game) && teleportReady(me) &&
       (!enemyPos || manhattan(myPos, enemyPos) >= 3) &&
       (!enemyTank || !enemyAimsAt(myPos, enemyTank, game)) &&
       !anyBulletThreatens(bullets, myPos, game);
@@ -5172,8 +5178,10 @@ function createSoftSurvivalTree(profile) {
   // 通用：防范敌方瞄准（敌炮口正对我，提前移动离线）
   children.push(
     Sequence('aim-dodge', [
-      Guard('not-ambushing', function (bb) {
-        return !(bb.memory.ambushState && iAmHidden(bb.me, bb.game));
+      Guard('not-bush-holding', function (bb) {
+        if (bb.memory.ambushState && iAmHidden(bb.me, bb.game)) return false;
+        if (iAmHidden(bb.me, bb.game) && enemyIsOverloadType(bb.enemy)) return false;
+        return true;
       }),
       Guard('has-aim-dodge', function (bb) { return !!senseAimDodge(bb); }),
       Action('do-aim-dodge', function (bb) {
@@ -5185,8 +5193,10 @@ function createSoftSurvivalTree(profile) {
   // 通用：近距对射规避（近距同线且我不占先手，侧移离线）
   children.push(
     Sequence('line-duel-dodge', [
-      Guard('not-ambushing', function (bb) {
-        return !(bb.memory.ambushState && iAmHidden(bb.me, bb.game));
+      Guard('not-bush-holding', function (bb) {
+        if (bb.memory.ambushState && iAmHidden(bb.me, bb.game)) return false;
+        if (iAmHidden(bb.me, bb.game) && enemyIsOverloadType(bb.enemy)) return false;
+        return true;
       }),
       Guard('has-line-duel', function (bb) { return !!senseLineDuelDodge(bb); }),
       Action('do-line-duel-dodge', function (bb) {
@@ -5530,6 +5540,17 @@ function createObjectiveTree(profile) {
       }),
       Action('do-star-tp', function (bb) {
         var tp = senseStarTeleport(bb);
+        // 终局预转向：确保传送后面朝星方向，省去落地后的转向帧
+        if (bb.framesLeft <= 8 && bb.star) {
+          var postDir = directionBetween(tp, bb.star);
+          if (postDir && bb.myDir !== postDir) {
+            var turns = turnDistance(bb.myDir, postDir);
+            if (bb.framesLeft >= turns + 2) { // turns帧转 + 1传送 + 1走
+              bbTurnToward(bb, postDir);
+              return;
+            }
+          }
+        }
         var faceDir = teleportPreTurnDir(bb.me, tp, bb.enemy, bb.enemyTank, bb.game);
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);
@@ -5788,13 +5809,21 @@ function createMovementTree(profile) {
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
         Guard('bush-safe', function (bb) {
           if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
-          if (!bb.enemyPos) return true;
-          // 敌人对准我时需保持距离（近距逃不掉）
-          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game)) return bb.distToEnemy >= 3;
-          // 敌人未对准我：允许近距蹲守伏击（action 层负责开枪或预瞄）
+          // 敌人近距瞄着我时仍通过——交 action 层反击/逃跑，防止死锁
           return true;
         }),
         Action('do-bush-hold', function (bb) {
+          // 近距被瞄应急：反击或传送逃跑，避免死锁
+          if (bb.enemyTank && bb.distToEnemy < 3 && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game)) {
+            if (bb.gunIsReady && bb.shotDir) {
+              if (bb.myDir === bb.shotDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
+              bbTurnToward(bb, bb.shotDir); return;
+            }
+            if (bb.teleportIsReady) {
+              var escPos = senseEscapeTeleport(bb);
+              if (escPos) { bbSpeak(bb, '逃!'); bbTeleport(bb, escPos); return; }
+            }
+          }
           // 草丛伏击：不受 attackAggression 限制
           if (bb.gunIsReady && bb.enemyTank) {
             // 敌已在炮线上
@@ -6077,9 +6106,22 @@ function createMovementTree(profile) {
     ])
   );
 
-  // ---- 终极兜底：原地右转防挂机 ----
+  // ---- 终极兜底：尝试移动到任何可通行格，只避子弹不避射线 ----
   children.push(
-    Action('turn-right', function (bb) {
+    Action('fallback-move', function (bb) {
+      var bullets = bb.enemyBullets || [];
+      var best = null;
+      var bestScore = -9999;
+      for (var i = 0; i < DIRS.length; i++) {
+        var p = [bb.myPos[0] + DIRS[i].dx, bb.myPos[1] + DIRS[i].dy];
+        if (!isPassable(bb.game, p, bb.enemyPos)) continue;
+        if (anyBulletThreatens(bullets, p, bb.game)) continue;
+        var score = distanceFromEdges(p, bb.game);
+        if (bb.enemyPos) score += manhattan(p, bb.enemyPos);
+        if (score > bestScore) { bestScore = score; best = p; }
+      }
+      if (best) { bbDirectGo(bb, best); return; }
+      if (bb.shotDir && bb.myDir !== bb.shotDir) { bbTurnToward(bb, bb.shotDir); return; }
       bb.me.turn('right');
     })
   );
