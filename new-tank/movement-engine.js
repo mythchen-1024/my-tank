@@ -228,8 +228,9 @@ function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) {
   if (fleeMode) return true;
 
   const enemyDist = pathDistance(enemyPos, game.star, game, myPos);
-  // 如果比敌人更近（或者差不多），就去抢
-  return enemyDist < 0 || starPath.dist <= enemyDist + 2;
+  // 如果比敌人更近（或差距在容忍范围内），就去抢
+  // +4 容忍：敌人传送需1帧+落点补走1帧+转向，实际到达不比走路快多少
+  return enemyDist < 0 || starPath.dist <= enemyDist + 4;
 }
 
 

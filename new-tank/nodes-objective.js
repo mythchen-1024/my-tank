@@ -42,17 +42,27 @@ function createObjectiveTree(profile) {
     Sequence('star-bush-ambush', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
-      // 敌人不可见，或可见但不是传送流距星 > 5，或敌人是传送流（双方都传星 → 蹲守更优）
+      // 敌人不可见，或可见但不是传送流距星 > 5，或敌人是传送流且距星较远
       Guard('enemy-allows-ambush', function (bb) {
         if (!bb.enemyTank) return true;
+        // 敌人可见且已逼近星(≤5)：走路追星中，守线/传星优于蹲草
+        if (manhattan(bb.enemyPos, bb.star) <= 5) return false;
         if (enemyHasTeleport(bb.enemy)) return true;
-        return manhattan(bb.enemyPos, bb.star) > 5;
+        return true;
       }),
       Guard('not-losing-badly', function (bb) {
         return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
       }),
       Guard('not-endgame', function (bb) { return bb.framesLeft > 25; }),
       Guard('has-ambush-pos', function (bb) { return !!senseStarBushAmbush(bb); }),
+      // 敌人可见时：伏击位必须能射到星(拦截必经之路)或射到敌人，否则蹲草=放弃守线
+      Guard('ambush-covers-approach', function (bb) {
+        if (!bb.enemyTank) return true;
+        var pos = senseStarBushAmbush(bb);
+        if (clearShotDirection(pos, bb.star, bb.game)) return true;
+        if (clearShotDirection(pos, bb.enemyPos, bb.game)) return true;
+        return false;
+      }),
       Action('do-star-ambush', function (bb) {
         var pos = senseStarBushAmbush(bb);
         // 选择预瞄方向：优先对星射线，其次对敌来路方向
@@ -111,7 +121,20 @@ function createObjectiveTree(profile) {
             }
           }
         }
-        var faceDir = teleportPreTurnDir(bb.me, tp, bb.enemy, bb.enemyTank, bb.game);
+        // 竞争激烈时跳过预转向：敌人距星<=5步且比我走路更近(或持平)，1帧预转可能丢星
+        var skipPreTurn = false;
+        if (bb.enemyTank && bb.star) {
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          var myWalkDist = bb._cache._myStarWalkDist;
+          if (myWalkDist === undefined) {
+            myWalkDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+            bb._cache._myStarWalkDist = myWalkDist;
+          }
+          if (enemyStarDist <= 5 && (myWalkDist < 0 || enemyStarDist <= myWalkDist)) {
+            skipPreTurn = true;
+          }
+        }
+        var faceDir = skipPreTurn ? null : teleportPreTurnDir(bb.me, tp, bb.enemy, bb.enemyTank, bb.game);
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);
         } else {

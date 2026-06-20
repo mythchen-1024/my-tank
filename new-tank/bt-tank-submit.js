@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-20T09:19:34.105Z
+// 构建时间: 2026-06-20T09:36:42.569Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1816,8 +1816,11 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
     if (enemy && enemy.status && enemy.status.overloaded) return null; // 已激活，双弹本帧就发出
   }
 
-  // 走路够快(<=5步)时不浪费传送
-  if (walkDist >= 0 && walkDist <= 5) return null;
+  // 走路够快(<=5步)时通常不浪费传送，但若敌人比我更近星则仍需传送抢
+  if (walkDist >= 0 && walkDist <= 5) {
+    var enemyToStar = enemyPos ? pathDistance(enemyPos, game.star, game, me.tank.position) : -1;
+    if (enemyToStar < 0 || walkDist <= enemyToStar + 1) return null;
+  }
 
   // 守星陷阱：敌握双弹且星在其覆盖带内时放弃传送（与 shouldChaseStar 走路判断用同一函数）
   if (isStarGuardTrap(enemyPos, enemy, game.star)) return null;
@@ -1902,9 +1905,12 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
     if (starLandingDeadly(c, me, enemyTank, enemy || null, game)) continue;
     // 必须能从该格一步走到星(中间无墙/相邻)——十字相邻天然满足，但星可能贴墙导致某向不可达，复检
     if (!isPassable(game, star, enemyPos)) return null; // 星点本身不可站则无意义
-    // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)
+    // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)；
+    // 减去转向成本：落点走到星需要的转向帧数越少越好（省帧 = 更快吃星）
     const enemyScore = enemyPos ? manhattan(c, enemyPos) : 0;
-    const score = enemyScore * 2 + distanceFromEdges(c, game);
+    const toStarDir = directionBetween(c, star);
+    const turnCost = toStarDir ? turnDistance(me.tank.direction, toStarDir) : 0;
+    const score = enemyScore * 2 + distanceFromEdges(c, game) - turnCost * 3;
     if (score > bestScore) {
       bestScore = score;
       best = c;
@@ -3063,6 +3069,11 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
 
 function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state) {
   if (!enemyTank || !enemyPos) return null;
+  // 有星可追时不浪费帧做守线预瞄（守线只转炮口，帧数白送敌人去吃星）
+  if (game.star) {
+    var myStarDist = pathDistance(me.tank.position, game.star, game, enemyPos);
+    if (myStarDist >= 0 && myStarDist <= 8) return null;
+  }
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
   // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支”没双弹就刚”一致：
   // overload 流但 CD 充裕(手里没双弹)时，同线开火与未同线预转都照常——只在真握弹(已过载/cd<=1)时全关。
@@ -3688,8 +3699,9 @@ function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) {
   if (fleeMode) return true;
 
   const enemyDist = pathDistance(enemyPos, game.star, game, myPos);
-  // 如果比敌人更近（或者差不多），就去抢
-  return enemyDist < 0 || starPath.dist <= enemyDist + 2;
+  // 如果比敌人更近（或差距在容忍范围内），就去抢
+  // +4 容忍：敌人传送需1帧+落点补走1帧+转向，实际到达不比走路快多少
+  return enemyDist < 0 || starPath.dist <= enemyDist + 4;
 }
 
 
@@ -5502,17 +5514,27 @@ function createObjectiveTree(profile) {
     Sequence('star-bush-ambush', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
-      // 敌人不可见，或可见但不是传送流距星 > 5，或敌人是传送流（双方都传星 → 蹲守更优）
+      // 敌人不可见，或可见但不是传送流距星 > 5，或敌人是传送流且距星较远
       Guard('enemy-allows-ambush', function (bb) {
         if (!bb.enemyTank) return true;
+        // 敌人可见且已逼近星(≤5)：走路追星中，守线/传星优于蹲草
+        if (manhattan(bb.enemyPos, bb.star) <= 5) return false;
         if (enemyHasTeleport(bb.enemy)) return true;
-        return manhattan(bb.enemyPos, bb.star) > 5;
+        return true;
       }),
       Guard('not-losing-badly', function (bb) {
         return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
       }),
       Guard('not-endgame', function (bb) { return bb.framesLeft > 25; }),
       Guard('has-ambush-pos', function (bb) { return !!senseStarBushAmbush(bb); }),
+      // 敌人可见时：伏击位必须能射到星(拦截必经之路)或射到敌人，否则蹲草=放弃守线
+      Guard('ambush-covers-approach', function (bb) {
+        if (!bb.enemyTank) return true;
+        var pos = senseStarBushAmbush(bb);
+        if (clearShotDirection(pos, bb.star, bb.game)) return true;
+        if (clearShotDirection(pos, bb.enemyPos, bb.game)) return true;
+        return false;
+      }),
       Action('do-star-ambush', function (bb) {
         var pos = senseStarBushAmbush(bb);
         // 选择预瞄方向：优先对星射线，其次对敌来路方向
@@ -5571,7 +5593,20 @@ function createObjectiveTree(profile) {
             }
           }
         }
-        var faceDir = teleportPreTurnDir(bb.me, tp, bb.enemy, bb.enemyTank, bb.game);
+        // 竞争激烈时跳过预转向：敌人距星<=5步且比我走路更近(或持平)，1帧预转可能丢星
+        var skipPreTurn = false;
+        if (bb.enemyTank && bb.star) {
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          var myWalkDist = bb._cache._myStarWalkDist;
+          if (myWalkDist === undefined) {
+            myWalkDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+            bb._cache._myStarWalkDist = myWalkDist;
+          }
+          if (enemyStarDist <= 5 && (myWalkDist < 0 || enemyStarDist <= myWalkDist)) {
+            skipPreTurn = true;
+          }
+        }
+        var faceDir = skipPreTurn ? null : teleportPreTurnDir(bb.me, tp, bb.enemy, bb.enemyTank, bb.game);
         if (faceDir && bb.myDir !== faceDir) {
           bbTurnToward(bb, faceDir);
         } else {
@@ -5731,6 +5766,12 @@ function createMovementTree(profile) {
           var myDistToStar = manhattan(bb.myPos, bb.star);
           var enemyDistToStar = manhattan(bb.enemyPos, bb.star);
           if (enemyDistToStar <= myDistToStar && !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
+            bb.memory.ambushState = null; return false;
+          }
+          // 伏击位无法覆盖星+敌人且敌已逼近(≤5) → 守线价值归零，放弃
+          if (enemyDistToStar <= 5 &&
+              !clearShotDirection(bb.myPos, bb.star, bb.game) &&
+              !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
             bb.memory.ambushState = null; return false;
           }
         }

@@ -84,6 +84,12 @@ function createMovementTree(profile) {
           if (enemyDistToStar <= myDistToStar && !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
             bb.memory.ambushState = null; return false;
           }
+          // 伏击位无法覆盖星+敌人且敌已逼近(≤5) → 守线价值归零，放弃
+          if (enemyDistToStar <= 5 &&
+              !clearShotDirection(bb.myPos, bb.star, bb.game) &&
+              !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
+            bb.memory.ambushState = null; return false;
+          }
         }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),

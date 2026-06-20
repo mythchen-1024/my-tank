@@ -688,8 +688,11 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
     if (enemy && enemy.status && enemy.status.overloaded) return null; // 已激活，双弹本帧就发出
   }
 
-  // 走路够快(<=5步)时不浪费传送
-  if (walkDist >= 0 && walkDist <= 5) return null;
+  // 走路够快(<=5步)时通常不浪费传送，但若敌人比我更近星则仍需传送抢
+  if (walkDist >= 0 && walkDist <= 5) {
+    var enemyToStar = enemyPos ? pathDistance(enemyPos, game.star, game, me.tank.position) : -1;
+    if (enemyToStar < 0 || walkDist <= enemyToStar + 1) return null;
+  }
 
   // 守星陷阱：敌握双弹且星在其覆盖带内时放弃传送（与 shouldChaseStar 走路判断用同一函数）
   if (isStarGuardTrap(enemyPos, enemy, game.star)) return null;
@@ -774,9 +777,12 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
     if (starLandingDeadly(c, me, enemyTank, enemy || null, game)) continue;
     // 必须能从该格一步走到星(中间无墙/相邻)——十字相邻天然满足，但星可能贴墙导致某向不可达，复检
     if (!isPassable(game, star, enemyPos)) return null; // 星点本身不可站则无意义
-    // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)
+    // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)；
+    // 减去转向成本：落点走到星需要的转向帧数越少越好（省帧 = 更快吃星）
     const enemyScore = enemyPos ? manhattan(c, enemyPos) : 0;
-    const score = enemyScore * 2 + distanceFromEdges(c, game);
+    const toStarDir = directionBetween(c, star);
+    const turnCost = toStarDir ? turnDistance(me.tank.direction, toStarDir) : 0;
+    const score = enemyScore * 2 + distanceFromEdges(c, game) - turnCost * 3;
     if (score > bestScore) {
       bestScore = score;
       best = c;
@@ -1935,6 +1941,11 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
 
 function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state) {
   if (!enemyTank || !enemyPos) return null;
+  // 有星可追时不浪费帧做守线预瞄（守线只转炮口，帧数白送敌人去吃星）
+  if (game.star) {
+    var myStarDist = pathDistance(me.tank.position, game.star, game, enemyPos);
+    if (myStarDist >= 0 && myStarDist <= 8) return null;
+  }
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
   // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支”没双弹就刚”一致：
   // overload 流但 CD 充裕(手里没双弹)时，同线开火与未同线预转都照常——只在真握弹(已过载/cd<=1)时全关。
