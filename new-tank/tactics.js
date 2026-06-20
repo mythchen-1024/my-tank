@@ -1318,9 +1318,9 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     if (!needTurn) {
       if (incomingFrames < 1) continue;
     } else {
-      // 2. 如果需要转向，移动需要 2 帧（第 1 帧转身，第 2 帧离开）。
-      // 致命漏洞修复：转身帧必须保证我不死！
-      if (incomingFrames < 3) continue;
+      // 时序：转 N 次 + 走 1 步 = N+1 帧脱离。平手时仍尝试（引擎先移动再判碰撞）
+      var turns = turnDistance(me.tank.direction, d.name);
+      if (incomingFrames < turns + 1) continue;
       
       // 预演子弹再飞 1 帧（模拟完成转身，即将进行 go 的那个帧）
       // 必须保证那帧里，目标格子 p 不会被子弹扫过或占领
@@ -1696,7 +1696,7 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     // 反向(如 DOWN→UP, turns=2)需 3 帧，旧代码误算为 2 帧导致以为能逃实则来不及。
     const turns = needTurn ? turnDistance(me.tank.direction, d.name) : 0;
     const escapeFrames = turns === 0 ? 1 : turns + 1;
-    if (needTurn && escapeFrames >= enemyHitFrames) continue;
+    if (needTurn && escapeFrames > enemyHitFrames) continue;
 
     // 偏好当前朝向就能直接走的格子（1 帧脱离，最快）
     const facing = needTurn ? 0 : 100;
