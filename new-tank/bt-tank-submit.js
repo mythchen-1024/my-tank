@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-21T07:32:45.390Z
+// 构建时间: 2026-06-21T14:23:53.287Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -141,7 +141,7 @@ const DIRS = [
 ];
 
 // 子弹轨迹预判距离（格）
-const BULLET_LOOKAHEAD_TILES = 8;
+const BULLET_LOOKAHEAD_TILES = 12;
 // 子弹速度：每帧前进 2 格（由对局 replay 逆向得出，弹道时间换算的核心参数）
 const BULLET_SPEED = 2;
 // 刺杀传送的最小与最大距离
@@ -5838,6 +5838,16 @@ function createObjectiveTree(profile) {
         return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
       }),
       Guard('not-endgame', function (bb) { return bb.framesLeft > 25; }),
+      Guard('ambush-has-value', function (bb) {
+        if (!bb.enemyTank) return true;
+        var myWalk = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+        var enemyWalk = pathDistance(bb.enemyPos, bb.star, bb.game, bb.myPos);
+        if (myWalk >= 0 && enemyWalk >= 0 && enemyWalk <= myWalk - 2) {
+          var pos = senseStarBushAmbush(bb);
+          if (!pos || !clearShotDirection(pos, bb.star, bb.game)) return false;
+        }
+        return true;
+      }),
       Guard('has-ambush-pos', function (bb) { return !!senseStarBushAmbush(bb); }),
       // 敌人可见时：伏击位必须能射到星(拦截必经之路)或射到敌人，否则蹲草=放弃守线
       Guard('ambush-covers-approach', function (bb) {
@@ -6076,6 +6086,11 @@ function createMovementTree(profile) {
         var a = bb.memory.ambushState;
         if (!a) return false;
         if (a.shiftTarget && !a.shifted) return false;
+        // 连续3发打墙: 伏击无效，退出
+        if (bb.memory.ambushShotsFired >= 3) {
+          bb.memory.ambushState = null; bb.memory.ambushShotsFired = 0;
+          bb.memory.ambushCooldown = bb.frame; return false;
+        }
         var timeout = 15;
         if (bb.enemyTank && bb.star && manhattan(bb.enemyPos, bb.star) <= 8) timeout = 30;
         if (bb.enemyTank && bb.memory.lastEnemyPos && manhattan(bb.enemyPos, bb.myPos) < manhattan(bb.memory.lastEnemyPos, bb.myPos)) {
@@ -6121,11 +6136,11 @@ function createMovementTree(profile) {
         if (!faceDir && bb.memory.lastEnemyPos) {
           faceDir = clearShotDirection(bb.myPos, bb.memory.lastEnemyPos, bb.game);
         }
-        // 敌人进入射线：直接开火
+        // 敌人进入射线：直接开火（命中重置打墙计数）
         if (bb.enemyTank && bb.gunIsReady) {
           var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
           if (shotDir) {
-            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); bb.memory.ambushShotsFired = 0; }
             else { bbTurnToward(bb, shotDir); }
             return;
           }
@@ -6155,7 +6170,7 @@ function createMovementTree(profile) {
               cx += dd[0]; cy += dd[1];
             }
             if (foundBlock) {
-              if (bb.myDir === starLineDir) { bbSpeak(bb, '清障!'); bbFire(bb); }
+              if (bb.myDir === starLineDir) { bbSpeak(bb, '清障!'); bbFire(bb); bb.memory.ambushShotsFired = (bb.memory.ambushShotsFired || 0) + 1; }
               else { bbTurnToward(bb, starLineDir); }
               return;
             }
@@ -6169,6 +6184,7 @@ function createMovementTree(profile) {
             if (bb.myDir === scanDir) {
               bbSpeak(bb, '扫草!');
               bbFire(bb);
+              bb.memory.ambushShotsFired = (bb.memory.ambushShotsFired || 0) + 1;
               bb.memory.ambushScannedDirs[scanDir] = true;
             } else {
               bbTurnToward(bb, scanDir);
@@ -6196,14 +6212,26 @@ function createMovementTree(profile) {
         Guard('is-overload-enemy', function (bb) { return enemyIsOverloadType(bb.enemy); }),
         Guard('no-star-or-star-bait', function (bb) {
           if (!bb.star) return true;
-          // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
-          if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
-          // 星不在炮线但敌人近星（≤8步可达）：出草传星会暴露自己
-          return !!bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8;
+          // 传送就绪 + 星不在近身: 应去传送抢星而不是继续蹲守
+          if (bb.teleportIsReady && manhattan(bb.myPos, bb.star) >= 4) return false;
+          // 星在我炮线上且距离近(≤6): 敌追星必经我射程
+          if (clearShotDirection(bb.myPos, bb.star, bb.game) &&
+              manhattan(bb.myPos, bb.star) <= 6) return true;
+          // 敌人近星(≤6)且我无传送: 出草走路不如蹲守
+          return !!bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 6 && !bb.teleportIsReady;
         }),
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
         Guard('bush-safe', function (bb) {
           if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          // overload CD快好(≤8帧) + 我在覆盖带内 + 近距: 必须脱离蹲草
+          if (bb.enemyPos && enemyIsOverloadType(bb.enemy)) {
+            var cd = bb.enemy.skill && bb.enemy.skill.remainingCooldownFrames;
+            if (cd !== undefined && cd <= 8 && bb.distToEnemy <= 6) {
+              var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+              var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+              if (dx <= 1 || dy <= 1) return false;
+            }
+          }
           // 敌人近距瞄着我时仍通过——交 action 层反击/逃跑，防止死锁
           return true;
         }),
@@ -6354,9 +6382,9 @@ function createMovementTree(profile) {
       }),
       Action('do-star-chase', function (bb) {
         var starPath = bb._cache._starPath;
-        // 贴脸星短意图
-        if (starPath.dist <= 2 && !bb.memory.shortIntent) {
-          primeShortIntent(bb.memory, 'star', bb.star, bb.frame, 2);
+        // 近距追星意图粘性: 距星≤5时锁定方向防振荡
+        if (starPath.dist <= 5 && !bb.memory.shortIntent) {
+          primeShortIntent(bb.memory, 'star', bb.star, bb.frame, Math.min(starPath.dist, 4));
         }
         var enemyHasLiveBullet = !!(bb.enemy && bb.enemy.bullet && bb.enemy.bullet.position);
         if (!enemyHasLiveBullet && !enemyDoubleLaneThreat(bb.enemy)) {

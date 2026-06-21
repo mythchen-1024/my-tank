@@ -59,6 +59,16 @@ function createObjectiveTree(profile) {
         return !(bb.isLosing && bb.enmStars - bb.myStars >= 2);
       }),
       Guard('not-endgame', function (bb) { return bb.framesLeft > 25; }),
+      Guard('ambush-has-value', function (bb) {
+        if (!bb.enemyTank) return true;
+        var myWalk = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+        var enemyWalk = pathDistance(bb.enemyPos, bb.star, bb.game, bb.myPos);
+        if (myWalk >= 0 && enemyWalk >= 0 && enemyWalk <= myWalk - 2) {
+          var pos = senseStarBushAmbush(bb);
+          if (!pos || !clearShotDirection(pos, bb.star, bb.game)) return false;
+        }
+        return true;
+      }),
       Guard('has-ambush-pos', function (bb) { return !!senseStarBushAmbush(bb); }),
       // 敌人可见时：伏击位必须能射到星(拦截必经之路)或射到敌人，否则蹲草=放弃守线
       Guard('ambush-covers-approach', function (bb) {

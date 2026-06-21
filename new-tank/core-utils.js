@@ -135,7 +135,7 @@ const DIRS = [
 ];
 
 // 子弹轨迹预判距离（格）
-const BULLET_LOOKAHEAD_TILES = 8;
+const BULLET_LOOKAHEAD_TILES = 12;
 // 子弹速度：每帧前进 2 格（由对局 replay 逆向得出，弹道时间换算的核心参数）
 const BULLET_SPEED = 2;
 // 刺杀传送的最小与最大距离
