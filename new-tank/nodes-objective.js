@@ -47,7 +47,12 @@ function createObjectiveTree(profile) {
         if (!bb.enemyTank) return true;
         // 敌人可见且已逼近星(≤5)：走路追星中，守线/传星优于蹲草
         if (manhattan(bb.enemyPos, bb.star) <= 5) return false;
-        if (enemyHasTeleport(bb.enemy)) return true;
+        // 敌有传送就绪且走路来不及星(>5)：双方都靠传送抢星，ambush多花1-2帧预转向必输，
+        // 交 star-teleport 快速直传
+        if (enemyHasTeleport(bb.enemy) && enemyTeleportReady(bb.enemy)) {
+          var foeWalk = pathDistance(bb.enemyPos, bb.star, bb.game, bb.myPos);
+          if (foeWalk < 0 || foeWalk > 5) return false;
+        }
         return true;
       }),
       Guard('not-losing-badly', function (bb) {
@@ -111,11 +116,11 @@ function createObjectiveTree(profile) {
       Action('do-star-tp', function (bb) {
         var tp = senseStarTeleport(bb);
         // 终局预转向：确保传送后面朝星方向，省去落地后的转向帧
-        if (bb.framesLeft <= 8 && bb.star) {
+        if (bb.framesLeft <= 10 && bb.star) {
           var postDir = directionBetween(tp, bb.star);
           if (postDir && bb.myDir !== postDir) {
             var turns = turnDistance(bb.myDir, postDir);
-            if (bb.framesLeft >= turns + 2) { // turns帧转 + 1传送 + 1走
+            if (bb.framesLeft >= turns + 4) { // turns帧转 + 1传送 + 2等待 + 1走
               bbTurnToward(bb, postDir);
               return;
             }
@@ -142,7 +147,7 @@ function createObjectiveTree(profile) {
           bbTeleport(bb, tp);
           // 传送削弱：落星旁需补吃，标记高优先级补吃意图
           if (bb.star) {
-            bb.memory.pendingStarGrab = { target: bb.star.slice(), frame: bb.frame, ttl: 3 };
+            bb.memory.pendingStarGrab = { target: bb.star.slice(), frame: bb.frame, ttl: 5 };
           }
         }
       })
@@ -196,8 +201,16 @@ function createStarGrabNode() {
       if (!g) return false;
       if (bb.frame - g.frame > g.ttl) { bb.memory.pendingStarGrab = null; return false; }
       if (!bb.star || !samePos(bb.star, g.target)) { bb.memory.pendingStarGrab = null; return false; }
-      if (samePos(bb.myPos, bb.star)) { bb.memory.pendingStarGrab = null; return false; }
+      // 已站在星上：传送后2帧内引擎不让拾取，但2帧后会自动拾取，无需再走
+      if (samePos(bb.myPos, bb.star)) {
+        if (bb.frame - g.frame >= 2) { bb.memory.pendingStarGrab = null; return false; }
+        return false; // 等待中，不走动但也不清除意图
+      }
       return true;
+    }),
+    Guard('pickup-delay-passed', function (bb) {
+      var g = bb.memory.pendingStarGrab;
+      return bb.frame - g.frame >= 2;
     }),
     Guard('star-reachable', function (bb) {
       return manhattan(bb.myPos, bb.star) <= 2;

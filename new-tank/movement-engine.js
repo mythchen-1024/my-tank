@@ -243,13 +243,13 @@ function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode, me, e
       enemyDist += turnDistance(enemyTank.direction, dirToStar);
     }
   }
-  // 传送折扣：我方传送就绪时等效到达距离大幅缩短(传送1帧+补走1步=2帧)
+  // 传送折扣：我方传送就绪时等效到达距离缩短(传送1帧+等待2帧+补走1步=4帧)
   var myEffectiveDist = starPath.dist;
   if (me && teleportReady(me) && starPath.dist > 3) {
-    myEffectiveDist = 2; // 传送落星旁1步，1帧传+1帧走
+    myEffectiveDist = 4; // 传送落星旁1步，1帧传+2帧等待+1帧走
   }
   // 如果比敌人更近（或差距在容忍范围内），就去抢
-  // +4 容忍：敌人传送需1帧+落点补走1帧+转向，实际到达不比走路快多少
+  // +4 容忍：敌人传送也需1帧+2等待+补走+转向，实际到达不比走路快多少
   return enemyDist < 0 || myEffectiveDist <= enemyDist + 4;
 }
 

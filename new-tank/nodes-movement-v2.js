@@ -90,6 +90,18 @@ function createMovementTree(profile) {
               !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
             bb.memory.ambushState = null; return false;
           }
+          // 我距星近(≤5)且伏击位无射线覆盖星和敌来路 → 蹲守无价值，不如直接去吃星
+          if (myDistToStar <= 5 &&
+              !clearShotDirection(bb.myPos, bb.star, bb.game) &&
+              !clearShotDirection(bb.myPos, bb.enemyPos, bb.game) &&
+              bb.frame - a.frame >= 3) {
+            bb.memory.ambushState = null; return false;
+          }
+        }
+        // 敌不可见时：伏击位无射线覆盖星，且等了 5 帧以上 → 伏击无拦截价值，去追星
+        if (!bb.enemyTank && bb.star && bb.frame - a.frame >= 5 &&
+            !clearShotDirection(bb.myPos, bb.star, bb.game)) {
+          bb.memory.ambushState = null; return false;
         }
         return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
       }),

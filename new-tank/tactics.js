@@ -706,9 +706,12 @@ function findStarTeleport(me, enemy, enemyTank, enemyBullets, game, state) {
   // 守星陷阱：敌握双弹且星在其覆盖带内时放弃传送（与 shouldChaseStar 走路判断用同一函数）
   if (isStarGuardTrap(enemyPos, enemy, game.star)) return null;
 
-  // 星在敌方近距射线上：传送后补吃必踏入射线送死(mat_GDXBfZAVR5e3xWW76)
-  if (enemyPos && enemyCanFireSoon(enemy) && clearShotDirection(enemyPos, game.star, game) &&
-      manhattan(enemyPos, game.star) <= 6) return null;
+  // 星在敌方近距射线上：直传星点会踏入射线送死(mat_GDXBfZAVR5e3xWW76)。
+  // 但不直接 return null——后面 crossAdjacentStarTeleport 可找"不在射线上"的安全十字格落地。
+  // 仅在敌人贴脸星(manhattan<=2, 子弹1帧到达)时彻底禁止传送（传哪都来不及）。
+  var starOnEnemyFireLine = !!(enemyPos && enemyCanFireSoon(enemy) &&
+      clearShotDirection(enemyPos, game.star, game) && manhattan(enemyPos, game.star) <= 6);
+  if (starOnEnemyFireLine && manhattan(enemyPos, game.star) <= 2) return null;
 
   // 隐身守星：先找贴最后隐身格的安全压迫位；找不到则放弃传星，避免直送星点。
   const hiddenCloakGrab = hiddenCloakStarTeleport(me, enemy, enemyTank, enemyBullets, game, state);
@@ -780,11 +783,13 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
   if (!star) return null;
   const myPos = me.tank.position;
   const enemyPos = enemyTank ? enemyTank.position : null;
-  // 星点在敌方射线上且敌能近期开火 → 补吃那一步必踏入射线，所有十字落点都不安全
-  if (enemyPos && enemyCanFireSoon(enemy) && clearShotDirection(enemyPos, star, game)) {
-    var bulletDist = manhattan(enemyPos, star);
-    if (bulletDist <= 6) return null; // 子弹 3 帧内到达星点，补吃来不及脱离
-  }
+  // 星点在敌方射线上且敌能开火：不再一刀切禁止所有十字格，
+  // 改为下方循环中逐格过滤——排除"落点与星同行/列对准敌人"的十字格(补吃时穿越敌射线)，
+  // 保留垂直方向的安全十字格(补吃方向不在敌射线上)。
+  // 仅在敌贴脸星(≤2格,子弹1帧到)时彻底放弃(任何十字格补吃都来不及)。
+  var enemyLineToStar = !!(enemyPos && enemyCanFireSoon(enemy) && clearShotDirection(enemyPos, star, game));
+  var enemyStarDist = enemyPos ? manhattan(enemyPos, star) : 99;
+  if (enemyLineToStar && enemyStarDist <= 2) return null;
   let best = null;
   let bestScore = -Infinity;
   for (let i = 0; i < DIRS.length; i++) {
@@ -793,6 +798,12 @@ function crossAdjacentStarTeleport(me, enemyTank, enemyBullets, game, enemy) {
     // 落点必须能站、不在子弹/炮线上、对射不吃亏
     if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, enemy || null)) continue;
     if (starLandingDeadly(c, me, enemyTank, enemy || null, game)) continue;
+    // 敌有射线对星时：排除"补吃走入星格时经过敌射线"的十字格
+    // 十字格到星的补吃方向 = 走回星格。若十字格与敌同行/列(即落点本身在敌射线上)，补吃那帧我暴露在射线上。
+    // 仅保留不在敌射线方向上的十字格(垂直轴方向的格)。
+    if (enemyLineToStar && enemyStarDist <= 6) {
+      if (clearShotDirection(enemyPos, c, game)) continue;
+    }
     // 必须能从该格一步走到星(中间无墙/相邻)——十字相邻天然满足，但星可能贴墙导致某向不可达，复检
     if (!isPassable(game, star, enemyPos)) return null; // 星点本身不可站则无意义
     // 打分：离敌越远越好(越不易被瞬移狙击)；远离地图边缘(留躲闪空间)；
@@ -903,8 +914,8 @@ function endgameStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist)
   const frame = (game && game.frames) || 0;
   const framesLeft = MAX_GAME_FRAMES - frame;
   if (framesLeft <= 0) return null;
-  // 只在终局窗口内启用(剩余<=8帧)，且走路确实来不及吃(walkDist 不可达或 > 剩余帧)
-  if (framesLeft > 8) return null;
+  // 只在终局窗口内启用(剩余<=10帧)，且走路确实来不及吃(walkDist 不可达或 > 剩余帧)
+  if (framesLeft > 10) return null;
   if (walkDist >= 0 && walkDist <= framesLeft) return null; // 走路来得及，无需传送
   const star = game.star;
   // 落点必须能站(不卡墙/土块；星点格按规则可站)
@@ -919,13 +930,13 @@ function endgameStarTeleport(me, enemy, enemyTank, enemyBullets, game, walkDist)
     const hitFrames = 1 + (lineDir ? (enemyFacing ? 0 : 1) : 2) + Math.ceil(dist / BULLET_SPEED);
     if (framesLeft >= hitFrames) return null; // 敌来得及在终局前打到 -> 不强抢
   }
-  // 传送削弱：直传星点被引擎随机重路由，需要额外 1 帧补吃
-  // 计算传送后到星需要多少帧：转向(0/1/2) + 移动 1 步
+  // 传送削弱：直传星点被引擎随机重路由，需要额外 1 帧补吃；加上传送后2帧拾取冷却
+  // 计算传送后到星需要多少帧：2帧等待 + 转向(0/1/2) + 移动 1 步
   const endgameAdj = crossAdjacentStarTeleport(me, enemyTank, enemyBullets || [], game, enemy);
   const landing = endgameAdj || star;
   const landingToStarDir = directionBetween(landing, star);
   const turnsNeeded = landingToStarDir ? turnDistance(me.tank.direction, landingToStarDir) : 0;
-  if (framesLeft < 1 + turnsNeeded + 1) return null; // 传送帧 + 转向帧 + 走上去
+  if (framesLeft < 1 + 2 + turnsNeeded + 1) return null; // 传送帧 + 2帧等待 + 转向帧 + 走上去
   return landing;
 }
 
@@ -1929,12 +1940,21 @@ function canPreemptiveShot(myPos, myDir, enemyTank, game) {
   if (!enemyTank) return null;
   const d = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[enemyTank.direction];
   if (!d) return null;
-  const epNext = [enemyTank.position[0] + d[0], enemyTank.position[1] + d[1]];
-  if (manhattan(myPos, epNext) > 2) return null;
-  const shotDir = clearShotDirection(myPos, epNext, game);
-  if (!shotDir) return null;
-  if (turnDistance(myDir, shotDir) > 1) return null;
-  return shotDir;
+  // 2帧预判：检查敌人沿当前方向走1~2步后是否进入我的射线
+  for (var step = 1; step <= 2; step++) {
+    var epNext = [enemyTank.position[0] + d[0] * step, enemyTank.position[1] + d[1] * step];
+    if (!isPassable(game, epNext, null)) break;
+    var shotDir = clearShotDirection(myPos, epNext, game);
+    if (!shotDir) continue;
+    // 子弹到达帧 = 转向帧 + 飞行帧；敌到达帧 = step帧（每帧走1格）
+    var turnFrames = turnDistance(myDir, shotDir);
+    var bulletDist = manhattan(myPos, epNext);
+    var bulletArrival = turnFrames + Math.ceil(bulletDist / BULLET_SPEED);
+    var enemyArrival = step;
+    // 子弹准时或提前1帧到达（提前1帧子弹在交叉点等敌人=有效命中）
+    if (bulletArrival <= enemyArrival && bulletArrival >= enemyArrival - 1) return shotDir;
+  }
+  return null;
 }
 
 
@@ -1997,29 +2017,45 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
 
 function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, state) {
   if (!enemyTank || !enemyPos) return null;
-  // 有星可追时不浪费帧做守线预瞄（守线只转炮口，帧数白送敌人去吃星）
+  // 有星可追时不浪费帧做守线预瞄——但如果敌人正朝星走且将穿过我的射线，仍允许拦截
   if (game.star) {
     var myStarDist = pathDistance(me.tank.position, game.star, game, enemyPos);
-    if (myStarDist >= 0 && myStarDist <= 8) return null;
+    if (myStarDist >= 0 && myStarDist <= 8) {
+      // 豁免：敌人正走向星且其路径将穿过我的炮线（拦截价值高于自己去追）
+      var enemyHeadingToStar = false;
+      if (enemyTank.direction) {
+        var ed = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[enemyTank.direction];
+        if (ed) {
+          var dirToStar = directionBetween(enemyPos, game.star);
+          if (dirToStar === enemyTank.direction) enemyHeadingToStar = true;
+        }
+      }
+      if (!enemyHeadingToStar) return null;
+    }
   }
   if (!canShoot(me, enemy)) return null;                 // 炮管就绪 + 敌未开盾
   // 双弹门控统一用 enemyDoubleLaneThreat(握弹才怂)，与主开火分支”没双弹就刚”一致：
   // overload 流但 CD 充裕(手里没双弹)时，同线开火与未同线预转都照常——只在真握弹(已过载/cd<=1)时全关。
   const shieldEnemy = enemyHasShieldSkill(enemy);
   if (anyBulletThreatens(enemyBullets || [], me.tank.position, game)) return null; // 有实弹来袭 -> 让躲避先处理
+
+  const myPos = me.tank.position;
+  const dist = manhattan(myPos, enemyPos);
+
+  // 拦截射击（优先）：敌在移动且将穿过我射线 — 距离放宽到 9 格，抓住穿线窗口
+  var enemyIsMoving = !state || !state.enemyStationaryFrames || state.enemyStationaryFrames < 2;
+  if (enemyIsMoving && !enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy) && dist <= 9) {
+    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
+    if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
+    // 精确提前量拦截（子弹与敌同时到达交叉点）
+    const leadDir = canAmbushLeadShot(myPos, me.tank.direction, enemyTank, game);
+    if (leadDir) return me.tank.direction === leadDir ? { fire: true } : { dir: leadDir };
+  }
+
   // 距离门控：拉到 safeStandoffDistance（overload 流=5）才不备战——在安全环带就开始预瞄转炮口，
   // 不必贴到 4 格才守线（mat_2Bc fired=0：守线距离门只有4，整局没机会预瞄）。握双弹时同样按 standoff 退。
   const guardDist = safeStandoffDistance(enemy);
-  if (manhattan(me.tank.position, enemyPos) > guardDist) return null;
-
-  const myPos = me.tank.position;
-  // 预判开炮：敌人朝我走且1帧后进入炮线（仅非双弹威胁时）
-  // 额外条件：敌人正在移动（非原地转向），否则预判无意义
-  var enemyIsMoving = !state || !state.enemyStationaryFrames || state.enemyStationaryFrames < 2;
-  if (enemyIsMoving && !enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy)) {
-    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
-    if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
-  }
+  if (dist > guardDist) return null;
   // 已在同行/同列且视线清晰：能打就打/对准
   const lineDir = clearShotDirection(myPos, enemyPos, game);
   if (lineDir) {
@@ -2104,15 +2140,18 @@ function findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, st
   const myPos = me.tank.position;
   if (anyBulletThreatens(enemyBullets || [], myPos, game)) return null;
 
-  // B) 草丛伏击：我在草丛、敌可见近距 -> 已在同线则开火；未同线则预判下一步
+  // B) 草丛伏击：我在草丛、敌可见近距 -> 已在同线则开火；未同线则预判拦截
   const iAmInBush = me.status && me.status.cloaked || tileAt(game, myPos) === "o";
-  if (iAmInBush && enemyTank && enemyPos && manhattan(myPos, enemyPos) <= 4) {
+  if (iAmInBush && enemyTank && enemyPos && manhattan(myPos, enemyPos) <= 5) {
     // 敌当前已在炮线上
     const dir = clearShotDirection(myPos, enemyPos, game);
     if (dir) return me.tank.direction === dir ? { fire: true } : { dir: dir };
-    // 敌下一步将进入炮线（canPreemptiveShot：敌沿当前方向走一步后与我同线）
+    // 2帧预判：敌沿当前方向走1~2步后与我同线
     const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
     if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
+    // 远距精确拦截：计算子弹与敌人同时到达交叉点的提前量射击
+    const leadDir = canAmbushLeadShot(myPos, me.tank.direction, enemyTank, game);
+    if (leadDir) return me.tank.direction === leadDir ? { fire: true } : { dir: leadDir };
   }
 
   // A) 防伏击预射：敌不可见(草丛或cloak隐身)、最后位置与我同线、近距、视线清晰 -> 朝该线预射

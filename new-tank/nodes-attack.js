@@ -56,6 +56,36 @@ function createAttackTree(profile) {
     );
   }
 
+  // 拦截射击：敌人正移动且将穿过我的射线，提前开炮拦截（优先于直射，抓穿线窗口）
+  if (profile.attackAggression !== 'low') {
+    children.push(
+      Sequence('intercept-shot', [
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-already-on-line', function (bb) { return !bb.shotDir; }),
+        Guard('no-bullet-incoming', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('not-double-threat', function (bb) {
+          return !enemyDoubleLaneThreat(bb.enemy);
+        }),
+        Guard('has-intercept', function (bb) {
+          var dir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          if (!dir) dir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          if (!dir) return false;
+          bb._cache._interceptDir = dir;
+          return true;
+        }),
+        Action('do-intercept', function (bb) {
+          var dir = bb._cache._interceptDir;
+          if (bb.myDir === dir) { bbSpeak(bb, '拦截!'); bbFire(bb); }
+          else bbTurnToward(bb, dir);
+        })
+      ])
+    );
+  }
+
   // 直射：同线无障碍 + 可开火
   if (profile.attackAggression !== 'low') {
     children.push(
