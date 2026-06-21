@@ -108,6 +108,19 @@ function createSoftSurvivalTree(profile) {
   if (profile.dodgeBand) {
     children.push(
       Sequence('overload-lane-dodge', [
+        // 非传送敌 + 我藏在草丛 + 无实弹来袭 + 敌未激活过载 → 纯预测威胁，蹲草别动。
+        // 让位给 bush-hold 保持隐蔽 + 炮口追敌。真实威胁(敌已过载→overload-preempt；
+        // 实弹来袭→hardSurvival)仍正常处理。
+        // mat_1l2 复盘：f42 我藏草[12,3]、敌[2,2]距10格未开火，却因"预测副弹扫 y=3"被本节点
+        // 拉出草丛到开阔地，f50 敌真过载时我已暴露，双弹 y=3 把我秒在 [15,3]。
+        Guard('not-speculative-bush-exit', function (bb) {
+          if (!iAmHidden(bb.me, bb.game)) return true;            // 没藏草，正常躲
+          if (enemyHasTeleport(bb.enemy)) return true;            // 传送敌能瞬移贴脸，蹲草无用
+          var overloaded = bb.enemy && bb.enemy.status && bb.enemy.status.overloaded;
+          if (overloaded) return true;                            // 敌已激活过载=真实威胁
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return true; // 有实弹
+          return false;                                           // 隐蔽+非传送+未过载+无实弹 → 别动
+        }),
         Guard('in-overload-band', function (bb) { return !!senseOverloadLaneDodge(bb); }),
         Action('dodge-overload-band', function (bb) {
           bbMoveToward(bb, senseOverloadLaneDodge(bb));

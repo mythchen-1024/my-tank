@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-21T14:23:53.287Z
+// 构建时间: 2026-06-21T17:43:07.183Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1406,6 +1406,12 @@ function findContestedStarGuard(me, enemyTank, game) {
   
   // 确保我跑去星星的路径距离不比敌人长太多
   if (pathDistance(enemyPos, game.star, game, myPos) > enemyToStar) return null;
+  // 我能抢先到星(走路距离 <= 敌人)：直接吃星 > 守线预瞄。守线(原地预瞄不走)只在"敌人会先到、
+  // 我抢不到"时才有价值(蹲射线等敌踩星反杀)；我更近时守线=白让敌人走过来抢
+  // (mat_Au 星2 F37-46 我距星1格、比敌近，却守线预瞄10帧，眼睁睁让敌走到星上吃掉)。
+  const myWalk = pathDistance(myPos, game.star, game, enemyPos);
+  const foeWalk = pathDistance(enemyPos, game.star, game, myPos);
+  if (myWalk >= 0 && (foeWalk < 0 || myWalk <= foeWalk)) return null;
   return { dir: dir };
 }
 
@@ -2848,12 +2854,14 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank) return null;
   if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
   // 隐身豁免：草丛中敌人看不见我，炮口朝向不是真正的瞄准，无需空躲。
-  // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
+  // 不豁免条件：overload 激活 / 敌人近距（≤3格） / 敌人正对我且距离≤8（盲射风险高）
   // 近距反豁免的例外：枪就绪 + 有射击线 → 草丛先手优势，应射击而非出草逃跑
   const enemyOverloadActive = enemy && enemy.status && enemy.status.overloaded;
   const tooClose = enemyPos && manhattan(me.tank.position, enemyPos) <= 3;
+  const blindFireRisk = enemyPos && manhattan(me.tank.position, enemyPos) <= 8 &&
+    enemyTank.direction === clearShotDirection(enemyPos, me.tank.position, game);
   if (iAmHidden(me, game) && !enemyOverloadActive && !(enemy && enemy.bullet && enemy.bullet.position)) {
-    if (!tooClose) return null;
+    if (!tooClose && !blindFireRisk) return null;
     if (gunReady(me) && clearShotDirection(me.tank.position, enemyPos, game)) return null;
   }
   // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
@@ -2923,6 +2931,11 @@ function shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game) {
   if (!game.star) return false;
   // 敌人已有实弹在途 -> 是真威胁，不豁免（交由子弹躲避/这里继续躲）
   if (enemy && enemy.bullet && enemy.bullet.position) return false;
+  // 敌人极近(≤4格)且直接瞄着我 → 被秒杀风险太高，即使抢星也不豁免
+  if (manhattan(me.tank.position, enemyTank.position) <= 4 &&
+      enemyTank.direction === clearShotDirection(enemyTank.position, me.tank.position, game)) {
+    return false;
+  }
   // 过载就绪/已过载：威胁高，通常不豁免。
   // 特例：星极近(≤2步)且星所在格不在敌方炮线上——此时"抓星"= "脱线"，两件事合一，应当豁免。
   if (enemyDoubleLaneThreat(enemy)) {
@@ -4958,6 +4971,19 @@ function bbDirectGo(bb, target) {
     }
     return;
   }
+  // 目标格在可见敌人射线上且敌可开火 → 降级为 moveToward（有安全检查）
+  // 例外：目标是星星 + 敌是被动跑分传送敌(无实弹、不瞄我，只是同样在抢这颗星)。
+  // 它"瞄着星格"是抢星朝向不是要射我，降级会让我避开星格丢掉补吃(mat_Au 星3 F58 传[9,7]后
+  // 因敌[8,8]朝上瞄星[8,7]被降级，绕到[9,8]远离星，丢星)。此时直奔星点抢吃。
+  var targetIsStar = !!(bb.star && target && samePos(target, bb.star));
+  var foeIsRusher = enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+  if (bb.enemyPos && bb.enemyTank && target &&
+      enemyAimsAt(target, bb.enemyTank, bb.game) &&
+      enemyCanFireSoon(bb.enemy) &&
+      !(targetIsStar && foeIsRusher)) {
+    moveToward(bb.me, bb.game, target, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    return;
+  }
   var dir = directionBetween(bb.myPos, target);
   if (dir === bb.myDir) bb.me.go();
   else if (dir) bbTurnToward(bb, dir);
@@ -5434,6 +5460,19 @@ function createSoftSurvivalTree(profile) {
   if (profile.dodgeBand) {
     children.push(
       Sequence('overload-lane-dodge', [
+        // 非传送敌 + 我藏在草丛 + 无实弹来袭 + 敌未激活过载 → 纯预测威胁，蹲草别动。
+        // 让位给 bush-hold 保持隐蔽 + 炮口追敌。真实威胁(敌已过载→overload-preempt；
+        // 实弹来袭→hardSurvival)仍正常处理。
+        // mat_1l2 复盘：f42 我藏草[12,3]、敌[2,2]距10格未开火，却因"预测副弹扫 y=3"被本节点
+        // 拉出草丛到开阔地，f50 敌真过载时我已暴露，双弹 y=3 把我秒在 [15,3]。
+        Guard('not-speculative-bush-exit', function (bb) {
+          if (!iAmHidden(bb.me, bb.game)) return true;            // 没藏草，正常躲
+          if (enemyHasTeleport(bb.enemy)) return true;            // 传送敌能瞬移贴脸，蹲草无用
+          var overloaded = bb.enemy && bb.enemy.status && bb.enemy.status.overloaded;
+          if (overloaded) return true;                            // 敌已激活过载=真实威胁
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return true; // 有实弹
+          return false;                                           // 隐蔽+非传送+未过载+无实弹 → 别动
+        }),
         Guard('in-overload-band', function (bb) { return !!senseOverloadLaneDodge(bb); }),
         Action('dodge-overload-band', function (bb) {
           bbMoveToward(bb, senseOverloadLaneDodge(bb));
@@ -5643,6 +5682,11 @@ function createAttackTree(profile) {
     // 非安全直射（能打但有风险，优先级低于安全直射，高于守线）
     children.push(
       Sequence('fire-risky', [
+        // 无星窗口 + 被动跑分传送敌：投机射击打不死(敌会传送遁走)，反而把自己拉离星点。
+        // 让位给 movement→patrol 回中心预走位，抢下一颗星(mat_7kEU8 F108 打墙丢位复盘)。
+        Guard('not-idle-vs-rusher', function (bb) {
+          return bb.star || !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
         // 近距被逼且需多帧转向 → 放弃攻击让 movement 后撤
@@ -5670,6 +5714,11 @@ function createAttackTree(profile) {
   if (profile.attackAggression === 'medium' || profile.attackAggression === 'high') {
     children.push(
       Sequence('guard-line', [
+        // 无星窗口 + 被动跑分传送敌：守线预瞄=原地等敌进线，但敌只会传送抢星不来送线。
+        // 同样让位给回中心预走位(mat_7kEU8 F101 守线丢位复盘)。
+        Guard('not-idle-vs-rusher', function (bb) {
+          return bb.star || !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
         Guard('not-cornered-guard', function (bb) {
           if (!bb.enemyTank) return true;
@@ -5949,7 +5998,24 @@ function createObjectiveTree(profile) {
       Guard('has-star-guard', function (bb) { return !!senseStarGuard(bb); }),
       Action('do-star-guard', function (bb) {
         var sg = senseStarGuard(bb);
-        if (bb.myDir !== sg.dir) bbTurnToward(bb, sg.dir);
+        // 还没对准守线方向 → 先转向预瞄（下帧再开火）
+        if (bb.myDir !== sg.dir) { bbTurnToward(bb, sg.dir); return; }
+        if (!bb.gunIsReady || !bb.enemyPos) return;
+        // 敌已在我射线上 → 立即开火，拦在它踩星之前
+        if (clearShotDirection(bb.myPos, bb.enemyPos, bb.game) === sg.dir) {
+          bbSpeak(bb, '守星!'); bbFire(bb); return;
+        }
+        // 敌沿当前朝向 1~2 步将进入我射线 → 预射拦截（子弹在交叉点等它）
+        var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game) ||
+                     canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+        if (preDir === sg.dir) { bbSpeak(bb, '守星!'); bbFire(bb); return; }
+        // 敌即将踩上星格(星在我射线尽头)：提前开火，子弹飞到星格时敌正好踩上。
+        // 子弹飞 ceil(dStar/2) 帧到星；敌每帧走1格、foeToStar 帧到星。foeToStar<=flight 即可拦截。
+        var dStar = manhattan(bb.myPos, bb.star);
+        var flight = Math.ceil(dStar / BULLET_SPEED);
+        if (manhattan(bb.enemyPos, bb.star) <= flight) {
+          bbSpeak(bb, '守星!'); bbFire(bb); return;
+        }
       })
     ])
   );
@@ -5990,11 +6056,9 @@ function createStarGrabNode() {
       if (!g) return false;
       if (bb.frame - g.frame > g.ttl) { bb.memory.pendingStarGrab = null; return false; }
       if (!bb.star || !samePos(bb.star, g.target)) { bb.memory.pendingStarGrab = null; return false; }
-      // 已站在星上：传送后2帧内引擎不让拾取，但2帧后会自动拾取，无需再走
-      if (samePos(bb.myPos, bb.star)) {
-        if (bb.frame - g.frame >= 2) { bb.memory.pendingStarGrab = null; return false; }
-        return false; // 等待中，不走动但也不清除意图
-      }
+      // 站在星上等自动拾取(传送2帧削弱期内引擎不让拾取)：保持意图返回 true，让 action 原地 hold，
+      // 防止低优先级移动节点把我移开丢星(mat_Au F2 走上星 F3 又走开丢星复盘)。
+      // 星被拾取后 bb.star 变化/消失，下帧 guard 自然释放；ttl 超时兜底防卡死。
       return true;
     }),
     Guard('star-reachable', function (bb) {
@@ -6007,6 +6071,8 @@ function createStarGrabNode() {
       return true;
     }),
     Action('do-star-grab', function (bb) {
+      // 已站在星上：原地不动等引擎自动拾取(移开会丢星)
+      if (samePos(bb.myPos, bb.star)) return;
       bbDirectGo(bb, bb.star);
     })
   ]);
@@ -6263,6 +6329,18 @@ function createMovementTree(profile) {
               if (bb.myDir === preDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
               bbTurnToward(bb, preDir); return;
             }
+          }
+          // 炮口追敌：敌可见但未进炮线时，把炮口转向敌人的主轴方向（offset 更大的轴），
+          // 这样敌人一旦走进同行/同列我已对准、可即时开火，不必临时转向浪费一帧。
+          // mat_1l2 复盘：蹲草32帧炮口始终朝 'right' 不动，敌在 y=2 行游走我在 y=3，
+          // 炮口若追敌(对 x 轴/对敌方向)就能在对齐瞬间抢先开火。
+          if (bb.enemyPos) {
+            var dx = bb.enemyPos[0] - bb.myPos[0];
+            var dy = bb.enemyPos[1] - bb.myPos[1];
+            var aimDir = Math.abs(dx) >= Math.abs(dy)
+              ? (dx >= 0 ? 'right' : 'left')
+              : (dy >= 0 ? 'down' : 'up');
+            if (aimDir && bb.myDir !== aimDir) { bbTurnToward(bb, aimDir); bbSpeak(bb, '蹲草'); return; }
           }
           primeShortIntent(bb.memory, 'hold', bb.myPos, bb.frame, 3);
           bbSpeak(bb, '蹲草');

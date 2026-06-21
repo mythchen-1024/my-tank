@@ -248,6 +248,18 @@ function createMovementTree(profile) {
               bbTurnToward(bb, preDir); return;
             }
           }
+          // 炮口追敌：敌可见但未进炮线时，把炮口转向敌人的主轴方向（offset 更大的轴），
+          // 这样敌人一旦走进同行/同列我已对准、可即时开火，不必临时转向浪费一帧。
+          // mat_1l2 复盘：蹲草32帧炮口始终朝 'right' 不动，敌在 y=2 行游走我在 y=3，
+          // 炮口若追敌(对 x 轴/对敌方向)就能在对齐瞬间抢先开火。
+          if (bb.enemyPos) {
+            var dx = bb.enemyPos[0] - bb.myPos[0];
+            var dy = bb.enemyPos[1] - bb.myPos[1];
+            var aimDir = Math.abs(dx) >= Math.abs(dy)
+              ? (dx >= 0 ? 'right' : 'left')
+              : (dy >= 0 ? 'down' : 'up');
+            if (aimDir && bb.myDir !== aimDir) { bbTurnToward(bb, aimDir); bbSpeak(bb, '蹲草'); return; }
+          }
           primeShortIntent(bb.memory, 'hold', bb.myPos, bb.frame, 3);
           bbSpeak(bb, '蹲草');
         })

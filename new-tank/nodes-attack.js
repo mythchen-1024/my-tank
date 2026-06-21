@@ -136,6 +136,11 @@ function createAttackTree(profile) {
     // 非安全直射（能打但有风险，优先级低于安全直射，高于守线）
     children.push(
       Sequence('fire-risky', [
+        // 无星窗口 + 被动跑分传送敌：投机射击打不死(敌会传送遁走)，反而把自己拉离星点。
+        // 让位给 movement→patrol 回中心预走位，抢下一颗星(mat_7kEU8 F108 打墙丢位复盘)。
+        Guard('not-idle-vs-rusher', function (bb) {
+          return bb.star || !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
         // 近距被逼且需多帧转向 → 放弃攻击让 movement 后撤
@@ -163,6 +168,11 @@ function createAttackTree(profile) {
   if (profile.attackAggression === 'medium' || profile.attackAggression === 'high') {
     children.push(
       Sequence('guard-line', [
+        // 无星窗口 + 被动跑分传送敌：守线预瞄=原地等敌进线，但敌只会传送抢星不来送线。
+        // 同样让位给回中心预走位(mat_7kEU8 F101 守线丢位复盘)。
+        Guard('not-idle-vs-rusher', function (bb) {
+          return bb.star || !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
         Guard('not-cornered-guard', function (bb) {
           if (!bb.enemyTank) return true;

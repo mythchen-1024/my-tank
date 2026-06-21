@@ -170,7 +170,24 @@ function createObjectiveTree(profile) {
       Guard('has-star-guard', function (bb) { return !!senseStarGuard(bb); }),
       Action('do-star-guard', function (bb) {
         var sg = senseStarGuard(bb);
-        if (bb.myDir !== sg.dir) bbTurnToward(bb, sg.dir);
+        // 还没对准守线方向 → 先转向预瞄（下帧再开火）
+        if (bb.myDir !== sg.dir) { bbTurnToward(bb, sg.dir); return; }
+        if (!bb.gunIsReady || !bb.enemyPos) return;
+        // 敌已在我射线上 → 立即开火，拦在它踩星之前
+        if (clearShotDirection(bb.myPos, bb.enemyPos, bb.game) === sg.dir) {
+          bbSpeak(bb, '守星!'); bbFire(bb); return;
+        }
+        // 敌沿当前朝向 1~2 步将进入我射线 → 预射拦截（子弹在交叉点等它）
+        var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game) ||
+                     canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+        if (preDir === sg.dir) { bbSpeak(bb, '守星!'); bbFire(bb); return; }
+        // 敌即将踩上星格(星在我射线尽头)：提前开火，子弹飞到星格时敌正好踩上。
+        // 子弹飞 ceil(dStar/2) 帧到星；敌每帧走1格、foeToStar 帧到星。foeToStar<=flight 即可拦截。
+        var dStar = manhattan(bb.myPos, bb.star);
+        var flight = Math.ceil(dStar / BULLET_SPEED);
+        if (manhattan(bb.enemyPos, bb.star) <= flight) {
+          bbSpeak(bb, '守星!'); bbFire(bb); return;
+        }
       })
     ])
   );
@@ -211,11 +228,9 @@ function createStarGrabNode() {
       if (!g) return false;
       if (bb.frame - g.frame > g.ttl) { bb.memory.pendingStarGrab = null; return false; }
       if (!bb.star || !samePos(bb.star, g.target)) { bb.memory.pendingStarGrab = null; return false; }
-      // 已站在星上：传送后2帧内引擎不让拾取，但2帧后会自动拾取，无需再走
-      if (samePos(bb.myPos, bb.star)) {
-        if (bb.frame - g.frame >= 2) { bb.memory.pendingStarGrab = null; return false; }
-        return false; // 等待中，不走动但也不清除意图
-      }
+      // 站在星上等自动拾取(传送2帧削弱期内引擎不让拾取)：保持意图返回 true，让 action 原地 hold，
+      // 防止低优先级移动节点把我移开丢星(mat_Au F2 走上星 F3 又走开丢星复盘)。
+      // 星被拾取后 bb.star 变化/消失，下帧 guard 自然释放；ttl 超时兜底防卡死。
       return true;
     }),
     Guard('star-reachable', function (bb) {
@@ -228,6 +243,8 @@ function createStarGrabNode() {
       return true;
     }),
     Action('do-star-grab', function (bb) {
+      // 已站在星上：原地不动等引擎自动拾取(移开会丢星)
+      if (samePos(bb.myPos, bb.star)) return;
       bbDirectGo(bb, bb.star);
     })
   ]);

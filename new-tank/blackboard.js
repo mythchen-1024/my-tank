@@ -359,6 +359,19 @@ function bbDirectGo(bb, target) {
     }
     return;
   }
+  // 目标格在可见敌人射线上且敌可开火 → 降级为 moveToward（有安全检查）
+  // 例外：目标是星星 + 敌是被动跑分传送敌(无实弹、不瞄我，只是同样在抢这颗星)。
+  // 它"瞄着星格"是抢星朝向不是要射我，降级会让我避开星格丢掉补吃(mat_Au 星3 F58 传[9,7]后
+  // 因敌[8,8]朝上瞄星[8,7]被降级，绕到[9,8]远离星，丢星)。此时直奔星点抢吃。
+  var targetIsStar = !!(bb.star && target && samePos(target, bb.star));
+  var foeIsRusher = enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+  if (bb.enemyPos && bb.enemyTank && target &&
+      enemyAimsAt(target, bb.enemyTank, bb.game) &&
+      enemyCanFireSoon(bb.enemy) &&
+      !(targetIsStar && foeIsRusher)) {
+    moveToward(bb.me, bb.game, target, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    return;
+  }
   var dir = directionBetween(bb.myPos, target);
   if (dir === bb.myDir) bb.me.go();
   else if (dir) bbTurnToward(bb, dir);

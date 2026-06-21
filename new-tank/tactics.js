@@ -278,6 +278,12 @@ function findContestedStarGuard(me, enemyTank, game) {
   
   // 确保我跑去星星的路径距离不比敌人长太多
   if (pathDistance(enemyPos, game.star, game, myPos) > enemyToStar) return null;
+  // 我能抢先到星(走路距离 <= 敌人)：直接吃星 > 守线预瞄。守线(原地预瞄不走)只在"敌人会先到、
+  // 我抢不到"时才有价值(蹲射线等敌踩星反杀)；我更近时守线=白让敌人走过来抢
+  // (mat_Au 星2 F37-46 我距星1格、比敌近，却守线预瞄10帧，眼睁睁让敌走到星上吃掉)。
+  const myWalk = pathDistance(myPos, game.star, game, enemyPos);
+  const foeWalk = pathDistance(enemyPos, game.star, game, myPos);
+  if (myWalk >= 0 && (foeWalk < 0 || myWalk <= foeWalk)) return null;
   return { dir: dir };
 }
 
@@ -1720,12 +1726,14 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank) return null;
   if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
   // 隐身豁免：草丛中敌人看不见我，炮口朝向不是真正的瞄准，无需空躲。
-  // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
+  // 不豁免条件：overload 激活 / 敌人近距（≤3格） / 敌人正对我且距离≤8（盲射风险高）
   // 近距反豁免的例外：枪就绪 + 有射击线 → 草丛先手优势，应射击而非出草逃跑
   const enemyOverloadActive = enemy && enemy.status && enemy.status.overloaded;
   const tooClose = enemyPos && manhattan(me.tank.position, enemyPos) <= 3;
+  const blindFireRisk = enemyPos && manhattan(me.tank.position, enemyPos) <= 8 &&
+    enemyTank.direction === clearShotDirection(enemyPos, me.tank.position, game);
   if (iAmHidden(me, game) && !enemyOverloadActive && !(enemy && enemy.bullet && enemy.bullet.position)) {
-    if (!tooClose) return null;
+    if (!tooClose && !blindFireRisk) return null;
     if (gunReady(me) && clearShotDirection(me.tank.position, enemyPos, game)) return null;
   }
   // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
@@ -1795,6 +1803,11 @@ function shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game) {
   if (!game.star) return false;
   // 敌人已有实弹在途 -> 是真威胁，不豁免（交由子弹躲避/这里继续躲）
   if (enemy && enemy.bullet && enemy.bullet.position) return false;
+  // 敌人极近(≤4格)且直接瞄着我 → 被秒杀风险太高，即使抢星也不豁免
+  if (manhattan(me.tank.position, enemyTank.position) <= 4 &&
+      enemyTank.direction === clearShotDirection(enemyTank.position, me.tank.position, game)) {
+    return false;
+  }
   // 过载就绪/已过载：威胁高，通常不豁免。
   // 特例：星极近(≤2步)且星所在格不在敌方炮线上——此时"抓星"= "脱线"，两件事合一，应当豁免。
   if (enemyDoubleLaneThreat(enemy)) {
