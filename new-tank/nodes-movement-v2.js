@@ -302,18 +302,21 @@ function createMovementTree(profile) {
         if (!starPath || !starPath.step) return false;
         var fleeMode = !!(bb.memory && bb.memory.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
         if (!shouldChaseStar(bb.myPos, bb.enemyPos, bb.game, starPath, bb.enemy, fleeMode, bb.me, bb.enemyTank)) return false;
-        // overload 陷阱检查
-        if (bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
-            starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game)) return false;
         // 草丛伏击陷阱：敌人消失 + 星附近有草丛在射击线上
         if (!bb.enemyTank && inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory)) return false;
         bb._cache._starPath = starPath;
+        // overload 陷阱标记（降级：不再否决追星，仅标记供 star-step-safe 加严）
+        bb._cache._overloadTrap = !!(bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
+            starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game));
         return true;
       }),
       Guard('star-step-safe', function (bb) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
-        if (isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
+        // overload 陷阱时对最优步额外检查：落点被覆盖才拒（不覆盖仍可走）
+        var trapBlocked = bb._cache._overloadTrap &&
+          bb.enemyPos && predictedOverloadThreatens(bb.enemy, starPath.step, bb.game);
+        if (!trapBlocked && isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
           bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory)) {
           return true;
         }
@@ -325,12 +328,20 @@ function createMovementTree(profile) {
           if (!isPassable(bb.game, p, bb.enemyPos)) continue;
           if (!isSafeStep(p, bb.myPos, bb.enemyPos, bb.game,
             bb.enemy, standoff, samePos(p, bb.star), bb.enemyBullets, bb.memory)) continue;
+          // overload 陷阱时次优步也检查预测弹道
+          if (bb._cache._overloadTrap && predictedOverloadThreatens(bb.enemy, p, bb.game)) continue;
           var altDist = pathDistance(p, bb.star, bb.game, bb.enemyPos);
           if (altDist < 0) continue;
           if (altDist < bestAltDist) { bestAltDist = altDist; bestAlt = p; }
         }
         if (bestAlt && bestAltDist <= starPath.dist + 2) {
           bb._cache._starPath = { step: bestAlt, dist: bestAltDist + 1 };
+          return true;
+        }
+        // 陷阱标记但找不到安全绕路 → 距星很近(≤3)时仍放行（吃星收益 > 预测风险）
+        if (bb._cache._overloadTrap && starPath.dist <= 3 &&
+          isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
+            bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory)) {
           return true;
         }
         return false;

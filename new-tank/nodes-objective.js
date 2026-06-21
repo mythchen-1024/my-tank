@@ -208,10 +208,6 @@ function createStarGrabNode() {
       }
       return true;
     }),
-    Guard('pickup-delay-passed', function (bb) {
-      var g = bb.memory.pendingStarGrab;
-      return bb.frame - g.frame >= 2;
-    }),
     Guard('star-reachable', function (bb) {
       return manhattan(bb.myPos, bb.star) <= 2;
     }),

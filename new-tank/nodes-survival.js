@@ -71,6 +71,39 @@ function createHardSurvivalTree() {
 function createSoftSurvivalTree(profile) {
   var children = [];
 
+  // overload 激活瞬间预防性逃离：敌 overload 刚激活(尚未开火)，立即脱离其行/列覆盖带
+  if (profile.dodgeBand) {
+    children.push(
+      Sequence('overload-preempt', [
+        Guard('overload-active-no-fire', function (bb) {
+          if (!bb.enemyPos || !bb.enemyTank) return false;
+          var overloaded = bb.enemy && bb.enemy.status && bb.enemy.status.overloaded;
+          if (!overloaded) return false;
+          // 已有实弹在飞 → 交 hardSurvival 处理
+          if (bb.enemy.bullet && bb.enemy.bullet.position) return false;
+          // 距离太远(>8)无需紧急逃离
+          if (bb.distToEnemy > 8) return false;
+          return true;
+        }),
+        Guard('in-danger-zone', function (bb) {
+          // 当前在敌人任意方向覆盖带内(行±1 或 列±1)
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 1 || dy <= 1;
+        }),
+        Guard('preempt-step', function (bb) {
+          var step = findOverloadPreemptStep(bb.myPos, bb.enemyPos, bb.game, bb.enemyBullets);
+          if (!step) return false;
+          bb._cache._preemptStep = step;
+          return true;
+        }),
+        Action('do-preempt', function (bb) {
+          bbMoveToward(bb, bb._cache._preemptStep);
+        })
+      ])
+    );
+  }
+
   // overload 特有：双弹覆盖带提前脱离
   if (profile.dodgeBand) {
     children.push(

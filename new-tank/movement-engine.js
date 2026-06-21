@@ -28,7 +28,8 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   }
   // 还要排除下一帧会扫到的子弹轨道，避免”当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
-  if (predictedOverloadThreatens(enemy, next, game)) return false;
+  // 预测 overload 弹道：星步豁免（吃星收益 > 预测性风险）
+  if (!allowStarDeadEnd && predictedOverloadThreatens(enemy, next, game)) return false;
   // 隐身敌射线检查：敌不可见时避免走入其最后已知位置的射击线
   if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(next, myPos, game, memory, allowStarDeadEnd)) return false;
   return true;

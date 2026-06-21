@@ -1674,6 +1674,39 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
 
 
 /**
+ * overload 激活瞬间预防性逃离：找一个不在敌人行±1且不在列±1的相邻安全格。
+ * 优先：面朝方向可直走(省转向帧) > 远离敌人 > 开阔度。
+ * 找不到"完全脱出"的格时，退而求其次：至少离开当前最危险的轴(同行走列方向、同列走行方向)。
+ */
+function findOverloadPreemptStep(myPos, enemyPos, game, enemyBullets) {
+  var bullets = enemyBullets || [];
+  var best = null, bestScore = -9999;
+  var fallback = null, fallbackScore = -9999;
+  for (var i = 0; i < DIRS.length; i++) {
+    var p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (stepIntoBulletPath(bullets, p, game)) continue;
+    if (anyBulletThreatens(bullets, p, game)) continue;
+    var dx = Math.abs(p[0] - enemyPos[0]);
+    var dy = Math.abs(p[1] - enemyPos[1]);
+    var outOfBand = dx > 1 && dy > 1;
+    var score = manhattan(p, enemyPos) * 2 + distanceFromEdges(p, game);
+    if (outOfBand) {
+      if (score > bestScore) { bestScore = score; best = p; }
+    } else {
+      // 次选：至少比当前位置少一个覆盖轴
+      var curDx = Math.abs(myPos[0] - enemyPos[0]);
+      var curDy = Math.abs(myPos[1] - enemyPos[1]);
+      var curAxes = (curDx <= 1 ? 1 : 0) + (curDy <= 1 ? 1 : 0);
+      var newAxes = (dx <= 1 ? 1 : 0) + (dy <= 1 ? 1 : 0);
+      if (newAxes < curAxes && score > fallbackScore) { fallbackScore = score; fallback = p; }
+    }
+  }
+  return best || fallback;
+}
+
+
+/**
  * 防范敌方预瞄/预发射/守星：若敌人正瞄准我且本帧具备开火能力，提前移动脱离其炮线。
  *
  * 改进点：

@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-21T04:41:58.134Z
+// 构建时间: 2026-06-21T07:32:45.390Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -2802,6 +2802,39 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
 
 
 /**
+ * overload 激活瞬间预防性逃离：找一个不在敌人行±1且不在列±1的相邻安全格。
+ * 优先：面朝方向可直走(省转向帧) > 远离敌人 > 开阔度。
+ * 找不到"完全脱出"的格时，退而求其次：至少离开当前最危险的轴(同行走列方向、同列走行方向)。
+ */
+function findOverloadPreemptStep(myPos, enemyPos, game, enemyBullets) {
+  var bullets = enemyBullets || [];
+  var best = null, bestScore = -9999;
+  var fallback = null, fallbackScore = -9999;
+  for (var i = 0; i < DIRS.length; i++) {
+    var p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, enemyPos)) continue;
+    if (stepIntoBulletPath(bullets, p, game)) continue;
+    if (anyBulletThreatens(bullets, p, game)) continue;
+    var dx = Math.abs(p[0] - enemyPos[0]);
+    var dy = Math.abs(p[1] - enemyPos[1]);
+    var outOfBand = dx > 1 && dy > 1;
+    var score = manhattan(p, enemyPos) * 2 + distanceFromEdges(p, game);
+    if (outOfBand) {
+      if (score > bestScore) { bestScore = score; best = p; }
+    } else {
+      // 次选：至少比当前位置少一个覆盖轴
+      var curDx = Math.abs(myPos[0] - enemyPos[0]);
+      var curDy = Math.abs(myPos[1] - enemyPos[1]);
+      var curAxes = (curDx <= 1 ? 1 : 0) + (curDy <= 1 ? 1 : 0);
+      var newAxes = (dx <= 1 ? 1 : 0) + (dy <= 1 ? 1 : 0);
+      if (newAxes < curAxes && score > fallbackScore) { fallbackScore = score; fallback = p; }
+    }
+  }
+  return best || fallback;
+}
+
+
+/**
  * 防范敌方预瞄/预发射/守星：若敌人正瞄准我且本帧具备开火能力，提前移动脱离其炮线。
  *
  * 改进点：
@@ -3594,7 +3627,8 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   }
   // 还要排除下一帧会扫到的子弹轨道，避免”当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
-  if (predictedOverloadThreatens(enemy, next, game)) return false;
+  // 预测 overload 弹道：星步豁免（吃星收益 > 预测性风险）
+  if (!allowStarDeadEnd && predictedOverloadThreatens(enemy, next, game)) return false;
   // 隐身敌射线检查：敌不可见时避免走入其最后已知位置的射击线
   if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(next, myPos, game, memory, allowStarDeadEnd)) return false;
   return true;
@@ -5363,6 +5397,39 @@ function createHardSurvivalTree() {
 function createSoftSurvivalTree(profile) {
   var children = [];
 
+  // overload 激活瞬间预防性逃离：敌 overload 刚激活(尚未开火)，立即脱离其行/列覆盖带
+  if (profile.dodgeBand) {
+    children.push(
+      Sequence('overload-preempt', [
+        Guard('overload-active-no-fire', function (bb) {
+          if (!bb.enemyPos || !bb.enemyTank) return false;
+          var overloaded = bb.enemy && bb.enemy.status && bb.enemy.status.overloaded;
+          if (!overloaded) return false;
+          // 已有实弹在飞 → 交 hardSurvival 处理
+          if (bb.enemy.bullet && bb.enemy.bullet.position) return false;
+          // 距离太远(>8)无需紧急逃离
+          if (bb.distToEnemy > 8) return false;
+          return true;
+        }),
+        Guard('in-danger-zone', function (bb) {
+          // 当前在敌人任意方向覆盖带内(行±1 或 列±1)
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 1 || dy <= 1;
+        }),
+        Guard('preempt-step', function (bb) {
+          var step = findOverloadPreemptStep(bb.myPos, bb.enemyPos, bb.game, bb.enemyBullets);
+          if (!step) return false;
+          bb._cache._preemptStep = step;
+          return true;
+        }),
+        Action('do-preempt', function (bb) {
+          bbMoveToward(bb, bb._cache._preemptStep);
+        })
+      ])
+    );
+  }
+
   // overload 特有：双弹覆盖带提前脱离
   if (profile.dodgeBand) {
     children.push(
@@ -5920,10 +5987,6 @@ function createStarGrabNode() {
       }
       return true;
     }),
-    Guard('pickup-delay-passed', function (bb) {
-      var g = bb.memory.pendingStarGrab;
-      return bb.frame - g.frame >= 2;
-    }),
     Guard('star-reachable', function (bb) {
       return manhattan(bb.myPos, bb.star) <= 2;
     }),
@@ -6245,18 +6308,21 @@ function createMovementTree(profile) {
         if (!starPath || !starPath.step) return false;
         var fleeMode = !!(bb.memory && bb.memory.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
         if (!shouldChaseStar(bb.myPos, bb.enemyPos, bb.game, starPath, bb.enemy, fleeMode, bb.me, bb.enemyTank)) return false;
-        // overload 陷阱检查
-        if (bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
-            starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game)) return false;
         // 草丛伏击陷阱：敌人消失 + 星附近有草丛在射击线上
         if (!bb.enemyTank && inBushStarTrap(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory)) return false;
         bb._cache._starPath = starPath;
+        // overload 陷阱标记（降级：不再否决追星，仅标记供 star-step-safe 加严）
+        bb._cache._overloadTrap = !!(bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
+            starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game));
         return true;
       }),
       Guard('star-step-safe', function (bb) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
-        if (isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
+        // overload 陷阱时对最优步额外检查：落点被覆盖才拒（不覆盖仍可走）
+        var trapBlocked = bb._cache._overloadTrap &&
+          bb.enemyPos && predictedOverloadThreatens(bb.enemy, starPath.step, bb.game);
+        if (!trapBlocked && isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
           bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory)) {
           return true;
         }
@@ -6268,12 +6334,20 @@ function createMovementTree(profile) {
           if (!isPassable(bb.game, p, bb.enemyPos)) continue;
           if (!isSafeStep(p, bb.myPos, bb.enemyPos, bb.game,
             bb.enemy, standoff, samePos(p, bb.star), bb.enemyBullets, bb.memory)) continue;
+          // overload 陷阱时次优步也检查预测弹道
+          if (bb._cache._overloadTrap && predictedOverloadThreatens(bb.enemy, p, bb.game)) continue;
           var altDist = pathDistance(p, bb.star, bb.game, bb.enemyPos);
           if (altDist < 0) continue;
           if (altDist < bestAltDist) { bestAltDist = altDist; bestAlt = p; }
         }
         if (bestAlt && bestAltDist <= starPath.dist + 2) {
           bb._cache._starPath = { step: bestAlt, dist: bestAltDist + 1 };
+          return true;
+        }
+        // 陷阱标记但找不到安全绕路 → 距星很近(≤3)时仍放行（吃星收益 > 预测风险）
+        if (bb._cache._overloadTrap && starPath.dist <= 3 &&
+          isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
+            bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory)) {
           return true;
         }
         return false;
