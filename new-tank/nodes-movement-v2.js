@@ -225,6 +225,32 @@ function createMovementTree(profile) {
     );
   }
 
+  // ---- 吃星后撤退意图：刚吃完星的短窗口内主动远离危险 ----
+  children.push(
+    Sequence('post-star-retreat', [
+      Guard('just-ate-star', function (bb) {
+        if (bb.memory.shortIntent) return false; // 已有意图不覆盖
+        if (bb.star) return false; // 星还在则没吃到
+        if (!bb._lastGrabFrame || bb.frame - bb._lastGrabFrame > 1) return false;
+        return true;
+      }),
+      Action('do-retreat', function (bb) {
+        var dangerPos = bb.enemyPos || bb.memory.lastEnemyPos;
+        if (!dangerPos) return;
+        // 找远离危险且开阔的方向走2步
+        var best = null, bestScore = -9999;
+        for (var i = 0; i < DIRS.length; i++) {
+          var p = [bb.myPos[0] + DIRS[i].dx, bb.myPos[1] + DIRS[i].dy];
+          if (!isPassable(bb.game, p, bb.enemyPos)) continue;
+          if (anyBulletThreatens(bb.enemyBullets, p, bb.game)) continue;
+          var score = manhattan(p, dangerPos) * 3 + openNeighborCount(p, bb.game);
+          if (score > bestScore) { bestScore = score; best = p; }
+        }
+        if (best) primeShortIntent(bb.memory, 'retreat', best, bb.frame, 2);
+      })
+    ])
+  );
+
   // ---- 短期意图续跑（缓存的 2~4 步低风险计划，防横跳） ----
   children.push(
     Sequence('short-intent', [
@@ -263,7 +289,7 @@ function createMovementTree(profile) {
         var starPath = shortestPathInfo(bb.myPos, bb.star, bb.game, bb.enemyPos);
         if (!starPath || !starPath.step) return false;
         var fleeMode = !!(bb.memory && bb.memory.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
-        if (!shouldChaseStar(bb.myPos, bb.enemyPos, bb.game, starPath, bb.enemy, fleeMode)) return false;
+        if (!shouldChaseStar(bb.myPos, bb.enemyPos, bb.game, starPath, bb.enemy, fleeMode, bb.me, bb.enemyTank)) return false;
         // overload 陷阱检查
         if (bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
             starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game)) return false;
@@ -275,8 +301,27 @@ function createMovementTree(profile) {
       Guard('star-step-safe', function (bb) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
-        return isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
-          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory);
+        if (isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
+          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory)) {
+          return true;
+        }
+        // 最优步不安全 → 探索次优路径：尝试其他方向的邻格作为第一步
+        var bestAlt = null, bestAltDist = 9999;
+        for (var i = 0; i < DIRS.length; i++) {
+          var p = [bb.myPos[0] + DIRS[i].dx, bb.myPos[1] + DIRS[i].dy];
+          if (samePos(p, starPath.step)) continue;
+          if (!isPassable(bb.game, p, bb.enemyPos)) continue;
+          if (!isSafeStep(p, bb.myPos, bb.enemyPos, bb.game,
+            bb.enemy, standoff, samePos(p, bb.star), bb.enemyBullets, bb.memory)) continue;
+          var altDist = pathDistance(p, bb.star, bb.game, bb.enemyPos);
+          if (altDist < 0) continue;
+          if (altDist < bestAltDist) { bestAltDist = altDist; bestAlt = p; }
+        }
+        if (bestAlt && bestAltDist <= starPath.dist + 2) {
+          bb._cache._starPath = { step: bestAlt, dist: bestAltDist + 1 };
+          return true;
+        }
+        return false;
       }),
       Action('do-star-chase', function (bb) {
         var starPath = bb._cache._starPath;

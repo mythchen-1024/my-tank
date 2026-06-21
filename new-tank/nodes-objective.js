@@ -202,6 +202,12 @@ function createStarGrabNode() {
     Guard('star-reachable', function (bb) {
       return manhattan(bb.myPos, bb.star) <= 2;
     }),
+    Guard('no-bullet-incoming', function (bb) {
+      // 补吃路径上有子弹即将命中 → 先躲再吃（交 hardSurvival 处理）
+      if (anyBulletThreatens(bb.enemyBullets, bb.star, bb.game)) return false;
+      if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+      return true;
+    }),
     Action('do-star-grab', function (bb) {
       bbDirectGo(bb, bb.star);
     })

@@ -123,8 +123,14 @@ function virtualPatrolTarget(me, game, state, enemy) {
       rusherBonus = Math.max(0, 8 - centerD) * 2; // 居中 +16，外圈逐渐归零
       if (edgeD <= 1) rusherBonus -= 6;            // 仍不选贴墙死角
     }
+    // 通用居中偏移：无星等待期偏向中心，缩短下颗星的起步距离
+    let centerBonus = 0;
+    if (!passiveRusher && !isOverload) {
+      const centerD = Math.abs(p[0] - cx) + Math.abs(p[1] - cy);
+      centerBonus = Math.max(0, 6 - centerD); // 居中 +6，外圈递减
+    }
     const dangerWeight = passiveRusher ? 0 : 1;     // 被动跑分敌不为"远离它"巡逻
-    const score = dangerScore * dangerWeight + distMe + edgeD + overloadBonus + rusherBonus;
+    const score = dangerScore * dangerWeight + distMe + edgeD + overloadBonus + rusherBonus + centerBonus;
     if (score > bestScore) { bestScore = score; best = p; }
   }
   if (best && state) state.patrolTarget = best; // 记住，保持航向
@@ -219,7 +225,7 @@ function starGrabTrapsInOverloadLane(starStep, enemyPos, game) {
 /**
  * 判断是否值得放弃交战去追星星
  */
-function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) {
+function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode, me, enemyTank) {
   if (!game.star || !starPath || starPath.dist < 0) return false;
   if (!enemyPos) return true; // 看不到敌人必追星星
   // 守星陷阱：敌"此刻握双弹"且星就贴在它的双弹覆盖带里(它在守这颗星)，冲过去抢 = 落进双弹炮线送死
@@ -229,10 +235,22 @@ function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) {
   // 跑路流：对方连续背对我逃跑，说明它只抢星不打架——我也不用等"比它近"才追，直接跟进抢星(mat_AAKs)
   if (fleeMode) return true;
 
-  const enemyDist = pathDistance(enemyPos, game.star, game, myPos);
+  var enemyDist = pathDistance(enemyPos, game.star, game, myPos);
+  // 转向惩罚：敌当前方向不朝星，需额外1~2帧转向才能出发
+  if (enemyDist > 0 && enemyTank && enemyTank.direction) {
+    var dirToStar = directionBetween(enemyPos, game.star);
+    if (dirToStar && dirToStar !== enemyTank.direction) {
+      enemyDist += turnDistance(enemyTank.direction, dirToStar);
+    }
+  }
+  // 传送折扣：我方传送就绪时等效到达距离大幅缩短(传送1帧+补走1步=2帧)
+  var myEffectiveDist = starPath.dist;
+  if (me && teleportReady(me) && starPath.dist > 3) {
+    myEffectiveDist = 2; // 传送落星旁1步，1帧传+1帧走
+  }
   // 如果比敌人更近（或差距在容忍范围内），就去抢
   // +4 容忍：敌人传送需1帧+落点补走1帧+转向，实际到达不比走路快多少
-  return enemyDist < 0 || starPath.dist <= enemyDist + 4;
+  return enemyDist < 0 || myEffectiveDist <= enemyDist + 4;
 }
 
 

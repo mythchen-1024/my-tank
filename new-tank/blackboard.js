@@ -88,6 +88,12 @@ function refreshBlackboard(bb, me, enemy, game) {
   bb.isWinning = bb.myStars > bb.enmStars;
   bb.isTied = bb.myStars === bb.enmStars;
 
+  // ── 吃星检测：我方星数增加 → 记录吃星帧（供撤退意图使用） ──
+  if (bb._prevMyStars !== undefined && bb.myStars > bb._prevMyStars) {
+    bb._lastGrabFrame = bb.frame;
+  }
+  bb._prevMyStars = bb.myStars;
+
   // ── 清空惰性缓存（每帧重新计算） ──
   bb._cache = {};
   bb._trace = [];

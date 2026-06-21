@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-20T13:48:41.178Z
+// 构建时间: 2026-06-21T03:50:57.678Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1443,12 +1443,17 @@ function inBushStarTrap(me, enemy, enemyTank, game, state) {
   if (enemyTank) return false;
   if (!state || !state.lastEnemyPos) return false;
   var frame = (game && game.frames) || 0;
-  if (frame - state.lastEnemySeenFrame > 10) return null;
+  if (frame - state.lastEnemySeenFrame > 10) return false;
   var myPos = me.tank.position;
   if (manhattan(myPos, game.star) > 8) return false;
+  // 近距豁免：已贴脸星(≤2步)时冲就完事，不因远处草丛放弃
+  if (manhattan(myPos, game.star) <= 2) return false;
+  // 传送兜底：传送就绪时走路被阻可传送逃生，不完全禁止走路追星
+  if (teleportReady(me)) return false;
 
   var ePos = state.lastEnemyPos;
   var star = game.star;
+  var hm = state.bushHeatmap;
   var w = game.map.length, h = game.map[0].length;
 
   for (var x = 0; x < w; x++) {
@@ -1459,7 +1464,11 @@ function inBushStarTrap(me, enemy, enemyTank, game, state) {
       if (distToStar < 1 || distToStar > 4) continue;
       if (!clearShotDirection(c, star, game)) continue;
       if (manhattan(c, ePos) > 5) continue;
-      return true;
+      // 热力图门槛：只有高置信度(score>=50)的草丛才触发阻断
+      var k = key(c);
+      if (hm && hm[k] && hm[k].score >= 50) return true;
+      // 无热力图记录但敌刚消失(≤3帧)：仍视为高威胁
+      if (frame - state.lastEnemySeenFrame <= 3) return true;
     }
   }
   return false;
@@ -3641,8 +3650,14 @@ function virtualPatrolTarget(me, game, state, enemy) {
       rusherBonus = Math.max(0, 8 - centerD) * 2; // 居中 +16，外圈逐渐归零
       if (edgeD <= 1) rusherBonus -= 6;            // 仍不选贴墙死角
     }
+    // 通用居中偏移：无星等待期偏向中心，缩短下颗星的起步距离
+    let centerBonus = 0;
+    if (!passiveRusher && !isOverload) {
+      const centerD = Math.abs(p[0] - cx) + Math.abs(p[1] - cy);
+      centerBonus = Math.max(0, 6 - centerD); // 居中 +6，外圈递减
+    }
     const dangerWeight = passiveRusher ? 0 : 1;     // 被动跑分敌不为"远离它"巡逻
-    const score = dangerScore * dangerWeight + distMe + edgeD + overloadBonus + rusherBonus;
+    const score = dangerScore * dangerWeight + distMe + edgeD + overloadBonus + rusherBonus + centerBonus;
     if (score > bestScore) { bestScore = score; best = p; }
   }
   if (best && state) state.patrolTarget = best; // 记住，保持航向
@@ -3737,7 +3752,7 @@ function starGrabTrapsInOverloadLane(starStep, enemyPos, game) {
 /**
  * 判断是否值得放弃交战去追星星
  */
-function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) {
+function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode, me, enemyTank) {
   if (!game.star || !starPath || starPath.dist < 0) return false;
   if (!enemyPos) return true; // 看不到敌人必追星星
   // 守星陷阱：敌"此刻握双弹"且星就贴在它的双弹覆盖带里(它在守这颗星)，冲过去抢 = 落进双弹炮线送死
@@ -3747,10 +3762,22 @@ function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode) {
   // 跑路流：对方连续背对我逃跑，说明它只抢星不打架——我也不用等"比它近"才追，直接跟进抢星(mat_AAKs)
   if (fleeMode) return true;
 
-  const enemyDist = pathDistance(enemyPos, game.star, game, myPos);
+  var enemyDist = pathDistance(enemyPos, game.star, game, myPos);
+  // 转向惩罚：敌当前方向不朝星，需额外1~2帧转向才能出发
+  if (enemyDist > 0 && enemyTank && enemyTank.direction) {
+    var dirToStar = directionBetween(enemyPos, game.star);
+    if (dirToStar && dirToStar !== enemyTank.direction) {
+      enemyDist += turnDistance(enemyTank.direction, dirToStar);
+    }
+  }
+  // 传送折扣：我方传送就绪时等效到达距离大幅缩短(传送1帧+补走1步=2帧)
+  var myEffectiveDist = starPath.dist;
+  if (me && teleportReady(me) && starPath.dist > 3) {
+    myEffectiveDist = 2; // 传送落星旁1步，1帧传+1帧走
+  }
   // 如果比敌人更近（或差距在容忍范围内），就去抢
   // +4 容忍：敌人传送需1帧+落点补走1帧+转向，实际到达不比走路快多少
-  return enemyDist < 0 || starPath.dist <= enemyDist + 4;
+  return enemyDist < 0 || myEffectiveDist <= enemyDist + 4;
 }
 
 
@@ -4586,6 +4613,12 @@ function refreshBlackboard(bb, me, enemy, game) {
   bb.isLosing = bb.myStars < bb.enmStars;
   bb.isWinning = bb.myStars > bb.enmStars;
   bb.isTied = bb.myStars === bb.enmStars;
+
+  // ── 吃星检测：我方星数增加 → 记录吃星帧（供撤退意图使用） ──
+  if (bb._prevMyStars !== undefined && bb.myStars > bb._prevMyStars) {
+    bb._lastGrabFrame = bb.frame;
+  }
+  bb._prevMyStars = bb.myStars;
 
   // ── 清空惰性缓存（每帧重新计算） ──
   bb._cache = {};
@@ -5812,6 +5845,12 @@ function createStarGrabNode() {
     Guard('star-reachable', function (bb) {
       return manhattan(bb.myPos, bb.star) <= 2;
     }),
+    Guard('no-bullet-incoming', function (bb) {
+      // 补吃路径上有子弹即将命中 → 先躲再吃（交 hardSurvival 处理）
+      if (anyBulletThreatens(bb.enemyBullets, bb.star, bb.game)) return false;
+      if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+      return true;
+    }),
     Action('do-star-grab', function (bb) {
       bbDirectGo(bb, bb.star);
     })
@@ -6047,6 +6086,32 @@ function createMovementTree(profile) {
     );
   }
 
+  // ---- 吃星后撤退意图：刚吃完星的短窗口内主动远离危险 ----
+  children.push(
+    Sequence('post-star-retreat', [
+      Guard('just-ate-star', function (bb) {
+        if (bb.memory.shortIntent) return false; // 已有意图不覆盖
+        if (bb.star) return false; // 星还在则没吃到
+        if (!bb._lastGrabFrame || bb.frame - bb._lastGrabFrame > 1) return false;
+        return true;
+      }),
+      Action('do-retreat', function (bb) {
+        var dangerPos = bb.enemyPos || bb.memory.lastEnemyPos;
+        if (!dangerPos) return;
+        // 找远离危险且开阔的方向走2步
+        var best = null, bestScore = -9999;
+        for (var i = 0; i < DIRS.length; i++) {
+          var p = [bb.myPos[0] + DIRS[i].dx, bb.myPos[1] + DIRS[i].dy];
+          if (!isPassable(bb.game, p, bb.enemyPos)) continue;
+          if (anyBulletThreatens(bb.enemyBullets, p, bb.game)) continue;
+          var score = manhattan(p, dangerPos) * 3 + openNeighborCount(p, bb.game);
+          if (score > bestScore) { bestScore = score; best = p; }
+        }
+        if (best) primeShortIntent(bb.memory, 'retreat', best, bb.frame, 2);
+      })
+    ])
+  );
+
   // ---- 短期意图续跑（缓存的 2~4 步低风险计划，防横跳） ----
   children.push(
     Sequence('short-intent', [
@@ -6085,7 +6150,7 @@ function createMovementTree(profile) {
         var starPath = shortestPathInfo(bb.myPos, bb.star, bb.game, bb.enemyPos);
         if (!starPath || !starPath.step) return false;
         var fleeMode = !!(bb.memory && bb.memory.enemyFleeFrames >= ENEMY_FLEE_THRESHOLD);
-        if (!shouldChaseStar(bb.myPos, bb.enemyPos, bb.game, starPath, bb.enemy, fleeMode)) return false;
+        if (!shouldChaseStar(bb.myPos, bb.enemyPos, bb.game, starPath, bb.enemy, fleeMode, bb.me, bb.enemyTank)) return false;
         // overload 陷阱检查
         if (bb.enemyPos && enemyDoubleLaneThreat(bb.enemy) &&
             starGrabTrapsInOverloadLane(starPath.step, bb.enemyPos, bb.game)) return false;
@@ -6097,8 +6162,27 @@ function createMovementTree(profile) {
       Guard('star-step-safe', function (bb) {
         var starPath = bb._cache._starPath;
         var standoff = safeStandoffDistance(bb.enemy);
-        return isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
-          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory);
+        if (isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
+          bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory)) {
+          return true;
+        }
+        // 最优步不安全 → 探索次优路径：尝试其他方向的邻格作为第一步
+        var bestAlt = null, bestAltDist = 9999;
+        for (var i = 0; i < DIRS.length; i++) {
+          var p = [bb.myPos[0] + DIRS[i].dx, bb.myPos[1] + DIRS[i].dy];
+          if (samePos(p, starPath.step)) continue;
+          if (!isPassable(bb.game, p, bb.enemyPos)) continue;
+          if (!isSafeStep(p, bb.myPos, bb.enemyPos, bb.game,
+            bb.enemy, standoff, samePos(p, bb.star), bb.enemyBullets, bb.memory)) continue;
+          var altDist = pathDistance(p, bb.star, bb.game, bb.enemyPos);
+          if (altDist < 0) continue;
+          if (altDist < bestAltDist) { bestAltDist = altDist; bestAlt = p; }
+        }
+        if (bestAlt && bestAltDist <= starPath.dist + 2) {
+          bb._cache._starPath = { step: bestAlt, dist: bestAltDist + 1 };
+          return true;
+        }
+        return false;
       }),
       Action('do-star-chase', function (bb) {
         var starPath = bb._cache._starPath;

@@ -315,12 +315,17 @@ function inBushStarTrap(me, enemy, enemyTank, game, state) {
   if (enemyTank) return false;
   if (!state || !state.lastEnemyPos) return false;
   var frame = (game && game.frames) || 0;
-  if (frame - state.lastEnemySeenFrame > 10) return null;
+  if (frame - state.lastEnemySeenFrame > 10) return false;
   var myPos = me.tank.position;
   if (manhattan(myPos, game.star) > 8) return false;
+  // 近距豁免：已贴脸星(≤2步)时冲就完事，不因远处草丛放弃
+  if (manhattan(myPos, game.star) <= 2) return false;
+  // 传送兜底：传送就绪时走路被阻可传送逃生，不完全禁止走路追星
+  if (teleportReady(me)) return false;
 
   var ePos = state.lastEnemyPos;
   var star = game.star;
+  var hm = state.bushHeatmap;
   var w = game.map.length, h = game.map[0].length;
 
   for (var x = 0; x < w; x++) {
@@ -331,7 +336,11 @@ function inBushStarTrap(me, enemy, enemyTank, game, state) {
       if (distToStar < 1 || distToStar > 4) continue;
       if (!clearShotDirection(c, star, game)) continue;
       if (manhattan(c, ePos) > 5) continue;
-      return true;
+      // 热力图门槛：只有高置信度(score>=50)的草丛才触发阻断
+      var k = key(c);
+      if (hm && hm[k] && hm[k].score >= 50) return true;
+      // 无热力图记录但敌刚消失(≤3帧)：仍视为高威胁
+      if (frame - state.lastEnemySeenFrame <= 3) return true;
     }
   }
   return false;
