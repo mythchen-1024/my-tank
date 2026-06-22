@@ -39,6 +39,7 @@ BASE_URL = "https://agentank.ai"
 # myth-tank003 agtk_3c997a5efddec83048eac1763fb2b087d574
 # myth-tank004 agtk_809791b19e14b43702200b261e612b0e9b47
 # myth-tank005 agtk_ebbf95b0a08cf94bd4763b2e61f17312f682
+# myth-tank006 agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4
 TANK_PROFILES = {
     "bt": {  # 默认：行为树坦克 myth-tank004
         "key": "agtk_809791b19e14b43702200b261e612b0e9b47",
