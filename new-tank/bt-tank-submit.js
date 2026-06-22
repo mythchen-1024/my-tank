@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-21T17:43:07.183Z
+// 构建时间: 2026-06-22T02:17:00.636Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -278,6 +278,27 @@ function enemyIsPassiveRusher(enemy, enemyTank, game, myPos) {
   if (enemyTank && myPos && enemyAimsAt(myPos, enemyTank, game)) return false; // 正瞄我 -> 正常避让
   return true;
 }
+
+
+/**
+ * 场上是否有"我还争得到"的星，用于让投机打人(intercept/fire-risky/occupy-lane)给追星让路。
+ * 判定：有星 + (我传送就绪 OR 走路竞速不落明显下风)。
+ *   - 传送就绪：随时能抢，必让位。
+ *   - 走路：我比敌人多走 >2 格才算"明显抢不到"放弃；否则(我更近/持平/只差1~2格)都算可争。
+ * 背景：小强等传送跑分敌把我从星线钓去打空炮(mat_LQH f108 平局竞速却先 intercept 打空)，
+ * 此函数让"有星可争"时攻击节点让位给追星。敌不可见(enemyPos=null)时无法比距离，按"可争"处理(宁追勿弃)。
+ */
+function starIsContestable(myPos, star, enemyPos, game, teleportIsReady) {
+  if (!star) return false;
+  if (teleportIsReady) return true;                      // 传送随时抢，必争
+  var myWalk = pathDistance(myPos, star, game, enemyPos);
+  if (myWalk < 0) return false;                          // 我走不到(墙隔绝)
+  if (!enemyPos) return true;                            // 看不见敌人，宁追勿弃
+  var foeWalk = pathDistance(enemyPos, star, game, myPos);
+  if (foeWalk < 0) return true;                          // 敌走不到，我独享
+  return myWalk <= foeWalk + 2;                          // 只差 1~2 格仍争；落后 >2 格才算放弃
+}
+
 
 
 /**
@@ -5610,6 +5631,18 @@ function createAttackTree(profile) {
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
         Guard('not-already-on-line', function (bb) { return !bb.shotDir; }),
+        // 有可争的星时让位给追星：intercept 是投机预射，不该把我从星线钓去打空炮
+        // (mat_LQH f108 平局竞速却先 intercept 打空丢星)。star 已在炮线(shotDir)时上面已 return，
+        // 这里只挡"没对齐还要预射"的情况。
+        Guard('not-abandon-contestable-star', function (bb) {
+          return !starIsContestable(bb.myPos, bb.star, bb.enemyPos, bb.game, bb.teleportIsReady);
+        }),
+        // 敌确实在移动才拦截：预射假设敌沿 facing 走过我射线，但 juke bot 会原地 turn 不 go，
+        // facing 朝我射线却不走过来，子弹飞过空行打墙(布加迪威龙整套克制=贴相邻行列+原地转向)。
+        // enemyStationaryFrames===0 = 敌上帧真的移动了，才认它 committed 穿线。
+        Guard('enemy-committed-moving', function (bb) {
+          return !bb.memory || (bb.memory.enemyStationaryFrames || 0) === 0;
+        }),
         Guard('no-bullet-incoming', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
@@ -5686,6 +5719,11 @@ function createAttackTree(profile) {
         // 让位给 movement→patrol 回中心预走位，抢下一颗星(mat_7kEU8 F108 打墙丢位复盘)。
         Guard('not-idle-vs-rusher', function (bb) {
           return bb.star || !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
+        // 有可争的星时让位给追星：fire-risky 是高风险投机射击，绝不该为打人放弃正在竞速的星
+        // (mat_LQH 复盘：有星在场我却 37% 帧在打人，把星送给传送跑分敌小强)。
+        Guard('not-abandon-contestable-star', function (bb) {
+          return !starIsContestable(bb.myPos, bb.star, bb.enemyPos, bb.game, bb.teleportIsReady);
         }),
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),
@@ -6505,6 +6543,16 @@ function createMovementTree(profile) {
       Sequence('occupy-lane', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyPos; }),
         Guard('not-overload', function (bb) { return !enemyIsOverloadType(bb.enemy); }),
+        // 有可争的星时不去占敌射击线打人——占线是朝敌人凑近，会把我从星线带走
+        // (mat_LQH 复盘：放弃星线 24% 帧在 occupy-lane 占线打人，星送给传送跑分敌)。
+        // 让位给后续 star-chase 重试/standoff/patrol 回位。
+        Guard('not-abandon-contestable-star', function (bb) {
+          return !starIsContestable(bb.myPos, bb.star, bb.enemyPos, bb.game, bb.teleportIsReady);
+        }),
+        // 传送跑分敌：占线打不到它(一传送就遁走)，纯浪费帧+丢有利位 → 让位给 patrol 回中心预走位。
+        Guard('not-vs-passive-rusher', function (bb) {
+          return !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
         Guard('lane-exists', function (bb) {
           var standoff = safeStandoffDistance(bb.enemy);
           var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, standoff);

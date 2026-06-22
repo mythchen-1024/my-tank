@@ -64,6 +64,18 @@ function createAttackTree(profile) {
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
         Guard('not-already-on-line', function (bb) { return !bb.shotDir; }),
+        // 有可争的星时让位给追星：intercept 是投机预射，不该把我从星线钓去打空炮
+        // (mat_LQH f108 平局竞速却先 intercept 打空丢星)。star 已在炮线(shotDir)时上面已 return，
+        // 这里只挡"没对齐还要预射"的情况。
+        Guard('not-abandon-contestable-star', function (bb) {
+          return !starIsContestable(bb.myPos, bb.star, bb.enemyPos, bb.game, bb.teleportIsReady);
+        }),
+        // 敌确实在移动才拦截：预射假设敌沿 facing 走过我射线，但 juke bot 会原地 turn 不 go，
+        // facing 朝我射线却不走过来，子弹飞过空行打墙(布加迪威龙整套克制=贴相邻行列+原地转向)。
+        // enemyStationaryFrames===0 = 敌上帧真的移动了，才认它 committed 穿线。
+        Guard('enemy-committed-moving', function (bb) {
+          return !bb.memory || (bb.memory.enemyStationaryFrames || 0) === 0;
+        }),
         Guard('no-bullet-incoming', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
@@ -140,6 +152,11 @@ function createAttackTree(profile) {
         // 让位给 movement→patrol 回中心预走位，抢下一颗星(mat_7kEU8 F108 打墙丢位复盘)。
         Guard('not-idle-vs-rusher', function (bb) {
           return bb.star || !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
+        // 有可争的星时让位给追星：fire-risky 是高风险投机射击，绝不该为打人放弃正在竞速的星
+        // (mat_LQH 复盘：有星在场我却 37% 帧在打人，把星送给传送跑分敌小强)。
+        Guard('not-abandon-contestable-star', function (bb) {
+          return !starIsContestable(bb.myPos, bb.star, bb.enemyPos, bb.game, bb.teleportIsReady);
         }),
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
         Guard('can-shoot-enemy', function (bb) { return canShoot(bb.me, bb.enemy); }),

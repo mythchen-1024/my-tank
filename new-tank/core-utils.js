@@ -275,6 +275,27 @@ function enemyIsPassiveRusher(enemy, enemyTank, game, myPos) {
 
 
 /**
+ * 场上是否有"我还争得到"的星，用于让投机打人(intercept/fire-risky/occupy-lane)给追星让路。
+ * 判定：有星 + (我传送就绪 OR 走路竞速不落明显下风)。
+ *   - 传送就绪：随时能抢，必让位。
+ *   - 走路：我比敌人多走 >2 格才算"明显抢不到"放弃；否则(我更近/持平/只差1~2格)都算可争。
+ * 背景：小强等传送跑分敌把我从星线钓去打空炮(mat_LQH f108 平局竞速却先 intercept 打空)，
+ * 此函数让"有星可争"时攻击节点让位给追星。敌不可见(enemyPos=null)时无法比距离，按"可争"处理(宁追勿弃)。
+ */
+function starIsContestable(myPos, star, enemyPos, game, teleportIsReady) {
+  if (!star) return false;
+  if (teleportIsReady) return true;                      // 传送随时抢，必争
+  var myWalk = pathDistance(myPos, star, game, enemyPos);
+  if (myWalk < 0) return false;                          // 我走不到(墙隔绝)
+  if (!enemyPos) return true;                            // 看不见敌人，宁追勿弃
+  var foeWalk = pathDistance(enemyPos, star, game, myPos);
+  if (foeWalk < 0) return true;                          // 敌走不到，我独享
+  return myWalk <= foeWalk + 2;                          // 只差 1~2 格仍争；落后 >2 格才算放弃
+}
+
+
+
+/**
  * 我此刻是否藏在草丛里（对敌方脚本隐身）。草丛 'o' 或被冰冻/技能标记 cloaked 均算。
  */
 function iAmHidden(me, game) {

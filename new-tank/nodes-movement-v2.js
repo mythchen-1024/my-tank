@@ -423,6 +423,16 @@ function createMovementTree(profile) {
       Sequence('occupy-lane', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyPos; }),
         Guard('not-overload', function (bb) { return !enemyIsOverloadType(bb.enemy); }),
+        // 有可争的星时不去占敌射击线打人——占线是朝敌人凑近，会把我从星线带走
+        // (mat_LQH 复盘：放弃星线 24% 帧在 occupy-lane 占线打人，星送给传送跑分敌)。
+        // 让位给后续 star-chase 重试/standoff/patrol 回位。
+        Guard('not-abandon-contestable-star', function (bb) {
+          return !starIsContestable(bb.myPos, bb.star, bb.enemyPos, bb.game, bb.teleportIsReady);
+        }),
+        // 传送跑分敌：占线打不到它(一传送就遁走)，纯浪费帧+丢有利位 → 让位给 patrol 回中心预走位。
+        Guard('not-vs-passive-rusher', function (bb) {
+          return !enemyIsPassiveRusher(bb.enemy, bb.enemyTank, bb.game, bb.myPos);
+        }),
         Guard('lane-exists', function (bb) {
           var standoff = safeStandoffDistance(bb.enemy);
           var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, standoff);
