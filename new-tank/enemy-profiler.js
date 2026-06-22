@@ -315,6 +315,13 @@ function buildProfile(bb) {
   if (traits.isStarRusher) {
     // 对抢星型：提升抢星优先级
     profile.starAggression = starAggrMax(profile.starAggression, 'max');
+    // 抢星型 overload 敌不贴脸缠斗，6格保守距离+蹲草会让追星被 maintain-standoff 后撤、
+    // 被 bush-hold 截胡，到星旁却抢不到（mat_Fczu 1:4 惨败根因）。放开让抢星竞速不被自缚。
+    // 硬生存(躲弹/逃生)优先级最高，不受影响；standoff 4 仍在子弹3帧安全环上。
+    if (profile.skillType === 'overload') {
+      profile.standoffDistance = Math.min(profile.standoffDistance, 4);
+      profile.bushCamp = false;
+    }
   }
 
   if (traits.isBushCamper) {
