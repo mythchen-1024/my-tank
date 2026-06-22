@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-22T06:25:58.413Z
+// 构建时间: 2026-06-22T16:11:52.529Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -5286,6 +5286,13 @@ function buildProfile(bb) {
   if (traits.isStarRusher) {
     // 对抢星型：提升抢星优先级
     profile.starAggression = starAggrMax(profile.starAggression, 'max');
+    // 抢星型 overload 敌不贴脸缠斗，6格保守距离+蹲草会让追星被 maintain-standoff 后撤、
+    // 被 bush-hold 截胡，到星旁却抢不到（mat_Fczu 1:4 惨败根因）。放开让抢星竞速不被自缚。
+    // 硬生存(躲弹/逃生)优先级最高，不受影响；standoff 4 仍在子弹3帧安全环上。
+    if (profile.skillType === 'overload') {
+      profile.standoffDistance = Math.min(profile.standoffDistance, 4);
+      profile.bushCamp = false;
+    }
   }
 
   if (traits.isBushCamper) {
