@@ -249,6 +249,26 @@ function enemyIsFreezeType(enemy) {
 
 
 /**
+ * 敌方是否为 stun(眩晕)流：拥有 stun 技能，不论此刻冷却与否。
+ * stun 全图施放无视距离，命中后 6 帧内我方 go/turn 各 50% 反向(fire 不受影响)。
+ * 拉不开"施放距离"，但保持 5 格可让"眩晕期间敌对准+开火"打不满，留侧移离线余量。
+ */
+function enemyIsStunType(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "stun");
+}
+
+
+/**
+ * 敌方是否为 poison(毒雾)流：拥有 poison 技能，不论此刻冷却与否。
+ * poison 全图施放无视距离，命中后 4 帧内我方只偶数帧能动(动作减半)。
+ * 移动方向不乱，但反应被拖慢——保持 5 格留出隔帧躲弹的余量。
+ */
+function enemyIsPoisonType(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "poison");
+}
+
+
+/**
  * 敌方是否为 cloak(隐身)流：拥有 cloak 技能，不论此刻是否隐身。
  * 隐身敌会 cast cloak 后悄悄绕到我正后方同行/同列(我看不见它真实位置)，再从背后一炮偷袭。
  * 此时若我沿单一行/列直线逃，2 格/帧的子弹必从背后追上(mat_L4l9：敌隐身滑到我同行 y=6 背后，

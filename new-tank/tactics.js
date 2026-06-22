@@ -1116,6 +1116,10 @@ function safeStandoffDistance(enemy) {
   if (enemyIsOverloadType(enemy)) return 5;
   // freeze 流：冻我 2 帧期间敌可从容对准开火，贴近(<=4 同线)被冻必死，保守拉到 5 格周旋(mat_0Wmx)。
   if (enemyIsFreezeType(enemy)) return 5;
+  // stun 流：被眩晕 6 帧 go/turn 半数反向，贴身近战会失控撞炮线，拉到 5 格留侧移离线余量。
+  if (enemyIsStunType(enemy)) return 5;
+  // poison 流：中毒 4 帧只能隔帧动，近身躲弹反应被拖慢，拉到 5 格留出隔帧躲避余量。
+  if (enemyIsPoisonType(enemy)) return 5;
   if (enemy && enemy.skill && enemy.skill.type === "cloak") return 5;
   return 4;
 }

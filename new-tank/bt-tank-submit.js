@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-22T02:37:34.443Z
+// 构建时间: 2026-06-22T06:25:58.413Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -251,6 +251,26 @@ function enemyIsOverloadType(enemy) {
  */
 function enemyIsFreezeType(enemy) {
   return !!(enemy && enemy.skill && enemy.skill.type === "freeze");
+}
+
+
+/**
+ * 敌方是否为 stun(眩晕)流：拥有 stun 技能，不论此刻冷却与否。
+ * stun 全图施放无视距离，命中后 6 帧内我方 go/turn 各 50% 反向(fire 不受影响)。
+ * 拉不开"施放距离"，但保持 5 格可让"眩晕期间敌对准+开火"打不满，留侧移离线余量。
+ */
+function enemyIsStunType(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "stun");
+}
+
+
+/**
+ * 敌方是否为 poison(毒雾)流：拥有 poison 技能，不论此刻冷却与否。
+ * poison 全图施放无视距离，命中后 4 帧内我方只偶数帧能动(动作减半)。
+ * 移动方向不乱，但反应被拖慢——保持 5 格留出隔帧躲弹的余量。
+ */
+function enemyIsPoisonType(enemy) {
+  return !!(enemy && enemy.skill && enemy.skill.type === "poison");
 }
 
 
@@ -2244,6 +2264,10 @@ function safeStandoffDistance(enemy) {
   if (enemyIsOverloadType(enemy)) return 5;
   // freeze 流：冻我 2 帧期间敌可从容对准开火，贴近(<=4 同线)被冻必死，保守拉到 5 格周旋(mat_0Wmx)。
   if (enemyIsFreezeType(enemy)) return 5;
+  // stun 流：被眩晕 6 帧 go/turn 半数反向，贴身近战会失控撞炮线，拉到 5 格留侧移离线余量。
+  if (enemyIsStunType(enemy)) return 5;
+  // poison 流：中毒 4 帧只能隔帧动，近身躲弹反应被拖慢，拉到 5 格留出隔帧躲避余量。
+  if (enemyIsPoisonType(enemy)) return 5;
   if (enemy && enemy.skill && enemy.skill.type === "cloak") return 5;
   return 4;
 }
@@ -5919,10 +5943,6 @@ function createStarGrabNode() {
         return false; // 等待中，不走动但也不清除意图
       }
       return true;
-    }),
-    Guard('pickup-delay-passed', function (bb) {
-      var g = bb.memory.pendingStarGrab;
-      return bb.frame - g.frame >= 2;
     }),
     Guard('star-reachable', function (bb) {
       return manhattan(bb.myPos, bb.star) <= 2;
