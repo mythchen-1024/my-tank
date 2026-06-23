@@ -40,7 +40,8 @@ DEFAULT_DELAY = 0.5
 
 # ── 在此处预配置坦克 key，可自由增删 ──────────────────────────────────────────
 TANK_KEYS = [
-    {"key": "agtk_cce872653e5d5b90f76db3ac370a2d2809b6", "name": "myth-survivor"}
+    # {"key": "agtk_cce872653e5d5b90f76db3ac370a2d2809b6", "name": "myth-survivor"},
+    {"key": "agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4", "name": "myth-tank006"}
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 

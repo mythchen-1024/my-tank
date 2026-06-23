@@ -206,6 +206,14 @@ function createAttackTree(profile) {
       Guard('i-am-safe', function (bb) {
         return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
       }),
+      // 领先时别拿推测盲射去锁炮——盲射命中率低却锁炮约15帧，留炮防守更值。
+      // 除非目标极近(<=3格)高置信才打(mat_28DHb：1-0领先时朝7格外开阔草丛盲射打空、
+      // 锁炮15帧→后续被贴脸下射打死)。打平/落后时保持原激进盲射(需要制造机会)。
+      Guard('blind-worth-it', function (bb) {
+        if (!bb.isWinning) return true;
+        var shot = senseBlindBushShot(bb);
+        return !!(shot && shot.target && manhattan(bb.myPos, shot.target) <= 3);
+      }),
       Action('do-blind-bush', function (bb) {
         var shot = senseBlindBushShot(bb);
         if (bb.myDir === shot.dir) { bbSpeak(bb, '盲射!'); bbFire(bb); }

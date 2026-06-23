@@ -637,6 +637,14 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           var enemyStarDist = manhattan(bb.enemyPos, bb.star);
           return enemyStarDist <= bb.distToStar + 3 + mp.skillStarContestDelta;
         }),
+        // 抢得到才用：我落后太多时 boost 也追不回，别白扔在必输的星上。
+        // boost≈6帧×2格/帧，最多追回约6格差距；超出则放弃(mat_28DHb 把
+        // boost 扔在20格外、敌6格就能到的星上→6帧站桩浪费→后续被贴脸打死)。
+        Guard('star-winnable', function (bb) {
+          if (!bb.enemyTank) return true;
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return bb.distToStar <= enemyStarDist + 6;
+        }),
         Action('do-boost-star', function (bb) {
           bbSpeak(bb, '加速星!');
           bbUseSkill(bb, 'boost');
@@ -644,22 +652,31 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
       ])
     );
 
-    // 加速中的追星：已加速 + 面朝星方向 → go()（走2格）
+    // 加速中的追星：已加速 → 朝星的真实走向前进（走2格）。
+    // 旧实现用 directionBetween(只对相邻格有效)+path-safe 卡当前朝向，星远时
+    // directionBetween 恒 null、path-safe 又按"当前朝向"判定：需要转向才能去星时
+    // 整个节点失败、回落蹲草，6帧 boost 站桩浪费(mat_28DHb)。改为 BFS 取下一步真实
+    // 走向：未对准先转(转向原地不进入危险)，已对准再按"实际前进方向"判 boostPathSafe。
     children.push(
       Sequence('boost-star-go', [
         Guard('is-boosted', function (bb) {
           return !!(bb.me.status && bb.me.status.boosted);
         }),
         Guard('star-exists', function (bb) { return !!bb.star; }),
-        Guard('path-safe', function (bb) {
-          return boostPathSafe(bb.myPos, bb.myDir, bb.game, bb.enemyPos, bb.enemyBullets);
+        Guard('has-path-to-star', function (bb) {
+          var step = nextStepToward(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          if (!step) return false;
+          bb._cache._boostStarStep = step;
+          return true;
         }),
         Action('do-boost-go', function (bb) {
-          var starDir = directionBetween(bb.myPos, bb.star);
-          if (starDir && bb.myDir === starDir) {
+          var step = bb._cache._boostStarStep;
+          var goDir = directionBetween(bb.myPos, step);
+          if (!goDir) { bbMoveToward(bb, bb.star); return; }
+          if (bb.myDir !== goDir) { bbTurnToward(bb, goDir); return; }
+          // 已对准实际走向：前进方向安全才 go(走2格)，否则交回常规安全移动(走1格)
+          if (boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) {
             bb.me.go();
-          } else if (starDir) {
-            bbTurnToward(bb, starDir);
           } else {
             bbMoveToward(bb, bb.star);
           }
