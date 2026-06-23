@@ -626,6 +626,25 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
   }
 
   if (children.length === 0) return null;
+  // 眩晕期间抑制 debuff 技能(freeze/stun/poison/overload)：
+  // 技能本身不被逆转，但后续走位被随机化。对于 freeze：
+  //   - 已对准(myDir===shotDir)时冻了仍能下帧射(fire不被逆转) → 允许
+  //   - 没对准时冻了无法转向追杀 → 阻止
+  //   - combo-followup(子弹在飞)时 → 允许
+  // 对于 stun/poison/overload：统一阻止（需要后续精确操作才有价值）。
+  var debuffSkills = { freeze: 1, stun: 1, poison: 1, overload: 1 };
+  if (debuffSkills[mySkillType]) {
+    return Sequence('skill-attack-gate', [
+      Guard('not-stunned-or-aimed', function (bb) {
+        if (!(bb.me.status && bb.me.status.stunned)) return true;
+        // 被晕中的例外：
+        if (bb.memory && bb.memory._firedForFreeze === bb.frame - 1) return true;
+        if (mySkillType === 'freeze' && bb.shotDir && bb.myDir === bb.shotDir && bb.gunIsReady) return true;
+        return false;
+      }),
+      Selector('skill-attack', children)
+    ]);
+  }
   return Selector('skill-attack', children);
 }
 
