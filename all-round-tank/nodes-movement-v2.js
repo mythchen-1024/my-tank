@@ -386,13 +386,32 @@ function createMovementTree(profile, mySkillType) {
         Guard('gun-ready-to-advance', function (bb) { return bb.gunIsReady; }),
         Guard('lane-exists', function (bb) {
           var standoff = safeStandoffDistance(bb.enemy);
-          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, standoff);
+          // boost 绕背：加速中+敌人没面对我→偏向敌人背后射击线位
+          var preferDir = null;
+          if (bb.me.status && bb.me.status.boosted && bb.enemyTank) {
+            var dirToMe = clearShotDirection(bb.enemyPos, bb.myPos, bb.game);
+            if (!dirToMe || dirToMe !== bb.enemyTank.direction) {
+              var opposites = { up: 'down', down: 'up', left: 'right', right: 'left' };
+              preferDir = opposites[bb.enemyTank.direction] || null;
+            }
+          }
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, standoff, preferDir);
           if (!step) return false;
           bb._cache._laneStep = step;
           return true;
         }),
         Action('do-lane', function (bb) {
-          bbMoveToward(bb, bb._cache._laneStep);
+          var step = bb._cache._laneStep;
+          var goDir = directionBetween(bb.myPos, step);
+          // boost 中利用 turnGo：需转90°且路径安全时同帧 turn+go
+          if (goDir && bb.me.status && bb.me.status.boosted &&
+              bb.myDir !== goDir && turnDistance(bb.myDir, goDir) === 1 &&
+              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) {
+            bbTurnToward(bb, goDir);
+            bb.me.go();
+          } else {
+            bbMoveToward(bb, step);
+          }
         })
       ])
     );

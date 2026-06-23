@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-23T07:29:11.136Z
+// 构建时间: 2026-06-23T09:15:28.052Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -4023,7 +4023,7 @@ function isStarGuardTrap(enemyPos, enemy, starPos) {
  * 具体打分：走过去后的 clearShotDirection = 当前行进方向 -> +4（原地就能开炮）；
  *           走过去后需要转 1 次 -> +0；其余 -> -4。
  */
-function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
+function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir) {
   const minD = Math.max(3, standoff - 1);
   // 收集所有候选轨道格（BFS 层序，记录到达每格的第一步和步数）
   const w = game.map.length, h = game.map[0].length;
@@ -4067,7 +4067,13 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
     const moveDir = directionBetween(myPos, step);
     // 若走到 c 后 lineDir 就是我到达时的朝向（即行进中已对准）-> 无需再转向
     const alreadyAimed = lineDir === moveDir ? 4 : 0;
-    const score = alreadyAimed + distanceFromEdges(c, game);
+    // boost 绕背偏好：候选格在敌人 preferDir 侧（背后）时加分
+    var behindBonus = 0;
+    if (preferDir && lineDir) {
+      var dd = DIR_DELTAS[preferDir];
+      if (dd && (c[0] - enemyPos[0]) * dd[0] + (c[1] - enemyPos[1]) * dd[1] > 0) behindBonus = 3;
+    }
+    const score = alreadyAimed + behindBonus + distanceFromEdges(c, game);
     if (score > bestScore) { bestScore = score; best = step; }
   }
   return best;
@@ -6573,6 +6579,12 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         Guard('no-self-danger', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
+        // 对传送敌开局：前15帧敌 tp 就绪时不抢星(传送瞬移必先到)；之后新星敌 tp 多半在 CD 照常 boost
+        Guard('not-tp-opening', function (bb) {
+          if (enemySkillType !== 'teleport') return true;
+          if (bb.framesLeft > MAX_GAME_FRAMES - 15) return !enemyTeleportReady(bb.enemy);
+          return true;
+        }),
         // 竞争激烈时才用：敌人也在追星或距星差不多
         Guard('star-contested', function (bb) {
           if (!bb.enemyTank) return true;
@@ -7371,15 +7383,35 @@ function createMovementTree(profile, mySkillType) {
       Sequence('occupy-lane', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyPos; }),
         Guard('not-overload', function (bb) { return !enemyIsOverloadType(bb.enemy); }),
+        Guard('gun-ready-to-advance', function (bb) { return bb.gunIsReady; }),
         Guard('lane-exists', function (bb) {
           var standoff = safeStandoffDistance(bb.enemy);
-          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, standoff);
+          // boost 绕背：加速中+敌人没面对我→偏向敌人背后射击线位
+          var preferDir = null;
+          if (bb.me.status && bb.me.status.boosted && bb.enemyTank) {
+            var dirToMe = clearShotDirection(bb.enemyPos, bb.myPos, bb.game);
+            if (!dirToMe || dirToMe !== bb.enemyTank.direction) {
+              var opposites = { up: 'down', down: 'up', left: 'right', right: 'left' };
+              preferDir = opposites[bb.enemyTank.direction] || null;
+            }
+          }
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, standoff, preferDir);
           if (!step) return false;
           bb._cache._laneStep = step;
           return true;
         }),
         Action('do-lane', function (bb) {
-          bbMoveToward(bb, bb._cache._laneStep);
+          var step = bb._cache._laneStep;
+          var goDir = directionBetween(bb.myPos, step);
+          // boost 中利用 turnGo：需转90°且路径安全时同帧 turn+go
+          if (goDir && bb.me.status && bb.me.status.boosted &&
+              bb.myDir !== goDir && turnDistance(bb.myDir, goDir) === 1 &&
+              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) {
+            bbTurnToward(bb, goDir);
+            bb.me.go();
+          } else {
+            bbMoveToward(bb, step);
+          }
         })
       ])
     );
@@ -7609,14 +7641,13 @@ function buildBehaviorTree(profile, mySkillType) {
   var objective      = createObjectiveTree(profile, mySkillType);
   var movement       = createMovementTree(profile, mySkillType);
 
-  // ═══════ 被控拦截（被冻/被眩晕时本帧无法操作） ═══════
+  // ═══════ 被控拦截（仅冰冻时本帧无法操作；眩晕是随机化不是锁定，照常决策） ═══════
   var ccCheck = Sequence('cc-check', [
-    Guard('is-cc', function (bb) {
-      return !!(bb.me.status && (bb.me.status.frozen || bb.me.status.stunned));
+    Guard('is-frozen', function (bb) {
+      return !!(bb.me.status && bb.me.status.frozen);
     }),
     Action('frozen-wait', function (bb) {
-      var ccType = bb.me.status.frozen ? '冰冻中' : '眩晕中';
-      bbSpeak(bb, ccType);
+      bbSpeak(bb, '冰冻中');
     })
   ]);
 

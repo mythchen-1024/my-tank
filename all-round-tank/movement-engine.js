@@ -274,7 +274,7 @@ function isStarGuardTrap(enemyPos, enemy, starPos) {
  * 具体打分：走过去后的 clearShotDirection = 当前行进方向 -> +4（原地就能开炮）；
  *           走过去后需要转 1 次 -> +0；其余 -> -4。
  */
-function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
+function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir) {
   const minD = Math.max(3, standoff - 1);
   // 收集所有候选轨道格（BFS 层序，记录到达每格的第一步和步数）
   const w = game.map.length, h = game.map[0].length;
@@ -318,7 +318,13 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff) {
     const moveDir = directionBetween(myPos, step);
     // 若走到 c 后 lineDir 就是我到达时的朝向（即行进中已对准）-> 无需再转向
     const alreadyAimed = lineDir === moveDir ? 4 : 0;
-    const score = alreadyAimed + distanceFromEdges(c, game);
+    // boost 绕背偏好：候选格在敌人 preferDir 侧（背后）时加分
+    var behindBonus = 0;
+    if (preferDir && lineDir) {
+      var dd = DIR_DELTAS[preferDir];
+      if (dd && (c[0] - enemyPos[0]) * dd[0] + (c[1] - enemyPos[1]) * dd[1] > 0) behindBonus = 3;
+    }
+    const score = alreadyAimed + behindBonus + distanceFromEdges(c, game);
     if (score > bestScore) { bestScore = score; best = step; }
   }
   return best;

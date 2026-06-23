@@ -53,14 +53,13 @@ function buildBehaviorTree(profile, mySkillType) {
   var objective      = createObjectiveTree(profile, mySkillType);
   var movement       = createMovementTree(profile, mySkillType);
 
-  // ═══════ 被控拦截（被冻/被眩晕时本帧无法操作） ═══════
+  // ═══════ 被控拦截（仅冰冻时本帧无法操作；眩晕是随机化不是锁定，照常决策） ═══════
   var ccCheck = Sequence('cc-check', [
-    Guard('is-cc', function (bb) {
-      return !!(bb.me.status && (bb.me.status.frozen || bb.me.status.stunned));
+    Guard('is-frozen', function (bb) {
+      return !!(bb.me.status && bb.me.status.frozen);
     }),
     Action('frozen-wait', function (bb) {
-      var ccType = bb.me.status.frozen ? '冰冻中' : '眩晕中';
-      bbSpeak(bb, ccType);
+      bbSpeak(bb, '冰冻中');
     })
   ]);
 
