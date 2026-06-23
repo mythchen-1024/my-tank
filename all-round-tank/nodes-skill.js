@@ -673,12 +673,22 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           var step = bb._cache._boostStarStep;
           var goDir = directionBetween(bb.myPos, step);
           if (!goDir) { bbMoveToward(bb, bb.star); return; }
-          if (bb.myDir !== goDir) { bbTurnToward(bb, goDir); return; }
-          // 已对准实际走向：前进方向安全才 go(走2格)，否则交回常规安全移动(走1格)
-          if (boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) {
+          // 已对准：前进方向安全才 go(走2格)，否则交回常规安全移动(走1格)
+          if (bb.myDir === goDir) {
+            if (boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) bb.me.go();
+            else bbMoveToward(bb, bb.star);
+            return;
+          }
+          // 未对准：boost 免费转向窗口(06-01加强)——单次90°转向时同帧 turn+go,
+          // 引擎合并成 turnGo(转后朝新方向走2格)，不再白丢一帧只转不走。
+          // 仅当(a)只需转1次(180°掉头吃不到免费窗口) 且 (b)转后方向安全 才组合;
+          // 否则照常只转向(下一帧再走)。
+          if (turnDistance(bb.myDir, goDir) === 1 &&
+              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) {
+            bbTurnToward(bb, goDir);
             bb.me.go();
           } else {
-            bbMoveToward(bb, bb.star);
+            bbTurnToward(bb, goDir);
           }
         })
       ])
