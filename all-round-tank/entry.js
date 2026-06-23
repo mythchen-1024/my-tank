@@ -31,7 +31,7 @@ function onIdle(me, enemy, game) {
 
   if (needRebuild) {
     bb.profile = buildProfile(bb);
-    bb.tree = buildBehaviorTree(bb.profile);
+    bb.tree = buildBehaviorTree(bb.profile, bb.mySkillType);
     bb.profileFrame = bb.frame;
   }
 
@@ -43,7 +43,7 @@ function onIdle(me, enemy, game) {
     var traceMsg = bb._trace.join('>') + ':' + bb._lastAction;
     // 开局播报敌方技能
     if (bb.frame === 5 && bb.profile) {
-      traceMsg = '敌:' + bb.profile.name + ' | ' + traceMsg;
+      traceMsg = '我:' + bb.mySkillType + ' vs 敌:' + bb.profile.name + ' | ' + traceMsg;
     }
     // 限制 speak 频率：关键动作才播报
     var isKeyAction = isKeyActionForSpeak(bb._lastAction);

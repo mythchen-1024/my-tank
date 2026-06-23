@@ -10,8 +10,8 @@
 
 // ---- 硬生存子树（永远最高优先级，不受 profile 影响） ----
 
-function createHardSurvivalTree() {
-  return Selector('hard-survival', [
+function createHardSurvivalTree(skillEscapeNode) {
+  var children = [
 
     // 1. 对射先射后走：来袭子弹 + 能反击 + 开火后仍来得及躲
     Sequence('counter-shoot', [
@@ -39,7 +39,14 @@ function createHardSurvivalTree() {
         bbTeleport(bb, senseEscapeTeleport(bb));
       })
     ]),
+  ];
 
+  // 3.5 技能逃生：传送不可用时，用本技能保命（优先于 two-step）
+  if (skillEscapeNode) {
+    children.push(skillEscapeNode);
+  }
+
+  children.push(
     // 4. 两步脱困：双弹夹击导致单步无安全格，走"下一帧还能继续脱离"的格
     Sequence('two-step-escape', [
       Guard('has-two-step', function (bb) { return !!senseTwoStepEscape(bb); }),
@@ -62,8 +69,10 @@ function createHardSurvivalTree() {
       Action('do-bomb-dodge', function (bb) {
         bbMoveToward(bb, senseBombThreat(bb));
       })
-    ]),
-  ]);
+    ])
+  );
+
+  return Selector('hard-survival', children);
 }
 
 // ---- 软生存子树（profile 控制包含哪些节点） ----

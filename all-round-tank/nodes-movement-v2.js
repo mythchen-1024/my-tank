@@ -8,11 +8,12 @@
 // 依赖：core-utils.js, tactics.js, movement-engine.js, bt-core.js, blackboard.js
 // ============================================================
 
-function createMovementTree(profile) {
+function createMovementTree(profile, mySkillType) {
+  mySkillType = mySkillType || 'teleport';
   var children = [];
 
-  // ---- 传送落点偏移：传送后首帧立即移到相邻草丛 ----
-  children.push(
+  // ---- 传送落点偏移：传送后首帧立即移到相邻草丛（仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('ambush-shift', [
       Guard('needs-shift', function (bb) {
         var a = bb.memory.ambushState;
@@ -37,8 +38,8 @@ function createMovementTree(profile) {
     ])
   );
 
-  // ---- 传送落点偏移完成确认 ----
-  children.push(
+  // ---- 传送落点偏移完成确认（仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('ambush-shift-confirm', [
       Guard('has-shift-target', function (bb) {
         var a = bb.memory.ambushState;
@@ -63,8 +64,8 @@ function createMovementTree(profile) {
     ])
   );
 
-  // ---- 伏击蹲守：传送到伏击位后原地等待射击 ----
-  children.push(
+  // ---- 伏击蹲守：传送到伏击位后原地等待射击（仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('ambush-hold', [
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;

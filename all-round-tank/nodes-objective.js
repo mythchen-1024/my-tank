@@ -9,7 +9,8 @@
 // 刺杀由 profile.enableAssassination 开关控制。
 // ============================================================
 
-function createObjectiveTree(profile) {
+function createObjectiveTree(profile, mySkillType) {
+  mySkillType = mySkillType || 'teleport';
   var children = [];
 
   // ---- 隐身守星防陷阱（优先于抢星） ----
@@ -37,8 +38,8 @@ function createObjectiveTree(profile) {
     ])
   );
 
-  // ---- 星点草丛伏击（优先于直接传送抢星） ----
-  children.push(
+  // ---- 星点草丛伏击（优先于直接传送抢星，仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('star-bush-ambush', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
@@ -92,8 +93,8 @@ function createObjectiveTree(profile) {
     ])
   );
 
-  // ---- 传送抢星 ----
-  children.push(
+  // ---- 传送抢星（仅传送技能）----
+  if (mySkillType === 'teleport') children.push(
     Sequence('star-teleport', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
@@ -165,8 +166,8 @@ function createObjectiveTree(profile) {
     ])
   );
 
-  // ---- 传送刺杀（profile 开关控制） ----
-  if (profile.enableAssassination) {
+  // ---- 传送刺杀（profile 开关控制，仅传送技能） ----
+  if (profile.enableAssassination && mySkillType === 'teleport') {
     children.push(
       Sequence('assassination', [
         Guard('no-star', function (bb) { return !bb.star; }),

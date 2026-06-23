@@ -43,6 +43,7 @@ const MODULE_ORDER = [
   // 行为节点
   { file: 'nodes-survival.js',  base: dir },
   { file: 'nodes-attack.js',    base: dir },
+  { file: 'nodes-skill.js',    base: dir },
   { file: 'nodes-objective.js', base: dir },
   { file: 'nodes-movement-v2.js', base: dir },
   // 编排 & 入口

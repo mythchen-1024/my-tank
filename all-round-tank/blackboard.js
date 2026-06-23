@@ -29,6 +29,8 @@ function getBlackboard(game) {
       // ── 廉价派生感知 ──
       gunIsReady: false,
       teleportIsReady: false,
+      mySkillType: 'teleport',
+      skillIsReady: false,
       shotDir: null,
       distToEnemy: 999,
       distToStar: 999,
@@ -78,6 +80,8 @@ function refreshBlackboard(bb, me, enemy, game) {
   bb.gunIsReady = gunReady(me);
   bb.teleportIsReady = teleportReady(me);
   bb.bombIsReady = bombReady(me);
+  bb.mySkillType = getMySkillType(me);
+  bb.skillIsReady = skillReady(me);
   bb.shotDir = bb.enemyPos ? clearShotDirection(bb.myPos, bb.enemyPos, game) : null;
   bb.distToEnemy = bb.enemyPos ? manhattan(bb.myPos, bb.enemyPos) : 999;
   bb.distToStar = bb.star ? manhattan(bb.myPos, bb.star) : 999;
@@ -341,6 +345,12 @@ function bbThrowBomb(bb) {
 
 function bbSpeak(bb, msg) {
   if (bb.me && typeof bb.me.speak === 'function') bb.me.speak(msg);
+}
+
+function bbUseSkill(bb, skillName, arg1, arg2) {
+  if (!bb.me || !bb.me[skillName]) return;
+  if (arg1 !== undefined && arg2 !== undefined) bb.me[skillName](arg1, arg2);
+  else bb.me[skillName]();
 }
 
 function bbDirectGo(bb, target) {

@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
-// 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-22T16:11:52.529Z
+// 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
+// 构建时间: 2026-06-23T02:19:00.994Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1142,6 +1142,119 @@ function isPerpendicularDir(d1, d2) {
   var horiz = { left: true, right: true };
   var vert = { up: true, down: true };
   return (!!horiz[d1] && !!vert[d2]) || (!!vert[d1] && !!horiz[d2]);
+}
+
+// ================= 我方技能工具函数 =================
+
+/**
+ * 获取我方技能类型
+ */
+function getMySkillType(me) {
+  return (me && me.skill && me.skill.type) || 'teleport';
+}
+
+/**
+ * 通用技能冷却检查
+ */
+function skillReady(me) {
+  return !!(me && me.skill && me.skill.remainingCooldownFrames === 0);
+}
+
+/**
+ * 技能是否处于激活状态
+ */
+function skillActive(me) {
+  return !!(me && me.skill && me.skill.activeRemainingFrames && me.skill.activeRemainingFrames > 0);
+}
+
+/**
+ * 冰冻可用：冷却好 + 敌未被冻 + 敌未无敌
+ */
+function canFreeze(me, enemy) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'freeze') return false;
+  if (enemy && enemy.status && enemy.status.frozen) return false;
+  if (enemy && enemy.effects && enemy.effects.debuff && enemy.effects.debuff.type === 'freeze') return false;
+  return true;
+}
+
+/**
+ * 眩晕可用：冷却好
+ */
+function canStun(me, enemy) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'stun') return false;
+  if (enemy && enemy.status && enemy.status.stunned) return false;
+  return true;
+}
+
+/**
+ * 下毒可用：冷却好 + 敌未中毒
+ */
+function canPoison(me, enemy) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'poison') return false;
+  if (enemy && enemy.effects && enemy.effects.debuff && enemy.effects.debuff.type === 'poison') return false;
+  return true;
+}
+
+/**
+ * 过载可用：冷却好 + 未处于过载状态
+ */
+function canOverload(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'overload') return false;
+  if (me.status && me.status.overloaded) return false;
+  return true;
+}
+
+/**
+ * 隐身可用：冷却好 + 未处于隐身状态
+ */
+function canCloak(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'cloak') return false;
+  if (me.status && me.status.cloaked) return false;
+  return true;
+}
+
+/**
+ * 加速可用：冷却好 + 未处于加速状态
+ */
+function canBoost(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'boost') return false;
+  if (me.status && me.status.boosted) return false;
+  return true;
+}
+
+/**
+ * 护盾可用：冷却好 + 未开盾中
+ */
+function canShieldSkill(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'shield') return false;
+  if (me.status && me.status.shielded) return false;
+  return true;
+}
+
+/**
+ * 判断 boost go() 前方2格是否安全可通行
+ */
+function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
+  var dd = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[myDir];
+  if (!dd) return false;
+  var p1 = [myPos[0] + dd[0], myPos[1] + dd[1]];
+  var p2 = [myPos[0] + dd[0] * 2, myPos[1] + dd[1] * 2];
+  if (!isPassable(game, p1, enemyPos)) return false;
+  if (!isPassable(game, p2, enemyPos)) {
+    // 第二格不通也可以，boost 遇障碍提前停（走1格也有价值）
+    if (anyBulletThreatens(enemyBullets, p1, game)) return false;
+    return true;
+  }
+  if (anyBulletThreatens(enemyBullets, p1, game)) return false;
+  if (anyBulletThreatens(enemyBullets, p2, game)) return false;
+  return true;
 }
 
 
@@ -4618,6 +4731,8 @@ function getBlackboard(game) {
       // ── 廉价派生感知 ──
       gunIsReady: false,
       teleportIsReady: false,
+      mySkillType: 'teleport',
+      skillIsReady: false,
       shotDir: null,
       distToEnemy: 999,
       distToStar: 999,
@@ -4667,6 +4782,8 @@ function refreshBlackboard(bb, me, enemy, game) {
   bb.gunIsReady = gunReady(me);
   bb.teleportIsReady = teleportReady(me);
   bb.bombIsReady = bombReady(me);
+  bb.mySkillType = getMySkillType(me);
+  bb.skillIsReady = skillReady(me);
   bb.shotDir = bb.enemyPos ? clearShotDirection(bb.myPos, bb.enemyPos, game) : null;
   bb.distToEnemy = bb.enemyPos ? manhattan(bb.myPos, bb.enemyPos) : 999;
   bb.distToStar = bb.star ? manhattan(bb.myPos, bb.star) : 999;
@@ -4930,6 +5047,12 @@ function bbThrowBomb(bb) {
 
 function bbSpeak(bb, msg) {
   if (bb.me && typeof bb.me.speak === 'function') bb.me.speak(msg);
+}
+
+function bbUseSkill(bb, skillName, arg1, arg2) {
+  if (!bb.me || !bb.me[skillName]) return;
+  if (arg1 !== undefined && arg2 !== undefined) bb.me[skillName](arg1, arg2);
+  else bb.me[skillName]();
 }
 
 function bbDirectGo(bb, target) {
@@ -5333,8 +5456,8 @@ function buildProfile(bb) {
 
 // ---- 硬生存子树（永远最高优先级，不受 profile 影响） ----
 
-function createHardSurvivalTree() {
-  return Selector('hard-survival', [
+function createHardSurvivalTree(skillEscapeNode) {
+  var children = [
 
     // 1. 对射先射后走：来袭子弹 + 能反击 + 开火后仍来得及躲
     Sequence('counter-shoot', [
@@ -5362,7 +5485,14 @@ function createHardSurvivalTree() {
         bbTeleport(bb, senseEscapeTeleport(bb));
       })
     ]),
+  ];
 
+  // 3.5 技能逃生：传送不可用时，用本技能保命（优先于 two-step）
+  if (skillEscapeNode) {
+    children.push(skillEscapeNode);
+  }
+
+  children.push(
     // 4. 两步脱困：双弹夹击导致单步无安全格，走"下一帧还能继续脱离"的格
     Sequence('two-step-escape', [
       Guard('has-two-step', function (bb) { return !!senseTwoStepEscape(bb); }),
@@ -5385,8 +5515,10 @@ function createHardSurvivalTree() {
       Action('do-bomb-dodge', function (bb) {
         bbMoveToward(bb, senseBombThreat(bb));
       })
-    ]),
-  ]);
+    ])
+  );
+
+  return Selector('hard-survival', children);
 }
 
 // ---- 软生存子树（profile 控制包含哪些节点） ----
@@ -5740,6 +5872,776 @@ function createBombNodes(profile) {
 }
 
 
+// ===== nodes-skill.js =====
+// ============================================================
+// nodes-skill.js — 我方技能行为节点（8 种技能完整战术体系）
+//
+// 三类子树工厂：
+//   1. createSkillSurvivalNodes(mySkillType) — 技能逃生（硬生存补充）
+//   2. createSkillAttackNodes(mySkillType)   — 技能攻击（攻击层前置）
+//   3. createSkillObjectiveNodes(mySkillType)— 技能目标（目标层前置）
+//
+// 所有节点通过 bb.mySkillType / bb.skillIsReady Guard 门控，
+// 运行时自动匹配当前技能，非本技能节点返回 FAILURE。
+//
+// 动态对抗参数：getSkillMatchupParams(mySkillType, enemySkillType)
+// 根据敌我技能组合动态调整阈值，避免硬编码。
+// ============================================================
+
+// ================================================================
+// 技能对抗参数表 — 根据 (我方技能, 敌方技能) 动态调整行为阈值
+// ================================================================
+
+/**
+ * 默认参数（通用基线）
+ */
+var SKILL_MATCHUP_DEFAULTS = {
+  freezeKillRange: 4,        // 冰杀触发距离
+  freezeKillRequireShot: false, // 是否要求已有射线才冻（vs护盾等需更严格）
+  stunKillRange: 5,          // 晕杀触发距离
+  overloadRange: 5,          // 过载触发距离
+  overloadRequireShot: false,// 过载是否要求已对准（vs传送等需更谨慎）
+  poisonRange: 5,            // 下毒触发距离
+  cloakSneakRange: 6,       // 隐身潜行触发距离
+  cloakSneakEnabled: true,   // 是否启用隐身偷袭
+  shieldCounterRange: 4,    // 盾击触发距离
+  boostChaseRange: 6,       // 加速追击触发距离
+  skillStarContestDelta: 0,  // 技能抢星距离容差（敌距星 <= 我距星 + delta 时触发）
+  freezeAvoidShielded: true, // 冰冻时是否回避已开盾的敌人
+  stunBypassShield: true,    // 眩晕是否无视护盾（stun 本身不造成伤害）
+  overloadWaitShield: true,  // 过载是否等护盾碎裂后再开火
+  poisonBypassShield: true,  // 下毒是否无视护盾
+};
+
+/**
+ * 技能对抗修正表：MATCHUP_OVERRIDES[我方技能][敌方技能] = { ...覆盖参数 }
+ * 仅列出需要覆盖默认值的组合。
+ */
+var MATCHUP_OVERRIDES = {
+  freeze: {
+    // vs 护盾流：敌人被冻后可能开盾挡火，需确认无盾再冻+要求已有射线确保即冻即杀
+    shield:   { freezeKillRange: 3, freezeKillRequireShot: true, freezeAvoidShielded: true },
+    // vs 传送流：对方冻住也可能提前传走（冻住时不能传但冻前可能预判传），近距才值得冻
+    teleport: { freezeKillRange: 3 },
+    // vs 加速流：对方加速中移动快，冻距需更近确保命中窗口
+    boost:    { freezeKillRange: 3 },
+    // vs 隐身流：看不到时别浪费冻
+    cloak:    { freezeKillRange: 3 },
+  },
+  stun: {
+    // vs 护盾流：眩晕不造成伤害，无视护盾；但晕后开火时敌人可能盾还在
+    shield:   { stunKillRange: 4, stunBypassShield: true },
+    // vs 传送流：眩晕使其6帧混乱无法精确传送，是克制传送的好手段
+    teleport: { stunKillRange: 6 },
+    // vs 冰冻流：近身时先晕可防止对方先冻我
+    freeze:   { stunKillRange: 5 },
+  },
+  overload: {
+    // vs 护盾流：等盾碎再过载开火，否则双弹浪费
+    shield:   { overloadRange: 4, overloadRequireShot: true, overloadWaitShield: true },
+    // vs 传送流：对方可能瞬移躲双弹，更近距才过载
+    teleport: { overloadRange: 4, overloadRequireShot: true },
+    // vs 加速流：对方速度快，过载后尽快开火
+    boost:    { overloadRange: 4 },
+    // vs 隐身流：看得到时立刻过载（消失后就没机会了）
+    cloak:    { overloadRange: 6 },
+  },
+  poison: {
+    // vs 护盾流：毒是 debuff 无视护盾，可放心下毒
+    shield:   { poisonRange: 6, poisonBypassShield: true },
+    // vs 传送流：对方中毒后行动变慢但仍可传送逃离，效果有限
+    teleport: { poisonRange: 4 },
+    // vs 加速流：毒克加速（减速效果抵消加速），优先下毒
+    boost:    { poisonRange: 6 },
+    // vs 冰冻流：中毒后躲冰冻更难，优先在被冻前下毒
+    freeze:   { poisonRange: 5 },
+  },
+  cloak: {
+    // vs 隐身流：双方都隐身效果互相抵消，降低优先级
+    cloak:    { cloakSneakEnabled: false },
+    // vs 过载流：隐身后被双弹覆盖危险大，潜行距离缩短
+    overload: { cloakSneakRange: 4 },
+    // vs 冰冻流：隐身后敌人无法冻我（看不到），是好克制
+    freeze:   { cloakSneakRange: 7 },
+  },
+  shield: {
+    // vs 冰冻流：被冻2帧可能被连杀，盾无法防冻，盾击距离缩短保命
+    freeze:   { shieldCounterRange: 3 },
+    // vs 过载流：盾能挡一发，但双弹第二发仍会命中，盾击范围缩短
+    overload: { shieldCounterRange: 3 },
+    // vs 眩晕流：被晕后混乱，开盾时机可能失误，距离保守
+    stun:     { shieldCounterRange: 3 },
+  },
+  boost: {
+    // vs 冰冻流：加速可快速脱离冰冻射程，追击距离可拉大
+    freeze:   { boostChaseRange: 7 },
+    // vs 过载流：加速冲入双弹带很危险，追击距离缩短
+    overload: { boostChaseRange: 4 },
+    // vs 毒药流：中毒后加速失效期更痛苦，保持距离
+    poison:   { boostChaseRange: 5 },
+  },
+};
+
+/**
+ * 获取当前对局的技能对抗参数。
+ * 在每次 buildBehaviorTree 或技能节点 Guard 中调用。
+ *
+ * @param {string} mySkill  - 我方技能类型
+ * @param {string} enemySkill - 敌方技能类型
+ * @returns {Object} 合并后的参数对象
+ */
+function getSkillMatchupParams(mySkill, enemySkill) {
+  var params = {};
+  var k;
+  for (k in SKILL_MATCHUP_DEFAULTS) {
+    if (SKILL_MATCHUP_DEFAULTS.hasOwnProperty(k)) {
+      params[k] = SKILL_MATCHUP_DEFAULTS[k];
+    }
+  }
+  var overrides = MATCHUP_OVERRIDES[mySkill] && MATCHUP_OVERRIDES[mySkill][enemySkill];
+  if (overrides) {
+    for (k in overrides) {
+      if (overrides.hasOwnProperty(k)) {
+        params[k] = overrides[k];
+      }
+    }
+  }
+  return params;
+}
+
+// ================================================================
+// 1. 技能逃生节点 — 插入 hard-survival 的 escape-teleport 之后
+// ================================================================
+
+function createSkillSurvivalNodes(mySkillType) {
+  var children = [];
+
+  // ---- Shield: 子弹来袭 + 无法移动躲开 → 开盾挡弹 ----
+  if (mySkillType === 'shield') {
+    children.push(
+      Sequence('shield-block', [
+        Guard('has-bullet-threat', function (bb) {
+          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
+        Guard('no-escape-tp', function (bb) { return !senseEscapeTeleport(bb); }),
+        Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
+        Action('do-shield-block', function (bb) {
+          bbSpeak(bb, '挡弹!');
+          bbUseSkill(bb, 'shield');
+        })
+      ])
+    );
+  }
+
+  // ---- Freeze: 被追/被夹 → 冰冻敌人争取逃跑窗口 ----
+  if (mySkillType === 'freeze') {
+    children.push(
+      Sequence('freeze-defense', [
+        Guard('has-bullet-threat', function (bb) {
+          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
+        Action('do-freeze-defense', function (bb) {
+          bbSpeak(bb, '冰冻!');
+          bbUseSkill(bb, 'freeze');
+        })
+      ])
+    );
+  }
+
+  // ---- Stun: 被追/被夹 → 眩晕敌人后跑路 ----
+  if (mySkillType === 'stun') {
+    children.push(
+      Sequence('stun-escape', [
+        Guard('has-bullet-threat', function (bb) {
+          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('stun-ready', function (bb) { return canStun(bb.me, bb.enemy); }),
+        Action('do-stun-escape', function (bb) {
+          bbSpeak(bb, '眩晕!');
+          bbUseSkill(bb, 'stun');
+        })
+      ])
+    );
+  }
+
+  // ---- Cloak: 被夹/无法躲 → 隐身后敌方丢失目标 ----
+  if (mySkillType === 'cloak') {
+    children.push(
+      Sequence('cloak-escape', [
+        Guard('has-bullet-threat', function (bb) {
+          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
+        Guard('cloak-ready', function (bb) { return canCloak(bb.me); }),
+        Action('do-cloak-escape', function (bb) {
+          bbSpeak(bb, '隐身!');
+          bbUseSkill(bb, 'cloak');
+        })
+      ])
+    );
+  }
+
+  // ---- Boost: 被追/被夹 → 加速逃离（双格移动拉开距离）----
+  if (mySkillType === 'boost') {
+    children.push(
+      Sequence('boost-escape', [
+        Guard('has-bullet-threat', function (bb) {
+          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
+        Guard('boost-ready', function (bb) { return canBoost(bb.me); }),
+        Action('do-boost-escape', function (bb) {
+          bbSpeak(bb, '加速逃!');
+          bbUseSkill(bb, 'boost');
+          // 加速后下帧 go() 会走2格
+        })
+      ])
+    );
+  }
+
+  // ---- Poison: 被追 + 无法拉开 → 下毒减速追击者 ----
+  if (mySkillType === 'poison') {
+    children.push(
+      Sequence('poison-escape', [
+        Guard('enemy-close-chasing', function (bb) {
+          if (!bb.enemyTank) return false;
+          if (bb.distToEnemy > 4) return false;
+          // 敌人面朝我方向
+          return !!bb.shotDir || enemyAimsAt(bb.myPos, bb.enemyTank, bb.game);
+        }),
+        Guard('has-bullet-threat', function (bb) {
+          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
+        Guard('poison-ready', function (bb) { return canPoison(bb.me, bb.enemy); }),
+        Action('do-poison-escape', function (bb) {
+          bbSpeak(bb, '下毒!');
+          bbUseSkill(bb, 'poison');
+        })
+      ])
+    );
+  }
+
+  if (children.length === 0) return null;
+  return Selector('skill-survival', children);
+}
+
+
+// ================================================================
+// 2. 技能攻击节点 — 插入 softSurvival 和 attack 之间
+// ================================================================
+
+function createSkillAttackNodes(mySkillType, enemySkillType) {
+  enemySkillType = enemySkillType || 'stun';
+  var mp = getSkillMatchupParams(mySkillType, enemySkillType);
+  var children = [];
+
+  // ---- Freeze-kill: 近距 + 同线/可同线 → 冰冻后瞄准开火 ----
+  if (mySkillType === 'freeze') {
+    children.push(
+      Sequence('freeze-kill', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= mp.freezeKillRange; }),
+        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        // 敌人开盾时不冻（冻后开火也被盾挡，浪费冰冻）
+        Guard('not-shielded', function (bb) {
+          if (!mp.freezeAvoidShielded) return true;
+          return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
+        }),
+        // 有射线或1步内可到射线（vs护盾等需更严格：必须有直接射线）
+        Guard('has-or-near-shot', function (bb) {
+          if (bb.shotDir) return true;
+          if (mp.freezeKillRequireShot) return false; // 严格模式：必须有直接射线
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 1 || dy <= 1;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-freeze-kill', function (bb) {
+          if (bb.shotDir && bb.myDir === bb.shotDir) {
+            bbSpeak(bb, '冰杀!');
+            bbUseSkill(bb, 'freeze');
+          } else if (bb.shotDir) {
+            bbSpeak(bb, '冰冻!');
+            bbUseSkill(bb, 'freeze');
+          } else {
+            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+            if (step) bbMoveToward(bb, step);
+          }
+        })
+      ])
+    );
+
+    // 冰冻后续：敌人被冻住时抓紧瞄准开火
+    children.push(
+      Sequence('freeze-followup', [
+        Guard('enemy-frozen', function (bb) {
+          return !!(bb.enemy && bb.enemy.status && bb.enemy.status.frozen);
+        }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Action('do-freeze-followup', function (bb) {
+          if (bb.shotDir) {
+            if (bb.myDir === bb.shotDir) { bbSpeak(bb, '冰杀!'); bbFire(bb); }
+            else bbTurnToward(bb, bb.shotDir);
+          } else {
+            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+            if (step) bbMoveToward(bb, step);
+          }
+        })
+      ])
+    );
+  }
+
+  // ---- Stun-kill: 近距 → 眩晕后开火（6帧混乱无法躲）----
+  if (mySkillType === 'stun') {
+    children.push(
+      Sequence('stun-kill', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= mp.stunKillRange; }),
+        Guard('stun-ready', function (bb) { return canStun(bb.me, bb.enemy); }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        // 眩晕无视护盾（stun 不造成伤害），但后续开火时仍需检查
+        Guard('can-shoot-after', function (bb) {
+          if (mp.stunBypassShield) return bb.gunIsReady;
+          return canShoot(bb.me, bb.enemy);
+        }),
+        Guard('has-or-near-shot', function (bb) {
+          if (bb.shotDir) return true;
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 1 || dy <= 1;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-stun-kill', function (bb) {
+          if (bb.shotDir) {
+            bbSpeak(bb, '晕杀!');
+            bbUseSkill(bb, 'stun');
+          } else {
+            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+            if (step) bbMoveToward(bb, step);
+          }
+        })
+      ])
+    );
+
+    // 眩晕后续：敌人被眩晕时抓紧瞄准开火
+    children.push(
+      Sequence('stun-followup', [
+        Guard('enemy-stunned', function (bb) {
+          return !!(bb.enemy && bb.enemy.status && bb.enemy.status.stunned);
+        }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Action('do-stun-followup', function (bb) {
+          if (bb.shotDir) {
+            if (bb.myDir === bb.shotDir) { bbSpeak(bb, '晕杀!'); bbFire(bb); }
+            else bbTurnToward(bb, bb.shotDir);
+          } else {
+            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+            if (step) bbMoveToward(bb, step);
+          }
+        })
+      ])
+    );
+  }
+
+  // ---- Overload-fire: 同线 + 过载 → 双弹覆盖 ----
+  if (mySkillType === 'overload') {
+    // 预过载蓄力：近距时先开过载存着
+    children.push(
+      Sequence('overload-prep', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= mp.overloadRange; }),
+        Guard('overload-ready', function (bb) { return canOverload(bb.me); }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        // vs 护盾等需要已对准才过载（避免过载后10帧内找不到射线浪费）
+        Guard('has-or-near-shot', function (bb) {
+          if (bb.shotDir) return true;
+          if (mp.overloadRequireShot) return false; // 严格模式：必须有射线
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 2 || dy <= 2;
+        }),
+        // vs 护盾流：等盾碎再过载
+        Guard('enemy-not-shielded', function (bb) {
+          if (!mp.overloadWaitShield) return true;
+          return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-overload-prep', function (bb) {
+          bbSpeak(bb, '过载!');
+          bbUseSkill(bb, 'overload');
+        })
+      ])
+    );
+
+    // 过载后续：已过载 + 有射线 → 立即开火
+    children.push(
+      Sequence('overload-fire', [
+        Guard('is-overloaded', function (bb) {
+          return !!(bb.me.status && bb.me.status.overloaded);
+        }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Action('do-overload-fire', function (bb) {
+          if (bb.myDir === bb.shotDir) { bbSpeak(bb, '双弹!'); bbFire(bb); }
+          else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+  }
+
+  // ---- Poison-fire: 近距 + 下毒 → 趁敌变慢开火 ----
+  if (mySkillType === 'poison') {
+    children.push(
+      Sequence('poison-fire', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= mp.poisonRange; }),
+        Guard('poison-ready', function (bb) { return canPoison(bb.me, bb.enemy); }),
+        Guard('has-or-near-shot', function (bb) {
+          if (bb.shotDir) return true;
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 2 || dy <= 2;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-poison-fire', function (bb) {
+          bbSpeak(bb, '下毒!');
+          bbUseSkill(bb, 'poison');
+        })
+      ])
+    );
+
+    // 中毒后续：敌人中毒时抓紧开火（变慢难躲）
+    children.push(
+      Sequence('poison-followup', [
+        Guard('enemy-poisoned', function (bb) {
+          return !!(bb.enemy && bb.enemy.effects && bb.enemy.effects.debuff &&
+                    bb.enemy.effects.debuff.type === 'poison');
+        }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Action('do-poison-followup', function (bb) {
+          if (bb.myDir === bb.shotDir) { bbSpeak(bb, '毒杀!'); bbFire(bb); }
+          else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+  }
+
+  // ---- Cloak-sneak: 隐身 → 移到射线位 → 解除隐身开火 ----
+  if (mySkillType === 'cloak') {
+    // 隐身偷袭整体开关（vs cloak镜像对局禁用）
+    if (mp.cloakSneakEnabled) {
+      children.push(
+        Sequence('cloak-sneak', [
+          Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+          Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
+          Guard('close-range', function (bb) { return bb.distToEnemy <= mp.cloakSneakRange; }),
+          Guard('cloak-ready', function (bb) { return canCloak(bb.me); }),
+          Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+          Guard('no-self-danger', function (bb) {
+            return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          }),
+          Action('do-cloak-sneak', function (bb) {
+            bbSpeak(bb, '潜行!');
+            bbUseSkill(bb, 'cloak');
+          })
+        ])
+      );
+    }
+
+    // 隐身状态下的伏击：已隐身 + 有射线 → 直接开火
+    children.push(
+      Sequence('cloak-ambush', [
+        Guard('is-cloaked', function (bb) {
+          return !!(bb.me.status && bb.me.status.cloaked);
+        }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Action('do-cloak-ambush', function (bb) {
+          if (bb.myDir === bb.shotDir) { bbSpeak(bb, '偷袭!'); bbFire(bb); }
+          else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+
+    // 隐身移动：已隐身 + 无射线 → 移动到射线位
+    children.push(
+      Sequence('cloak-move-to-lane', [
+        Guard('is-cloaked', function (bb) {
+          return !!(bb.me.status && bb.me.status.cloaked);
+        }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('no-shot', function (bb) { return !bb.shotDir; }),
+        Action('do-cloak-move', function (bb) {
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+          if (step) bbMoveToward(bb, step);
+        })
+      ])
+    );
+  }
+
+  // ---- Shield-counter: 与敌同线 → 开盾安全对射 ----
+  if (mySkillType === 'shield') {
+    children.push(
+      Sequence('shield-counter', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
+        Guard('enemy-aims-at-me', function (bb) {
+          return enemyAimsAt(bb.myPos, bb.enemyTank, bb.game);
+        }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= mp.shieldCounterRange; }),
+        Action('do-shield-counter', function (bb) {
+          bbSpeak(bb, '盾击!');
+          bbUseSkill(bb, 'shield');
+        })
+      ])
+    );
+
+    // 护盾后续：开盾中 + 有射线 → 安全开火
+    children.push(
+      Sequence('shield-fire', [
+        Guard('is-shielded', function (bb) {
+          return !!(bb.me.status && bb.me.status.shielded);
+        }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir && bb.gunIsReady; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Action('do-shield-fire', function (bb) {
+          if (bb.myDir === bb.shotDir) { bbSpeak(bb, '盾射!'); bbFire(bb); }
+          else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+  }
+
+  // ---- Boost-chase-attack: 加速移到射线位开火 ----
+  if (mySkillType === 'boost') {
+    children.push(
+      Sequence('boost-chase-attack', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
+        Guard('medium-range', function (bb) {
+          return bb.distToEnemy <= mp.boostChaseRange && bb.distToEnemy >= 3;
+        }),
+        Guard('boost-ready', function (bb) { return canBoost(bb.me); }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-boost-chase', function (bb) {
+          bbSpeak(bb, '加速攻!');
+          bbUseSkill(bb, 'boost');
+        })
+      ])
+    );
+  }
+
+  if (children.length === 0) return null;
+  return Selector('skill-attack', children);
+}
+
+
+// ================================================================
+// 3. 技能目标节点 — 插入 attack 和 objective 之间
+// ================================================================
+
+function createSkillObjectiveNodes(mySkillType, enemySkillType) {
+  enemySkillType = enemySkillType || 'stun';
+  var mp = getSkillMatchupParams(mySkillType, enemySkillType);
+  var children = [];
+
+  // ---- Boost-star-rush: 加速冲星（go() 走2格）----
+  if (mySkillType === 'boost') {
+    children.push(
+      Sequence('boost-star-rush', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('boost-ready', function (bb) { return canBoost(bb.me); }),
+        Guard('star-distance', function (bb) { return bb.distToStar >= 3; }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        // 竞争激烈时才用：敌人也在追星或距星差不多
+        Guard('star-contested', function (bb) {
+          if (!bb.enemyTank) return true;
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return enemyStarDist <= bb.distToStar + 3 + mp.skillStarContestDelta;
+        }),
+        Action('do-boost-star', function (bb) {
+          bbSpeak(bb, '加速星!');
+          bbUseSkill(bb, 'boost');
+        })
+      ])
+    );
+
+    // 加速中的追星：已加速 + 面朝星方向 → go()（走2格）
+    children.push(
+      Sequence('boost-star-go', [
+        Guard('is-boosted', function (bb) {
+          return !!(bb.me.status && bb.me.status.boosted);
+        }),
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('path-safe', function (bb) {
+          return boostPathSafe(bb.myPos, bb.myDir, bb.game, bb.enemyPos, bb.enemyBullets);
+        }),
+        Action('do-boost-go', function (bb) {
+          var starDir = directionBetween(bb.myPos, bb.star);
+          if (starDir && bb.myDir === starDir) {
+            bb.me.go();
+          } else if (starDir) {
+            bbTurnToward(bb, starDir);
+          } else {
+            bbMoveToward(bb, bb.star);
+          }
+        })
+      ])
+    );
+  }
+
+  // ---- Cloak-star: 隐身偷星 ----
+  if (mySkillType === 'cloak') {
+    children.push(
+      Sequence('cloak-star', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('cloak-ready', function (bb) { return canCloak(bb.me); }),
+        Guard('star-contested', function (bb) {
+          if (!bb.enemyTank) return false;
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return enemyStarDist <= bb.distToStar + 2 + mp.skillStarContestDelta && bb.distToStar <= 6;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-cloak-star', function (bb) {
+          bbSpeak(bb, '隐身星!');
+          bbUseSkill(bb, 'cloak');
+        })
+      ])
+    );
+  }
+
+  // ---- Shield-star-rush: 开盾冲星（抢星路上有危险时）----
+  if (mySkillType === 'shield') {
+    children.push(
+      Sequence('shield-star-rush', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
+        Guard('star-close', function (bb) { return bb.distToStar <= 4; }),
+        // 只在有危险时才用盾（敌瞄着星或有子弹威胁路线）
+        Guard('star-dangerous', function (bb) {
+          if (!bb.enemyTank) return false;
+          // 敌人在我去星的路上且瞄着我
+          return enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) && bb.distToEnemy <= 5;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-shield-star', function (bb) {
+          bbSpeak(bb, '盾星!');
+          bbUseSkill(bb, 'shield');
+        })
+      ])
+    );
+  }
+
+  // ---- Freeze-star: 抢星竞争时冻住对手 ----
+  if (mySkillType === 'freeze') {
+    children.push(
+      Sequence('freeze-star', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        // 敌人比我更近星或差不多 → 冻住它先吃
+        Guard('enemy-closer', function (bb) {
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return enemyStarDist <= bb.distToStar + mp.skillStarContestDelta && bb.distToStar <= 6;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-freeze-star', function (bb) {
+          bbSpeak(bb, '冰星!');
+          bbUseSkill(bb, 'freeze');
+        })
+      ])
+    );
+  }
+
+  // ---- Stun-star: 抢星时眩晕竞争者 ----
+  if (mySkillType === 'stun') {
+    children.push(
+      Sequence('stun-star', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('stun-ready', function (bb) { return canStun(bb.me, bb.enemy); }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('enemy-closer', function (bb) {
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return enemyStarDist <= bb.distToStar + mp.skillStarContestDelta && bb.distToStar <= 6;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-stun-star', function (bb) {
+          bbSpeak(bb, '晕星!');
+          bbUseSkill(bb, 'stun');
+        })
+      ])
+    );
+  }
+
+  // ---- Poison-star: 抢星时下毒减慢敌人 ----
+  if (mySkillType === 'poison') {
+    children.push(
+      Sequence('poison-star', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('poison-ready', function (bb) { return canPoison(bb.me, bb.enemy); }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('enemy-closer', function (bb) {
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return enemyStarDist <= bb.distToStar + mp.skillStarContestDelta && bb.distToStar <= 5;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-poison-star', function (bb) {
+          bbSpeak(bb, '毒星!');
+          bbUseSkill(bb, 'poison');
+        })
+      ])
+    );
+  }
+
+  // ---- Overload 无专属目标节点（过载纯攻击，不辅助抢星） ----
+
+  if (children.length === 0) return null;
+  return Selector('skill-objective', children);
+}
+
+
 // ===== nodes-objective.js =====
 // ============================================================
 // nodes-objective.js — 目标行为节点（星星 & 刺杀）
@@ -5752,7 +6654,8 @@ function createBombNodes(profile) {
 // 刺杀由 profile.enableAssassination 开关控制。
 // ============================================================
 
-function createObjectiveTree(profile) {
+function createObjectiveTree(profile, mySkillType) {
+  mySkillType = mySkillType || 'teleport';
   var children = [];
 
   // ---- 隐身守星防陷阱（优先于抢星） ----
@@ -5780,8 +6683,8 @@ function createObjectiveTree(profile) {
     ])
   );
 
-  // ---- 星点草丛伏击（优先于直接传送抢星） ----
-  children.push(
+  // ---- 星点草丛伏击（优先于直接传送抢星，仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('star-bush-ambush', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
@@ -5835,8 +6738,8 @@ function createObjectiveTree(profile) {
     ])
   );
 
-  // ---- 传送抢星 ----
-  children.push(
+  // ---- 传送抢星（仅传送技能）----
+  if (mySkillType === 'teleport') children.push(
     Sequence('star-teleport', [
       Guard('star-exists', function (bb) { return !!bb.star; }),
       Guard('teleport-ready', function (bb) { return bb.teleportIsReady; }),
@@ -5908,8 +6811,8 @@ function createObjectiveTree(profile) {
     ])
   );
 
-  // ---- 传送刺杀（profile 开关控制） ----
-  if (profile.enableAssassination) {
+  // ---- 传送刺杀（profile 开关控制，仅传送技能） ----
+  if (profile.enableAssassination && mySkillType === 'teleport') {
     children.push(
       Sequence('assassination', [
         Guard('no-star', function (bb) { return !bb.star; }),
@@ -5978,11 +6881,12 @@ function createStarGrabNode() {
 // 依赖：core-utils.js, tactics.js, movement-engine.js, bt-core.js, blackboard.js
 // ============================================================
 
-function createMovementTree(profile) {
+function createMovementTree(profile, mySkillType) {
+  mySkillType = mySkillType || 'teleport';
   var children = [];
 
-  // ---- 传送落点偏移：传送后首帧立即移到相邻草丛 ----
-  children.push(
+  // ---- 传送落点偏移：传送后首帧立即移到相邻草丛（仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('ambush-shift', [
       Guard('needs-shift', function (bb) {
         var a = bb.memory.ambushState;
@@ -6007,8 +6911,8 @@ function createMovementTree(profile) {
     ])
   );
 
-  // ---- 传送落点偏移完成确认 ----
-  children.push(
+  // ---- 传送落点偏移完成确认（仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('ambush-shift-confirm', [
       Guard('has-shift-target', function (bb) {
         var a = bb.memory.ambushState;
@@ -6033,8 +6937,8 @@ function createMovementTree(profile) {
     ])
   );
 
-  // ---- 伏击蹲守：传送到伏击位后原地等待射击 ----
-  children.push(
+  // ---- 伏击蹲守：传送到伏击位后原地等待射击（仅传送技能） ----
+  if (mySkillType === 'teleport') children.push(
     Sequence('ambush-hold', [
       Guard('in-ambush', function (bb) {
         var a = bb.memory.ambushState;
@@ -6536,46 +7440,66 @@ function createMovementTree(profile) {
 
 // ===== tree-factory.js =====
 // ============================================================
-// tree-factory.js — 按 Profile 动态组装行为树
+// tree-factory.js — 按 Profile + 我方技能动态组装行为树
 //
 // 核心函数 buildBehaviorTree(profile) 根据敌情 Profile 参数
+// 和我方技能类型（运行时自动检测 me.skill.type）
 // 决定挂载哪些子树、调整子树顺序，返回一棵完整的行为树根节点。
 //
 // 树结构总览：
 //   Root (Selector)
-//   ├── [固定] 硬生存（子弹/传送逃生，永远最高）
-//   ├── [固定] 冰冻拦截（被冻时跳过本帧）
+//   ├── [固定] 被控拦截（被冻/被眩晕时跳过本帧）
+//   ├── [固定] 硬生存（子弹/传送逃生 + 技能逃生内嵌，永远最高）
+//   │   ├── counter-shoot（对射先射后走）
+//   │   ├── bullet-dodge（常规弹道躲避）
+//   │   ├── escape-teleport（传送逃生，仅传送技能）
+//   │   ├── 【技能逃生】shield-block/freeze-defense/stun-escape/cloak-escape/boost-escape/poison-escape
+//   │   ├── two-step-escape（两步脱困）
+//   │   ├── desperate-dodge（绝境横移）
+//   │   └── bomb-dodge（炸弹躲避）
+//   ├── [传送] 传送补吃星（仅传送技能）
 //   ├── [Profile] 软生存（防瞄/近距规避，敏感度可调）
-//   ├── [动态] 终局抢星提权（落后+终局时目标层插到攻击层前）
+//   ├── [动态] 终局抢星提权
+//   ├── [技能] 技能攻击（冰杀/晕杀/过载/下毒/隐袭/盾击/加速攻）
 //   ├── [Profile] 攻击（空窗/直射/守线/草丛，激进度可调）
-//   ├── [Profile] 目标（星星/刺杀，开关可控）
+//   ├── [Profile] 主动放弹
+//   ├── [技能] 技能目标（加速星/隐身星/盾星/冰星/晕星/毒星）
+//   ├── [Profile] 目标（传星/刺杀，开关可控）
 //   └── [Profile] 移动（蹲草/走位/破墙/兜底）
 // ============================================================
 
 /**
  * 根据 Profile 组装完整行为树。
+ * 我方技能类型在运行时从 bb.mySkillType 读取，构建时通过闭包传入。
  *
  * @param {Object} profile - 由 buildProfile(bb) 生成的策略参数
+ * @param {string} mySkillType - 我方技能类型（me.skill.type）
  * @returns {Object} 行为树根节点，调用 root.tick(bb) 执行决策
  */
-function buildBehaviorTree(profile) {
+function buildBehaviorTree(profile, mySkillType) {
+  mySkillType = mySkillType || 'teleport';
 
   // ═══════ 子树构建 ═══════
-  var hardSurvival = createHardSurvivalTree();
-  var starGrab     = createStarGrabNode();
-  var softSurvival = createSoftSurvivalTree(profile);
-  var bombAttack   = createBombNodes(profile);
-  var attack       = createAttackTree(profile);
-  var objective    = createObjectiveTree(profile);
-  var movement     = createMovementTree(profile);
+  var enemySkillType = (profile && profile.skillType) || 'stun';
+  var skillSurvival  = createSkillSurvivalNodes(mySkillType);
+  var hardSurvival   = createHardSurvivalTree(skillSurvival);
+  var starGrab       = (mySkillType === 'teleport') ? createStarGrabNode() : null;
+  var softSurvival   = createSoftSurvivalTree(profile);
+  var skillAttack    = createSkillAttackNodes(mySkillType, enemySkillType);
+  var bombAttack     = createBombNodes(profile);
+  var attack         = createAttackTree(profile);
+  var skillObjective = createSkillObjectiveNodes(mySkillType, enemySkillType);
+  var objective      = createObjectiveTree(profile, mySkillType);
+  var movement       = createMovementTree(profile, mySkillType);
 
-  // ═══════ 冰冻拦截（被冻时本帧无法操作） ═══════
-  var frozenCheck = Sequence('frozen-check', [
-    Guard('is-frozen', function (bb) {
-      return !!(bb.me.status && bb.me.status.frozen);
+  // ═══════ 被控拦截（被冻/被眩晕时本帧无法操作） ═══════
+  var ccCheck = Sequence('cc-check', [
+    Guard('is-cc', function (bb) {
+      return !!(bb.me.status && (bb.me.status.frozen || bb.me.status.stunned));
     }),
     Action('frozen-wait', function (bb) {
-      bbSpeak(bb, '冰冻中');
+      var ccType = bb.me.status.frozen ? '冰冻中' : '眩晕中';
+      bbSpeak(bb, ccType);
     })
   ]);
 
@@ -6601,13 +7525,13 @@ function buildBehaviorTree(profile) {
 
   // ═══════ 组装根节点 ═══════
   var rootChildren = [
-    // 第一优先级：被冻住就直接返回
-    frozenCheck,
+    // 第一优先级：被控（冰冻/眩晕）就直接返回
+    ccCheck,
 
-    // 第二优先级：硬生存（来袭子弹 + 炸弹躲避）
+    // 第二优先级：硬生存（来袭子弹 + 炸弹躲避 + 技能逃生内嵌其中）
     hardSurvival,
 
-    // 第三优先级：传送补吃星（只有来弹才打断）
+    // 第三优先级：传送补吃星（仅传送技能，只有来弹才打断）
     starGrab,
 
     // 第四优先级：软生存（预防性躲避）
@@ -6618,16 +7542,22 @@ function buildBehaviorTree(profile) {
     endgameStarBoost,
     maxStarAggression,
 
-    // 第六优先级：攻击（炮弹）
+    // 第六优先级：技能攻击（冰杀/晕杀/过载/下毒/隐袭/盾击/加速攻）
+    skillAttack,
+
+    // 第七优先级：攻击（炮弹）
     attack,
 
-    // 第七优先级：主动放弹（堵路/封路/草丛陷阱）
+    // 第八优先级：主动放弹（堵路/封路/草丛陷阱）
     bombAttack,
 
-    // 第八优先级：常规目标（非终局时的正常优先级）
+    // 第九优先级：技能目标（加速星/隐身星/盾星/冰星/晕星/毒星）
+    skillObjective,
+
+    // 第十优先级：常规目标（非终局时的正常优先级）
     objective,
 
-    // 第九优先级：移动/兜底
+    // 第十一优先级：移动/兜底
     movement,
   ];
 
@@ -6675,7 +7605,7 @@ function onIdle(me, enemy, game) {
 
   if (needRebuild) {
     bb.profile = buildProfile(bb);
-    bb.tree = buildBehaviorTree(bb.profile);
+    bb.tree = buildBehaviorTree(bb.profile, bb.mySkillType);
     bb.profileFrame = bb.frame;
   }
 
@@ -6687,7 +7617,7 @@ function onIdle(me, enemy, game) {
     var traceMsg = bb._trace.join('>') + ':' + bb._lastAction;
     // 开局播报敌方技能
     if (bb.frame === 5 && bb.profile) {
-      traceMsg = '敌:' + bb.profile.name + ' | ' + traceMsg;
+      traceMsg = '我:' + bb.mySkillType + ' vs 敌:' + bb.profile.name + ' | ' + traceMsg;
     }
     // 限制 speak 频率：关键动作才播报
     var isKeyAction = isKeyActionForSpeak(bb._lastAction);

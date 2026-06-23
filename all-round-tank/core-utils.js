@@ -1137,3 +1137,116 @@ function isPerpendicularDir(d1, d2) {
   var vert = { up: true, down: true };
   return (!!horiz[d1] && !!vert[d2]) || (!!vert[d1] && !!horiz[d2]);
 }
+
+// ================= 我方技能工具函数 =================
+
+/**
+ * 获取我方技能类型
+ */
+function getMySkillType(me) {
+  return (me && me.skill && me.skill.type) || 'teleport';
+}
+
+/**
+ * 通用技能冷却检查
+ */
+function skillReady(me) {
+  return !!(me && me.skill && me.skill.remainingCooldownFrames === 0);
+}
+
+/**
+ * 技能是否处于激活状态
+ */
+function skillActive(me) {
+  return !!(me && me.skill && me.skill.activeRemainingFrames && me.skill.activeRemainingFrames > 0);
+}
+
+/**
+ * 冰冻可用：冷却好 + 敌未被冻 + 敌未无敌
+ */
+function canFreeze(me, enemy) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'freeze') return false;
+  if (enemy && enemy.status && enemy.status.frozen) return false;
+  if (enemy && enemy.effects && enemy.effects.debuff && enemy.effects.debuff.type === 'freeze') return false;
+  return true;
+}
+
+/**
+ * 眩晕可用：冷却好
+ */
+function canStun(me, enemy) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'stun') return false;
+  if (enemy && enemy.status && enemy.status.stunned) return false;
+  return true;
+}
+
+/**
+ * 下毒可用：冷却好 + 敌未中毒
+ */
+function canPoison(me, enemy) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'poison') return false;
+  if (enemy && enemy.effects && enemy.effects.debuff && enemy.effects.debuff.type === 'poison') return false;
+  return true;
+}
+
+/**
+ * 过载可用：冷却好 + 未处于过载状态
+ */
+function canOverload(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'overload') return false;
+  if (me.status && me.status.overloaded) return false;
+  return true;
+}
+
+/**
+ * 隐身可用：冷却好 + 未处于隐身状态
+ */
+function canCloak(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'cloak') return false;
+  if (me.status && me.status.cloaked) return false;
+  return true;
+}
+
+/**
+ * 加速可用：冷却好 + 未处于加速状态
+ */
+function canBoost(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'boost') return false;
+  if (me.status && me.status.boosted) return false;
+  return true;
+}
+
+/**
+ * 护盾可用：冷却好 + 未开盾中
+ */
+function canShieldSkill(me) {
+  if (!skillReady(me)) return false;
+  if (getMySkillType(me) !== 'shield') return false;
+  if (me.status && me.status.shielded) return false;
+  return true;
+}
+
+/**
+ * 判断 boost go() 前方2格是否安全可通行
+ */
+function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
+  var dd = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[myDir];
+  if (!dd) return false;
+  var p1 = [myPos[0] + dd[0], myPos[1] + dd[1]];
+  var p2 = [myPos[0] + dd[0] * 2, myPos[1] + dd[1] * 2];
+  if (!isPassable(game, p1, enemyPos)) return false;
+  if (!isPassable(game, p2, enemyPos)) {
+    // 第二格不通也可以，boost 遇障碍提前停（走1格也有价值）
+    if (anyBulletThreatens(enemyBullets, p1, game)) return false;
+    return true;
+  }
+  if (anyBulletThreatens(enemyBullets, p1, game)) return false;
+  if (anyBulletThreatens(enemyBullets, p2, game)) return false;
+  return true;
+}
