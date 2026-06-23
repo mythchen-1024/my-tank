@@ -631,6 +631,12 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         Guard('no-self-danger', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
+        // 对传送敌开局：前15帧敌 tp 就绪时不抢星(传送瞬移必先到)；之后新星敌 tp 多半在 CD 照常 boost
+        Guard('not-tp-opening', function (bb) {
+          if (enemySkillType !== 'teleport') return true;
+          if (bb.framesLeft > MAX_GAME_FRAMES - 15) return !enemyTeleportReady(bb.enemy);
+          return true;
+        }),
         // 竞争激烈时才用：敌人也在追星或距星差不多
         Guard('star-contested', function (bb) {
           if (!bb.enemyTank) return true;

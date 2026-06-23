@@ -383,6 +383,7 @@ function createMovementTree(profile, mySkillType) {
       Sequence('occupy-lane', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyPos; }),
         Guard('not-overload', function (bb) { return !enemyIsOverloadType(bb.enemy); }),
+        Guard('gun-ready-to-advance', function (bb) { return bb.gunIsReady; }),
         Guard('lane-exists', function (bb) {
           var standoff = safeStandoffDistance(bb.enemy);
           var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, standoff);
