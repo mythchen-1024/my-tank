@@ -830,6 +830,7 @@ function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy, m
     if (stepIntoBulletPath(bullets, p, game)) continue;
     if (predictedOverloadThreatens(enemy, p, game)) continue;
     if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(p, pos, game, memory, false)) continue;
+    if (enemyBoostFlickThreat(p, enemy, enemyTank, game)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;
@@ -862,6 +863,17 @@ function enemyAimsAt(pos, enemyTank, game) {
   if (!enemyTank || !enemyTank.position || !enemyTank.direction) return false;
   const dir = clearShotDirection(enemyTank.position, pos, game);
   return dir === enemyTank.direction;
+}
+
+
+function enemyBoostFlickThreat(myPos, enemy, enemyTank, game) {
+  if (!enemyTank || !enemy) return false;
+  if (!(enemy.status && enemy.status.boosted)) return false;
+  if (!enemyCanFireSoon(enemy)) return false;
+  var dirToMe = clearShotDirection(enemyTank.position, myPos, game);
+  if (!dirToMe) return false;
+  var turns = turnDistance(enemyTank.direction, dirToMe);
+  return turns <= 1;
 }
 
 

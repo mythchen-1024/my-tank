@@ -33,11 +33,13 @@ BASE_URL = "https://agentank.ai"
 
 # 坦克档案：每档案绑定 key / 默认文件 / 默认分支 / 构建命令 / 署名。
 # build_cmd 为 None 表示单文件无需构建。
-# myth-survivor agtk_cce872653e5d5b90f76db3ac370a2d2809b6
-# myth-tank006 agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4
+# myth-survivor agtk_cce872653e5d5b90f76db3ac370a2d2809b6 冰冻
+# myth-tank006 agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4 加速
+# myth-tank007 agtk_97f38c3f2cd8666b86ba86d407a7c758bc24 护盾
+# myth-tank008 agtk_97cd318efe1ebf6a28908e6199da68ccf9ce 超载
 TANK_PROFILES = {
     "bt": {  # 默认：行为树坦克 myth-survivor
-        "key": "agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4",
+        "key": "agtk_97cd318efe1ebf6a28908e6199da68ccf9ce",
         "file": "bt-tank-submit.js",
         "branch": "main",
         "build_cmd": ["node", "build.js"],

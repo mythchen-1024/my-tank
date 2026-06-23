@@ -647,6 +647,34 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         })
       ])
     );
+
+    // boost 甩狙：加速中 + 同行/列 + 只差90°转向 → turn+fire 同帧
+    children.push(
+      Sequence('boost-flick-shot', [
+        Guard('is-boosted', function (bb) {
+          return !!(bb.me.status && bb.me.status.boosted);
+        }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
+        Guard('flick-available', function (bb) {
+          var flickDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
+          if (!flickDir) return false;
+          if (turnDistance(bb.myDir, flickDir) !== 1) return false;
+          bb._cache._flickDir = flickDir;
+          return true;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-flick-shot', function (bb) {
+          bbSpeak(bb, '甩狙!');
+          bbTurnToward(bb, bb._cache._flickDir);
+          bbFire(bb);
+        })
+      ])
+    );
   }
 
   if (children.length === 0) return null;

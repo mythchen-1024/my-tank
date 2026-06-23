@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-23T10:48:31.761Z
+// 构建时间: 2026-06-23T14:12:34.964Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -823,7 +823,7 @@ function pathDistance(start, target, game, blockPos) {
 /**
  * 寻找当前位置周围最安全的一个可行走邻接格子
  */
-function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
+function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy, memory) {
   let best = null;
   let bestScore = -9999;
   const bullets = enemyBullets || [];
@@ -832,9 +832,11 @@ function bestSafeNeighbor(pos, game, enemyPos, enemyTank, enemyBullets, enemy) {
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue;
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue;
-    // 连下一帧扫过的轨道也不能碰，免得“看起来安全”的邻格把自己送进弹道。
+    // 连下一帧扫过的轨道也不能碰，免得”看起来安全”的邻格把自己送进弹道。
     if (stepIntoBulletPath(bullets, p, game)) continue;
     if (predictedOverloadThreatens(enemy, p, game)) continue;
+    if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(p, pos, game, memory, false)) continue;
+    if (enemyBoostFlickThreat(p, enemy, enemyTank, game)) continue;
     const score = distanceFromEdges(p, game); // 尽量往中间靠
     if (score > bestScore) {
       bestScore = score;
@@ -867,6 +869,17 @@ function enemyAimsAt(pos, enemyTank, game) {
   if (!enemyTank || !enemyTank.position || !enemyTank.direction) return false;
   const dir = clearShotDirection(enemyTank.position, pos, game);
   return dir === enemyTank.direction;
+}
+
+
+function enemyBoostFlickThreat(myPos, enemy, enemyTank, game) {
+  if (!enemyTank || !enemy) return false;
+  if (!(enemy.status && enemy.status.boosted)) return false;
+  if (!enemyCanFireSoon(enemy)) return false;
+  var dirToMe = clearShotDirection(enemyTank.position, myPos, game);
+  if (!dirToMe) return false;
+  var turns = turnDistance(enemyTank.direction, dirToMe);
+  return turns <= 1;
 }
 
 
@@ -1294,12 +1307,11 @@ function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
   var p2 = [myPos[0] + dd[0] * 2, myPos[1] + dd[1] * 2];
   if (!isPassable(game, p1, enemyPos)) return false;
   if (!isPassable(game, p2, enemyPos)) {
-    // 第二格不通也可以，boost 遇障碍提前停（走1格也有价值）
-    if (anyBulletThreatens(enemyBullets, p1, game)) return false;
+    if (stepIntoBulletPath(enemyBullets, p1, game)) return false;
     return true;
   }
-  if (anyBulletThreatens(enemyBullets, p1, game)) return false;
-  if (anyBulletThreatens(enemyBullets, p2, game)) return false;
+  if (stepIntoBulletPath(enemyBullets, p1, game)) return false;
+  if (stepIntoBulletPath(enemyBullets, p2, game)) return false;
   return true;
 }
 
@@ -1319,6 +1331,8 @@ function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
  */
 function canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyHasShieldSkill(enemy)) return true;
+  // 盾在冷却中 → 我的子弹不会被吸收 → 直射必命中（至少换命），无需侧移避反
+  if (enemy && enemy.skill && enemy.skill.remainingCooldownFrames > 0) return true;
   if (!enemyTank || !enemyPos) return false;
   if (!gunReady(me)) return false;
 
@@ -2509,6 +2523,18 @@ function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
   // 来源1: lastEnemyPos（12帧内有效）
   if (memory.lastEnemyPos && frame - memory.lastEnemySeenFrame <= 12) {
     if (_hiddenFireLineBlocked(memory.lastEnemyPos, next, myPos, game, isStar)) return true;
+    // 来源1b: 沿敌最后朝向外推的预测位置（隐身/消失后可能继续前进）
+    var age = frame - memory.lastEnemySeenFrame;
+    if (memory.lastEnemyDir && age >= 2 && age <= 6) {
+      var dxDir = { right: 1, left: -1, up: 0, down: 0 };
+      var dyDir = { right: 0, left: 0, up: -1, down: 1 };
+      var dx = dxDir[memory.lastEnemyDir], dy = dyDir[memory.lastEnemyDir];
+      for (var step = 1; step <= Math.min(age, 4); step++) {
+        var pred = [memory.lastEnemyPos[0] + dx * step, memory.lastEnemyPos[1] + dy * step];
+        if (!isPassable(game, pred, null)) break;
+        if (_hiddenFireLineBlocked(pred, next, myPos, game, isStar)) return true;
+      }
+    }
   }
 
   // 来源2: bushHeatmap 高置信度条目（蹲草敌持续有效，不受12帧限制）
@@ -2996,7 +3022,8 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
  */
 function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank) return null;
-  if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
+  var isDirectAim = enemyAimsAt(me.tank.position, enemyTank, game);
+  if (!isDirectAim && !enemyBoostFlickThreat(me.tank.position, enemy, enemyTank, game)) return null;
   // 隐身豁免：草丛中敌人看不见我，炮口朝向不是真正的瞄准，无需空躲。
   // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
   // 近距反豁免的例外：枪就绪 + 有射击线 → 草丛先手优势，应射击而非出草逃跑
@@ -3007,7 +3034,8 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     if (gunReady(me) && clearShotDirection(me.tank.position, enemyPos, game)) return null;
   }
   // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
-  if (!enemyCanFireSoon(enemy)) return null;
+  // 注：boost flick 分支已在上面的 enemyBoostFlickThreat 中做了 enemyCanFireSoon 检查
+  if (isDirectAim && !enemyCanFireSoon(enemy)) return null;
   // 抢星竞速豁免：敌人只是预瞄、没有实弹在途时，若这颗星我更可能先到，则继续抢星不空躲
   if (shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game)) return null;
   // 对射豁免：我也能瞄到敌人、无实弹在途、且对射不慢于敌人(myDuel<=enemyDuel) -> 不在此空躲。
@@ -3037,6 +3065,7 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue; // 必须脱离炮线
+    if (enemyBoostFlickThreat(p, enemy, enemyTank, game)) continue; // 脱离甩狙线
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue; // 别躲进现有弹道
     if (predictedOverloadThreatens(enemy, p, game)) continue;      // 别躲进过载双弹覆盖带
 
@@ -3491,13 +3520,17 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!enemyIsCloakType(enemy)) return null;
   if (!state || !state.lastEnemyPos) return null;
   const age = ((game && game.frames) || 0) - state.lastEnemySeenFrame;
-  if (age < 0 || age > 4) return null; // 只打刚隐身的短窗口，避免凭旧记忆乱射
+  if (age < 0 || age > 4) return null;
 
   const myPos = me.tank.position;
   if (anyBulletThreatens(enemyBullets || [], myPos, game)) return null;
 
   const positions = hiddenCloakPositions(enemy, enemyTank, game, state);
   if (positions.length === 0) positions.push(state.lastEnemyPos);
+
+  const lastDir = state.lastEnemyDir || null;
+  const dxDir = { right: 1, left: -1, up: 0, down: 0 };
+  const dyDir = { right: 0, left: 0, up: -1, down: 1 };
 
   let bestDir = null;
   let bestScore = -9999;
@@ -3507,12 +3540,19 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
     const dir = clearShotDirection(myPos, p, game);
     if (!dir) continue;
     const dist = manhattan(myPos, p);
-    if (dist > 5) continue; // 隐身盲射只覆盖贴近伏击区
+    if (dist > 5) continue;
 
-    // 当前炮口方向命中优先：符合“敌最后隐身前在我炮口方向，就朝当前方向开炮”。
-    const facingBonus = dir === me.tank.direction ? 120 : 0;
+    // 方向偏好：沿敌最后朝向的位置更可能是实际位置
+    let dirBias = 0;
+    if (lastDir) {
+      const dpx = p[0] - state.lastEnemyPos[0];
+      const dpy = p[1] - state.lastEnemyPos[1];
+      const dotProduct = dpx * dxDir[lastDir] + dpy * dyDir[lastDir];
+      dirBias = dotProduct > 0 ? dotProduct * 15 : dotProduct * 5;
+    }
+    const facingBonus = dir === me.tank.direction ? 60 : 0;
     const lastBias = manhattan(p, state.lastEnemyPos) <= 1 ? 12 : 0;
-    const score = facingBonus + lastBias - dist * 5 - age * 4;
+    const score = dirBias + facingBonus + lastBias - dist * 5 - age * 4;
     if (score > bestScore) {
       bestScore = score;
       bestDir = dir;
@@ -4461,6 +4501,7 @@ function trackEnemy(state, enemyTank, myPos, game) {
   if (enemyTank && enemyTank.position) {
     var prevPos = state.lastEnemyPos;
     state.lastEnemyPos = enemyTank.position.slice();
+    state.lastEnemyDir = enemyTank.direction || null;
     state.lastEnemySeenFrame = (game && game.frames) || 0;
     if (prevPos && samePos(prevPos, enemyTank.position)) {
       state.enemyStationaryFrames = (state.enemyStationaryFrames || 0) + 1;
@@ -5035,7 +5076,7 @@ function senseMoveCandidate(bb) {
 
 function senseSafeNeighbor(bb) {
   return sense(bb, 'safeNeighbor', function () {
-    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy, bb.memory);
   });
 }
 
@@ -6400,7 +6441,11 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
         }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          // 技能激活占1帧无法移动：若敌正瞄准我且能开火，距离≤4格(2帧内到)则不激活
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         Action('do-overload-prep', function (bb) {
           bbSpeak(bb, '过载!');
@@ -6501,7 +6546,10 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           Guard('cloak-ready', function (bb) { return canCloak(bb.me); }),
           Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
           Guard('no-self-danger', function (bb) {
-            return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+            if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+            if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+                enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+            return true;
           }),
           Action('do-cloak-sneak', function (bb) {
             bbSpeak(bb, '潜行!');
@@ -6557,6 +6605,20 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           return enemyAimsAt(bb.myPos, bb.enemyTank, bb.game);
         }),
         Guard('close-range', function (bb) { return bb.distToEnemy <= mp.shieldCounterRange; }),
+        // 盾碎后反击可行性：盾挡第一发后我需要 turnDist 帧转向+开火，
+        // 如果敌人能在这之前补第二发打到我，开盾=白死
+        Guard('can-counter-after-shield', function (bb) {
+          var turnFrames = turnDistance(bb.myDir, bb.shotDir);
+          var myCounterFrames = turnFrames + 1; // 转向+开火，子弹还要飞
+          // 敌人下一发到达我的帧数：距离/弹速 (距离1时 = 1帧就到)
+          var enemyNextHitFrames = Math.ceil(bb.distToEnemy / BULLET_SPEED);
+          // 如果敌人能立刻再射(非过载单弹冷却约15帧不能连射)
+          if (enemyCanFireSoon(bb.enemy)) {
+            // 敌人补枪到达 <= 我反击出手，盾白开
+            if (enemyNextHitFrames <= myCounterFrames) return false;
+          }
+          return true;
+        }),
         Action('do-shield-counter', function (bb) {
           bbSpeak(bb, '盾击!');
           bbUseSkill(bb, 'shield');
@@ -6592,7 +6654,10 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('boost-ready', function (bb) { return canBoost(bb.me); }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         Action('do-boost-chase', function (bb) {
           bbSpeak(bb, '加速攻!');
@@ -6600,9 +6665,56 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         })
       ])
     );
+
+    // boost 甩狙：加速中 + 同行/列 + 只差90°转向 → turn+fire 同帧
+    children.push(
+      Sequence('boost-flick-shot', [
+        Guard('is-boosted', function (bb) {
+          return !!(bb.me.status && bb.me.status.boosted);
+        }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
+        Guard('flick-available', function (bb) {
+          var flickDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
+          if (!flickDir) return false;
+          if (turnDistance(bb.myDir, flickDir) !== 1) return false;
+          bb._cache._flickDir = flickDir;
+          return true;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-flick-shot', function (bb) {
+          bbSpeak(bb, '甩狙!');
+          bbTurnToward(bb, bb._cache._flickDir);
+          bbFire(bb);
+        })
+      ])
+    );
   }
 
   if (children.length === 0) return null;
+  // 眩晕期间抑制 debuff 技能(freeze/stun/poison/overload)：
+  // 技能本身不被逆转，但后续走位被随机化。对于 freeze：
+  //   - 已对准(myDir===shotDir)时冻了仍能下帧射(fire不被逆转) → 允许
+  //   - 没对准时冻了无法转向追杀 → 阻止
+  //   - combo-followup(子弹在飞)时 → 允许
+  // 对于 stun/poison/overload：统一阻止（需要后续精确操作才有价值）。
+  var debuffSkills = { freeze: 1, stun: 1, poison: 1, overload: 1 };
+  if (debuffSkills[mySkillType]) {
+    return Sequence('skill-attack-gate', [
+      Guard('not-stunned-or-aimed', function (bb) {
+        if (!(bb.me.status && bb.me.status.stunned)) return true;
+        // 被晕中的例外：
+        if (bb.memory && bb.memory._firedForFreeze === bb.frame - 1) return true;
+        if (mySkillType === 'freeze' && bb.shotDir && bb.myDir === bb.shotDir && bb.gunIsReady) return true;
+        return false;
+      }),
+      Selector('skill-attack', children)
+    ]);
+  }
   return Selector('skill-attack', children);
 }
 
@@ -6624,7 +6736,10 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         Guard('boost-ready', function (bb) { return canBoost(bb.me); }),
         Guard('star-distance', function (bb) { return bb.distToStar >= 3; }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         // 对传送敌开局：前15帧敌 tp 就绪时不抢星(传送瞬移必先到)；之后新星敌 tp 多半在 CD 照常 boost
         Guard('not-tp-opening', function (bb) {
@@ -6708,7 +6823,10 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           return enemyStarDist <= bb.distToStar + 2 + mp.skillStarContestDelta && bb.distToStar <= 6;
         }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         Action('do-cloak-star', function (bb) {
           bbSpeak(bb, '隐身星!');
@@ -7637,12 +7755,35 @@ function createMovementTree(profile, mySkillType) {
   children.push(
     Sequence('escape-ambush', [
       Guard('enemy-recently-seen', function (bb) {
-        return !!bb.memory.lastEnemyPos && !bb.enemyPos &&
-          (bb.frame - bb.memory.lastEnemySeenFrame <= 8) &&
-          !enemyIsCloakType(bb.enemy);
+        if (!bb.memory.lastEnemyPos || bb.enemyPos) return false;
+        if (enemyIsCloakType(bb.enemy)) return false;
+        if (bb.frame - bb.memory.lastEnemySeenFrame <= 8) return true;
+        // bushHeatmap 高置信条目存在时延长窗口（蹲草敌可能持续数十帧不动）
+        var hm = bb.memory.bushHeatmap;
+        if (hm) {
+          for (var k in hm) {
+            if (hm.hasOwnProperty(k) && hm[k].score >= 50) return true;
+          }
+        }
+        return false;
       }),
       Guard('ambush-step', function (bb) {
-        var step = escapeAmbushLine(bb.myPos, bb.memory.lastEnemyPos, bb.game, bb.enemyBullets);
+        // 优先用 lastEnemyPos；过时时改用 bushHeatmap 中最高分位置
+        var dangerPos = bb.memory.lastEnemyPos;
+        if (bb.frame - bb.memory.lastEnemySeenFrame > 8) {
+          var hm = bb.memory.bushHeatmap;
+          var bestK = null, bestS = 0;
+          if (hm) {
+            for (var k in hm) {
+              if (hm.hasOwnProperty(k) && hm[k].score > bestS) { bestS = hm[k].score; bestK = k; }
+            }
+          }
+          if (bestK) {
+            var parts = bestK.split(',');
+            dangerPos = [parseInt(parts[0]), parseInt(parts[1])];
+          }
+        }
+        var step = escapeAmbushLine(bb.myPos, dangerPos, bb.game, bb.enemyBullets);
         if (!step) return false;
         bb._cache._ambushStep = step;
         return true;
@@ -7661,6 +7802,14 @@ function createMovementTree(profile, mySkillType) {
         if (!vt) return false;
         var step = nextStepToward(bb.myPos, vt, bb.game, null);
         if (!step) return false;
+        var standoff = safeStandoffDistance(bb.enemy);
+        if (!isSafeStep(step, bb.myPos, bb.enemyPos, bb.game,
+            bb.enemy, standoff, false, bb.enemyBullets, bb.memory)) {
+          step = safestNonDeadEndStep(bb.myPos, bb.game, bb.enemyPos, bb.enemyBullets);
+          if (!step) return false;
+          if (!isSafeStep(step, bb.myPos, bb.enemyPos, bb.game,
+              bb.enemy, standoff, false, bb.enemyBullets, bb.memory)) return false;
+        }
         bb._cache._patrolStep = step;
         return true;
       }),
@@ -7704,6 +7853,8 @@ function createMovementTree(profile, mySkillType) {
         if (anyBulletThreatens(bullets, p, bb.game)) continue;
         var score = distanceFromEdges(p, bb.game);
         if (bb.enemyPos) score += manhattan(p, bb.enemyPos);
+        if (!bb.enemyPos && bb.memory &&
+            stepIntoHiddenEnemyFireLine(p, bb.myPos, bb.game, bb.memory, false)) score -= 80;
         if (score > bestScore) { bestScore = score; best = p; }
       }
       if (best) { bbDirectGo(bb, best); return; }

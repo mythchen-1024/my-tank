@@ -1703,7 +1703,8 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
  */
 function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank) return null;
-  if (!enemyAimsAt(me.tank.position, enemyTank, game)) return null;
+  var isDirectAim = enemyAimsAt(me.tank.position, enemyTank, game);
+  if (!isDirectAim && !enemyBoostFlickThreat(me.tank.position, enemy, enemyTank, game)) return null;
   // 隐身豁免：草丛中敌人看不见我，炮口朝向不是真正的瞄准，无需空躲。
   // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
   // 近距反豁免的例外：枪就绪 + 有射击线 → 草丛先手优势，应射击而非出草逃跑
@@ -1714,7 +1715,8 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     if (gunReady(me) && clearShotDirection(me.tank.position, enemyPos, game)) return null;
   }
   // 敌人本帧无法开火（已有在途子弹且未过载，或被开火锁定）则预瞄无威胁，不必空躲
-  if (!enemyCanFireSoon(enemy)) return null;
+  // 注：boost flick 分支已在上面的 enemyBoostFlickThreat 中做了 enemyCanFireSoon 检查
+  if (isDirectAim && !enemyCanFireSoon(enemy)) return null;
   // 抢星竞速豁免：敌人只是预瞄、没有实弹在途时，若这颗星我更可能先到，则继续抢星不空躲
   if (shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game)) return null;
   // 对射豁免：我也能瞄到敌人、无实弹在途、且对射不慢于敌人(myDuel<=enemyDuel) -> 不在此空躲。
@@ -1744,6 +1746,7 @@ function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
     if (enemyAimsAt(p, enemyTank, game)) continue; // 必须脱离炮线
+    if (enemyBoostFlickThreat(p, enemy, enemyTank, game)) continue; // 脱离甩狙线
     if (anyBulletThreatens(enemyBullets || [], p, game)) continue; // 别躲进现有弹道
     if (predictedOverloadThreatens(enemy, p, game)) continue;      // 别躲进过载双弹覆盖带
 

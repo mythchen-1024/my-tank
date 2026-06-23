@@ -39,9 +39,15 @@ DEFAULT_ROUNDS = 20
 DEFAULT_DELAY = 0.5
 
 # ── 在此处预配置坦克 key，可自由增删 ──────────────────────────────────────────
+# myth-survivor agtk_cce872653e5d5b90f76db3ac370a2d2809b6 冰冻
+# myth-tank006 agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4 加速
+# myth-tank007 agtk_97f38c3f2cd8666b86ba86d407a7c758bc24 护盾
+# myth-tank008 agtk_97cd318efe1ebf6a28908e6199da68ccf9ce 超载
 TANK_KEYS = [
     # {"key": "agtk_cce872653e5d5b90f76db3ac370a2d2809b6", "name": "myth-survivor"},
-    {"key": "agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4", "name": "myth-tank006"}
+    # {"key": "agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4", "name": "myth-tank006"},
+    # {"key": "agtk_97f38c3f2cd8666b86ba86d407a7c758bc24", "name": "myth-tank007"},
+    {"key": "agtk_97cd318efe1ebf6a28908e6199da68ccf9ce", "name": "myth-tank008"}
 ]
 # ─────────────────────────────────────────────────────────────────────────────
 
