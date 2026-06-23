@@ -120,6 +120,17 @@ function freezeKillsAt(cell, enemyPos, game) {
   return manhattan(enemyPos, cell) <= 2 * FREEZE_DURATION;
 }
 
+/**
+ * stun 流敌人"被晕致死"判定：同线(无墙) + dist ≤ 4。
+ * stun 持续 6 帧(50%反向)，期间敌即时开火子弹 2 帧到达(dist≤4)，受害者无法可靠闪避。
+ * 对 shield 尤其致命：stun 下 shield 立即过期，失去唯一防御手段。
+ */
+function stunKillsAt(cell, enemyPos, game) {
+  if (!enemyPos) return false;
+  if (!clearShotDirection(enemyPos, cell, game)) return false;
+  return manhattan(enemyPos, cell) <= 4;
+}
+
 
 /**
  * cell 是否落在过载敌人的"双弹覆盖带"内：敌人所在行/列，或相邻 ±1 行/列，且在近距(maxDist)内。
@@ -1167,6 +1178,8 @@ function stepEntersKillZone(myPos, next, enemyPos, game, enemy, standoff) {
   // freeze 流：与敌同行/列、无墙、曼哈顿<=4 时被冻 2 帧期间会被对准击杀(mat_0Wmx d=1 被冻点死) -> 死区。
   // 不同线/有墙(freezeKillsAt 内 clearShotDirection 判定)则不算，避免对开阔地相邻列防过头。
   if (freezeType && freezeKillsAt(next, enemyPos, game)) return true;
+  // stun 流：同线 dist<=4 被晕6帧 无法可靠闪避(mat_7zpz dist2同线被晕→盾失效→双杀)。
+  if (enemyIsStunType(enemy) && stunKillsAt(next, enemyPos, game)) return true;
   // 双弹威胁/overload流：standoff 内 + 落在双弹覆盖带(同行/列或相邻±1) + 无法一步跨出覆盖带 -> 死区
   // (mat_73I 走廊夹死 / mat_4YF 错位副弹列逗留)。overload流即使冷却中也算——敌会突然过载。
   if ((doubleLane || overloadType) && d < standoff && inDoubleLaneBand(enemyPos, next, standoff)) {

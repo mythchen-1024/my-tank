@@ -579,6 +579,9 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
     children.push(
       Sequence('shield-counter', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('not-stunned', function (bb) {
+          return !(bb.me.status && bb.me.status.stunned);
+        }),
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
@@ -827,8 +830,18 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
     children.push(
       Sequence('shield-star-rush', [
         Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('not-stunned', function (bb) {
+          return !(bb.me.status && bb.me.status.stunned);
+        }),
         Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
         Guard('star-close', function (bb) { return bb.distToStar <= 4; }),
+        // stun 敌人同线近距 + stun 就绪 → 不冲（stun 先手使盾失效）
+        Guard('no-stun-preempt', function (bb) {
+          if (!bb.enemyTank || !enemyIsStunType(bb.enemy)) return true;
+          if (bb.enemy.skill && bb.enemy.skill.remainingCooldownFrames > 0) return true;
+          if (!clearShotDirection(bb.enemyPos, bb.myPos, bb.game)) return true;
+          return bb.distToEnemy > 5;
+        }),
         // 只在有危险时才用盾（敌瞄着星或有子弹威胁路线）
         Guard('star-dangerous', function (bb) {
           if (!bb.enemyTank) return false;
