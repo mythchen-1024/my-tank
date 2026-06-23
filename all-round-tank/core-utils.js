@@ -1233,6 +1233,49 @@ function canShieldSkill(me) {
 }
 
 /**
+ * 过载错位射击方向检测：利用副弹固定走 +1 偏移车道的特性，
+ * 当敌人恰好在 +1 偏移线上时，返回应射击的方向（副弹命中）。
+ *
+ * 过载副弹规则（由 replay 逆向证实）：
+ *   水平射击(left/right)：副弹走 y+1 车道
+ *   垂直射击(up/down)：副弹走 x+1 车道
+ *
+ * 场景示例：我[5,5] 敌[10,6] → dy=1 → 火力方向 right → 副弹沿 y=6 命中敌人
+ *          我[5,5] 敌[6,10] → dx=1 → 火力方向 down → 副弹沿 x=6 命中敌人
+ *
+ * @returns {string|null} 射击方向（副弹可命中），或 null（不满足错位条件）
+ */
+function overloadOffsetShotDir(myPos, enemyPos, game) {
+  if (!myPos || !enemyPos) return null;
+  var dx = enemyPos[0] - myPos[0];
+  var dy = enemyPos[1] - myPos[1];
+
+  // 水平射击时副弹走 y+1 车道 → 敌人须在 myY+1 行
+  if (dy === 1 && dx !== 0) {
+    var start = [myPos[0], myPos[1] + 1]; // 副弹起点
+    var t = tileAt(game, start);
+    if (t !== 'x' && t !== 'm') {
+      if (clearBetween(start, enemyPos, game)) {
+        return dx > 0 ? 'right' : 'left';
+      }
+    }
+  }
+
+  // 垂直射击时副弹走 x+1 车道 → 敌人须在 myX+1 列
+  if (dx === 1 && dy !== 0) {
+    var start2 = [myPos[0] + 1, myPos[1]]; // 副弹起点
+    var t2 = tileAt(game, start2);
+    if (t2 !== 'x' && t2 !== 'm') {
+      if (clearBetween(start2, enemyPos, game)) {
+        return dy > 0 ? 'down' : 'up';
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * 判断 boost go() 前方2格是否安全可通行
  */
 function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {

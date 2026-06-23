@@ -10,7 +10,7 @@
 
 // ---- 硬生存子树（永远最高优先级，不受 profile 影响） ----
 
-function createHardSurvivalTree(skillEscapeNode) {
+function createHardSurvivalTree(shieldNode, deferredSkillNode) {
   var children = [
 
     // 1. 对射先射后走：来袭子弹 + 能反击 + 开火后仍来得及躲
@@ -41,9 +41,9 @@ function createHardSurvivalTree(skillEscapeNode) {
     ]),
   ];
 
-  // 3.5 技能逃生：传送不可用时，用本技能保命（优先于 two-step）
-  if (skillEscapeNode) {
-    children.push(skillEscapeNode);
+  // 3.5 护盾挡弹：Shield 能真正挡住来袭子弹，优先于物理挣扎
+  if (shieldNode) {
+    children.push(shieldNode);
   }
 
   children.push(
@@ -61,8 +61,15 @@ function createHardSurvivalTree(skillEscapeNode) {
       Action('do-desperate', function (bb) {
         bbMoveToward(bb, senseDesperateDodge(bb));
       })
-    ]),
+    ])
+  );
 
+  // 5.5 其他技能逃生：物理逃跑全失败后，用技能阻止敌人继续追杀（不能挡当前子弹）
+  if (deferredSkillNode) {
+    children.push(deferredSkillNode);
+  }
+
+  children.push(
     // 6. 炸弹躲避：在爆炸范围内且即将引爆时逃离
     Sequence('bomb-dodge', [
       Guard('has-bomb-threat', function (bb) { return !!senseBombThreat(bb); }),

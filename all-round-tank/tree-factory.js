@@ -12,9 +12,10 @@
 //   │   ├── counter-shoot（对射先射后走）
 //   │   ├── bullet-dodge（常规弹道躲避）
 //   │   ├── escape-teleport（传送逃生，仅传送技能）
-//   │   ├── 【技能逃生】shield-block/freeze-defense/stun-escape/cloak-escape/boost-escape/poison-escape
+//   │   ├── shield-block（开盾挡弹，仅shield — 真能挡子弹）
 //   │   ├── two-step-escape（两步脱困）
 //   │   ├── desperate-dodge（绝境横移）
+//   │   ├── 【延迟技能逃生】cloak/boost（有真实续命价值；debuff留给进攻/抢星）
 //   │   └── bomb-dodge（炸弹躲避）
 //   ├── [传送] 传送补吃星（仅传送技能）
 //   ├── [Profile] 软生存（防瞄/近距规避，敏感度可调）
@@ -40,8 +41,9 @@ function buildBehaviorTree(profile, mySkillType) {
 
   // ═══════ 子树构建 ═══════
   var enemySkillType = (profile && profile.skillType) || 'stun';
-  var skillSurvival  = createSkillSurvivalNodes(mySkillType);
-  var hardSurvival   = createHardSurvivalTree(skillSurvival);
+  var shieldBlock    = createShieldBlockNode(mySkillType);
+  var deferredEscape = createDeferredSkillEscape(mySkillType);
+  var hardSurvival   = createHardSurvivalTree(shieldBlock, deferredEscape);
   var starGrab       = (mySkillType === 'teleport') ? createStarGrabNode() : null;
   var softSurvival   = createSoftSurvivalTree(profile);
   var skillAttack    = createSkillAttackNodes(mySkillType, enemySkillType);

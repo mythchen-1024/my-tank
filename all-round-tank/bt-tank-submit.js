@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-23T02:19:00.994Z
+// 构建时间: 2026-06-23T03:32:37.153Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -1236,6 +1236,49 @@ function canShieldSkill(me) {
   if (getMySkillType(me) !== 'shield') return false;
   if (me.status && me.status.shielded) return false;
   return true;
+}
+
+/**
+ * 过载错位射击方向检测：利用副弹固定走 +1 偏移车道的特性，
+ * 当敌人恰好在 +1 偏移线上时，返回应射击的方向（副弹命中）。
+ *
+ * 过载副弹规则（由 replay 逆向证实）：
+ *   水平射击(left/right)：副弹走 y+1 车道
+ *   垂直射击(up/down)：副弹走 x+1 车道
+ *
+ * 场景示例：我[5,5] 敌[10,6] → dy=1 → 火力方向 right → 副弹沿 y=6 命中敌人
+ *          我[5,5] 敌[6,10] → dx=1 → 火力方向 down → 副弹沿 x=6 命中敌人
+ *
+ * @returns {string|null} 射击方向（副弹可命中），或 null（不满足错位条件）
+ */
+function overloadOffsetShotDir(myPos, enemyPos, game) {
+  if (!myPos || !enemyPos) return null;
+  var dx = enemyPos[0] - myPos[0];
+  var dy = enemyPos[1] - myPos[1];
+
+  // 水平射击时副弹走 y+1 车道 → 敌人须在 myY+1 行
+  if (dy === 1 && dx !== 0) {
+    var start = [myPos[0], myPos[1] + 1]; // 副弹起点
+    var t = tileAt(game, start);
+    if (t !== 'x' && t !== 'm') {
+      if (clearBetween(start, enemyPos, game)) {
+        return dx > 0 ? 'right' : 'left';
+      }
+    }
+  }
+
+  // 垂直射击时副弹走 x+1 车道 → 敌人须在 myX+1 列
+  if (dx === 1 && dy !== 0) {
+    var start2 = [myPos[0] + 1, myPos[1]]; // 副弹起点
+    var t2 = tileAt(game, start2);
+    if (t2 !== 'x' && t2 !== 'm') {
+      if (clearBetween(start2, enemyPos, game)) {
+        return dy > 0 ? 'down' : 'up';
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -5456,7 +5499,7 @@ function buildProfile(bb) {
 
 // ---- 硬生存子树（永远最高优先级，不受 profile 影响） ----
 
-function createHardSurvivalTree(skillEscapeNode) {
+function createHardSurvivalTree(shieldNode, deferredSkillNode) {
   var children = [
 
     // 1. 对射先射后走：来袭子弹 + 能反击 + 开火后仍来得及躲
@@ -5487,9 +5530,9 @@ function createHardSurvivalTree(skillEscapeNode) {
     ]),
   ];
 
-  // 3.5 技能逃生：传送不可用时，用本技能保命（优先于 two-step）
-  if (skillEscapeNode) {
-    children.push(skillEscapeNode);
+  // 3.5 护盾挡弹：Shield 能真正挡住来袭子弹，优先于物理挣扎
+  if (shieldNode) {
+    children.push(shieldNode);
   }
 
   children.push(
@@ -5507,8 +5550,15 @@ function createHardSurvivalTree(skillEscapeNode) {
       Action('do-desperate', function (bb) {
         bbMoveToward(bb, senseDesperateDodge(bb));
       })
-    ]),
+    ])
+  );
 
+  // 5.5 其他技能逃生：物理逃跑全失败后，用技能阻止敌人继续追杀（不能挡当前子弹）
+  if (deferredSkillNode) {
+    children.push(deferredSkillNode);
+  }
+
+  children.push(
     // 6. 炸弹躲避：在爆炸范围内且即将引爆时逃离
     Sequence('bomb-dodge', [
       Guard('has-bomb-threat', function (bb) { return !!senseBombThreat(bb); }),
@@ -6010,67 +6060,49 @@ function getSkillMatchupParams(mySkill, enemySkill) {
 }
 
 // ================================================================
-// 1. 技能逃生节点 — 插入 hard-survival 的 escape-teleport 之后
+// 1. 技能逃生节点 — 分两类：
+//    (a) 即时挡弹：Shield 开盾真能挡子弹 → 放在 escape-teleport 之后、two-step 之前
+//    (b) 延迟反制：其他技能不能阻止已发射子弹 → 放在 desperate-dodge 之后
+//        （物理逃跑全失败再用技能，阻止敌人追杀/补枪）
 // ================================================================
 
-function createSkillSurvivalNodes(mySkillType) {
+/**
+ * 护盾挡弹节点（仅 shield 技能）。
+ * 护盾激活后立即生效，能真正挡住来袭子弹，所以优先于 two-step。
+ */
+function createShieldBlockNode(mySkillType) {
+  if (mySkillType !== 'shield') return null;
+  return Sequence('shield-block', [
+    Guard('has-bullet-threat', function (bb) {
+      return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+    }),
+    Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
+    Guard('no-escape-tp', function (bb) { return !senseEscapeTeleport(bb); }),
+    Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
+    Action('do-shield-block', function (bb) {
+      bbSpeak(bb, '挡弹!');
+      bbUseSkill(bb, 'shield');
+    })
+  ]);
+}
+
+/**
+ * 延迟技能逃生节点（仅 cloak / boost）。
+ * 物理逃跑（two-step/desperate）全失败后的最后手段。
+ *
+ * 设计原则：
+ *   freeze/stun/poison 等 debuff 技能不放在防御端——
+ *   它们不能阻止已发射子弹，防御使用=白烧 25~32 帧冷却，
+ *   不如留给 freeze-kill/stun-kill/poison-fire（进攻击杀）
+ *   或 freeze-star/stun-star/poison-star（抢星阻敌），收益远大于防御。
+ *
+ *   cloak：隐身后敌方丢失目标，阻止后续追射，有真实续命价值。
+ *   boost：下帧 go() 走2格脱离，有真实逃跑价值。
+ */
+function createDeferredSkillEscape(mySkillType) {
   var children = [];
 
-  // ---- Shield: 子弹来袭 + 无法移动躲开 → 开盾挡弹 ----
-  if (mySkillType === 'shield') {
-    children.push(
-      Sequence('shield-block', [
-        Guard('has-bullet-threat', function (bb) {
-          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
-        }),
-        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
-        Guard('no-escape-tp', function (bb) { return !senseEscapeTeleport(bb); }),
-        Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
-        Action('do-shield-block', function (bb) {
-          bbSpeak(bb, '挡弹!');
-          bbUseSkill(bb, 'shield');
-        })
-      ])
-    );
-  }
-
-  // ---- Freeze: 被追/被夹 → 冰冻敌人争取逃跑窗口 ----
-  if (mySkillType === 'freeze') {
-    children.push(
-      Sequence('freeze-defense', [
-        Guard('has-bullet-threat', function (bb) {
-          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
-        }),
-        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
-        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
-        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
-        Action('do-freeze-defense', function (bb) {
-          bbSpeak(bb, '冰冻!');
-          bbUseSkill(bb, 'freeze');
-        })
-      ])
-    );
-  }
-
-  // ---- Stun: 被追/被夹 → 眩晕敌人后跑路 ----
-  if (mySkillType === 'stun') {
-    children.push(
-      Sequence('stun-escape', [
-        Guard('has-bullet-threat', function (bb) {
-          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
-        }),
-        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
-        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
-        Guard('stun-ready', function (bb) { return canStun(bb.me, bb.enemy); }),
-        Action('do-stun-escape', function (bb) {
-          bbSpeak(bb, '眩晕!');
-          bbUseSkill(bb, 'stun');
-        })
-      ])
-    );
-  }
-
-  // ---- Cloak: 被夹/无法躲 → 隐身后敌方丢失目标 ----
+  // ---- Cloak: 物理逃跑失败 → 隐身，敌方丢失目标不再追射 ----
   if (mySkillType === 'cloak') {
     children.push(
       Sequence('cloak-escape', [
@@ -6087,7 +6119,7 @@ function createSkillSurvivalNodes(mySkillType) {
     );
   }
 
-  // ---- Boost: 被追/被夹 → 加速逃离（双格移动拉开距离）----
+  // ---- Boost: 物理逃跑失败 → 加速，下帧 go() 走2格脱离 ----
   if (mySkillType === 'boost') {
     children.push(
       Sequence('boost-escape', [
@@ -6099,37 +6131,13 @@ function createSkillSurvivalNodes(mySkillType) {
         Action('do-boost-escape', function (bb) {
           bbSpeak(bb, '加速逃!');
           bbUseSkill(bb, 'boost');
-          // 加速后下帧 go() 会走2格
-        })
-      ])
-    );
-  }
-
-  // ---- Poison: 被追 + 无法拉开 → 下毒减速追击者 ----
-  if (mySkillType === 'poison') {
-    children.push(
-      Sequence('poison-escape', [
-        Guard('enemy-close-chasing', function (bb) {
-          if (!bb.enemyTank) return false;
-          if (bb.distToEnemy > 4) return false;
-          // 敌人面朝我方向
-          return !!bb.shotDir || enemyAimsAt(bb.myPos, bb.enemyTank, bb.game);
-        }),
-        Guard('has-bullet-threat', function (bb) {
-          return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
-        }),
-        Guard('no-dodge', function (bb) { return !senseBulletDodge(bb); }),
-        Guard('poison-ready', function (bb) { return canPoison(bb.me, bb.enemy); }),
-        Action('do-poison-escape', function (bb) {
-          bbSpeak(bb, '下毒!');
-          bbUseSkill(bb, 'poison');
         })
       ])
     );
   }
 
   if (children.length === 0) return null;
-  return Selector('skill-survival', children);
+  return Selector('deferred-skill-escape', children);
 }
 
 
@@ -6270,6 +6278,8 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         // vs 护盾等需要已对准才过载（避免过载后10帧内找不到射线浪费）
         Guard('has-or-near-shot', function (bb) {
           if (bb.shotDir) return true;
+          // 错位线也算"有射线"：副弹可命中
+          if (overloadOffsetShotDir(bb.myPos, bb.enemyPos, bb.game)) return true;
           if (mp.overloadRequireShot) return false; // 严格模式：必须有射线
           var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
           var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
@@ -6290,7 +6300,7 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
       ])
     );
 
-    // 过载后续：已过载 + 有射线 → 立即开火
+    // 过载后续：已过载 + 有射线 → 立即开火（主弹+副弹都命中）
     children.push(
       Sequence('overload-fire', [
         Guard('is-overloaded', function (bb) {
@@ -6301,6 +6311,28 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Action('do-overload-fire', function (bb) {
           if (bb.myDir === bb.shotDir) { bbSpeak(bb, '双弹!'); bbFire(bb); }
           else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+
+    // 过载错位射击：已过载 + 敌在 +1 偏移线 → 副弹命中（主弹走空，副弹打人）
+    // 利用3格宽弹道优势：敌人以为不同线安全，副弹恰好覆盖
+    children.push(
+      Sequence('overload-offset-fire', [
+        Guard('is-overloaded', function (bb) {
+          return !!(bb.me.status && bb.me.status.overloaded);
+        }),
+        Guard('no-direct-shot', function (bb) { return !bb.shotDir; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('has-offset-shot', function (bb) {
+          bb._overloadOffsetDir = overloadOffsetShotDir(bb.myPos, bb.enemyPos, bb.game);
+          return !!bb._overloadOffsetDir;
+        }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Action('do-overload-offset', function (bb) {
+          var dir = bb._overloadOffsetDir;
+          if (bb.myDir === dir) { bbSpeak(bb, '错位双弹!'); bbFire(bb); }
+          else bbTurnToward(bb, dir);
         })
       ])
     );
@@ -7453,9 +7485,10 @@ function createMovementTree(profile, mySkillType) {
 //   │   ├── counter-shoot（对射先射后走）
 //   │   ├── bullet-dodge（常规弹道躲避）
 //   │   ├── escape-teleport（传送逃生，仅传送技能）
-//   │   ├── 【技能逃生】shield-block/freeze-defense/stun-escape/cloak-escape/boost-escape/poison-escape
+//   │   ├── shield-block（开盾挡弹，仅shield — 真能挡子弹）
 //   │   ├── two-step-escape（两步脱困）
 //   │   ├── desperate-dodge（绝境横移）
+//   │   ├── 【延迟技能逃生】cloak/boost（有真实续命价值；debuff留给进攻/抢星）
 //   │   └── bomb-dodge（炸弹躲避）
 //   ├── [传送] 传送补吃星（仅传送技能）
 //   ├── [Profile] 软生存（防瞄/近距规避，敏感度可调）
@@ -7481,8 +7514,9 @@ function buildBehaviorTree(profile, mySkillType) {
 
   // ═══════ 子树构建 ═══════
   var enemySkillType = (profile && profile.skillType) || 'stun';
-  var skillSurvival  = createSkillSurvivalNodes(mySkillType);
-  var hardSurvival   = createHardSurvivalTree(skillSurvival);
+  var shieldBlock    = createShieldBlockNode(mySkillType);
+  var deferredEscape = createDeferredSkillEscape(mySkillType);
+  var hardSurvival   = createHardSurvivalTree(shieldBlock, deferredEscape);
   var starGrab       = (mySkillType === 'teleport') ? createStarGrabNode() : null;
   var softSurvival   = createSoftSurvivalTree(profile);
   var skillAttack    = createSkillAttackNodes(mySkillType, enemySkillType);
