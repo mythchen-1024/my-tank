@@ -630,6 +630,10 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
       Sequence('boost-chase-attack', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
+        Guard('not-leading-with-star', function (bb) {
+          if (bb.isWinning && bb.star) return false;
+          return true;
+        }),
         Guard('medium-range', function (bb) {
           return bb.distToEnemy <= mp.boostChaseRange && bb.distToEnemy >= 3;
         }),

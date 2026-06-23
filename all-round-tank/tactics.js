@@ -1200,10 +1200,11 @@ function wallBlocksEnemyShot(next, enemyPos, game) {
 function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
   if (!memory) return false;
   var frame = (game && game.frames) || 0;
+  var stuckRelax = (memory.stuckFrames || 0) >= 4;
 
   // 来源1: lastEnemyPos（12帧内有效）
   if (memory.lastEnemyPos && frame - memory.lastEnemySeenFrame <= 12) {
-    if (_hiddenFireLineBlocked(memory.lastEnemyPos, next, myPos, game, isStar)) return true;
+    if (_hiddenFireLineBlocked(memory.lastEnemyPos, next, myPos, game, isStar, stuckRelax)) return true;
     // 来源1b: 沿敌最后朝向外推的预测位置（隐身/消失后可能继续前进）
     var age = frame - memory.lastEnemySeenFrame;
     if (memory.lastEnemyDir && age >= 2 && age <= 6) {
@@ -1213,7 +1214,7 @@ function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
       for (var step = 1; step <= Math.min(age, 4); step++) {
         var pred = [memory.lastEnemyPos[0] + dx * step, memory.lastEnemyPos[1] + dy * step];
         if (!isPassable(game, pred, null)) break;
-        if (_hiddenFireLineBlocked(pred, next, myPos, game, isStar)) return true;
+        if (_hiddenFireLineBlocked(pred, next, myPos, game, isStar, stuckRelax)) return true;
       }
     }
   }
@@ -1225,19 +1226,34 @@ function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
       if (!hm.hasOwnProperty(k) || hm[k].score < 50) continue;
       var parts = k.split(',');
       var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
-      if (_hiddenFireLineBlocked(bushPos, next, myPos, game, isStar)) return true;
+      if (_hiddenFireLineBlocked(bushPos, next, myPos, game, isStar, stuckRelax)) return true;
     }
   }
 
   return false;
 }
 
-function _hiddenFireLineBlocked(dangerPos, next, myPos, game, isStar) {
+function _hiddenFireLineBlocked(dangerPos, next, myPos, game, isStar, stuckRelax) {
   if (clearShotDirection(dangerPos, myPos, game)) return false;
   if (!clearShotDirection(dangerPos, next, game)) return false;
   var dist = manhattan(dangerPos, next);
+  if (stuckRelax) {
+    if (dist <= 2) return true;
+    if (!_hasEscapeNeighbor(next, dangerPos, game)) return true;
+    return false;
+  }
   if (dist <= 4) return true;
   if (dist <= 6 && !isStar) return true;
+  return false;
+}
+
+function _hasEscapeNeighbor(pos, dangerPos, game) {
+  for (var i = 0; i < DIRS.length; i++) {
+    var p = [pos[0] + DIRS[i].dx, pos[1] + DIRS[i].dy];
+    if (!isPassable(game, p, null)) continue;
+    if (clearShotDirection(dangerPos, p, game)) continue;
+    return true;
+  }
   return false;
 }
 
