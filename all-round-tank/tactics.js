@@ -12,6 +12,8 @@
  */
 function canShootThenEvadeShieldCounter(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyHasShieldSkill(enemy)) return true;
+  // 盾在冷却中 → 我的子弹不会被吸收 → 直射必命中（至少换命），无需侧移避反
+  if (enemy && enemy.skill && enemy.skill.remainingCooldownFrames > 0) return true;
   if (!enemyTank || !enemyPos) return false;
   if (!gunReady(me)) return false;
 
