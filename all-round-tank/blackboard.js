@@ -166,6 +166,12 @@ function senseDesperateDodge(bb) {
   });
 }
 
+function senseBoostThroughDodge(bb) {
+  return sense(bb, 'boostThroughDodge', function () {
+    return findBoostThroughDodge(bb.me, bb.enemyBullets, bb.game, bb.enemyPos, bb.enemyTank);
+  });
+}
+
 // ---- 草丛蹲守传感器 ----
 
 function senseBushCamperDodge(bb) {

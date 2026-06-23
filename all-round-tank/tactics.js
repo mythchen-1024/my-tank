@@ -1405,8 +1405,40 @@ function findBulletDodge(me, enemy, game, enemyPos) {
 
 
 /**
- * 时序躲避存在性判定：从 myPos(车头 myDir) 面对给定子弹集，是否存在"来得及"脱离的相邻格。
- * 完全复用 findBulletDodge 的时序铁律（朝向即脱离 incoming>=1；需转向 incoming>=3 才不会在转向帧被命中），
+ * boost 穿弹闪避：已处于加速状态 + 当前格有子弹威胁时，
+ * 利用 boost 2格跳跃（中间格不碰撞）穿过子弹到安全终点。
+ * 返回 { dir, target, turns } 或 null。
+ */
+function findBoostThroughDodge(me, enemyBullets, game, enemyPos, enemyTank) {
+  if (!(me.status && me.status.boosted)) return null;
+  var myPos = me.tank.position;
+  var myDir = me.tank.direction;
+  if (!anyBulletThreatens(enemyBullets, myPos, game)) return null;
+
+  var best = null, bestScore = -9999;
+  for (var i = 0; i < DIRS.length; i++) {
+    var d = DIRS[i];
+    var dir = d.name;
+    var p1 = [myPos[0] + d.dx, myPos[1] + d.dy];
+    var p2 = [myPos[0] + d.dx * 2, myPos[1] + d.dy * 2];
+    if (!isPassable(game, p1, enemyPos)) continue;
+    if (!isPassable(game, p2, enemyPos)) continue;
+    if (stepIntoBulletPath(enemyBullets, p2, game)) continue;
+    if (anyBulletThreatens(enemyBullets, p2, game)) continue;
+    var turns = turnDistance(myDir, dir);
+    if (turns > 1) continue;
+
+    var score = 0;
+    if (turns === 0) score += 50;
+    if (enemyPos && clearShotDirection(p2, enemyPos, game)) score += 80;
+    if (game.star) score += (manhattan(myPos, game.star) - manhattan(p2, game.star)) * 2;
+    score += distanceFromEdges(p2, game) * 2;
+    score += openNeighborCount(p2, game) * 5;
+
+    if (score > bestScore) { bestScore = score; best = { dir: dir, target: p2, turns: turns }; }
+  }
+  return best;
+}
  * 但只返回布尔值，供"先射后走"在开火预演后复用——子弹集为推进过的快照即可。
  * 子弹集已含过载配对弹(collectEnemyBullets 推断)，因此多子弹/双弹一并纳入时序校验。
  */

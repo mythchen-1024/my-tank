@@ -39,7 +39,7 @@ BASE_URL = "https://agentank.ai"
 # myth-tank008 agtk_97cd318efe1ebf6a28908e6199da68ccf9ce 超载
 TANK_PROFILES = {
     "bt": {  # 默认：行为树坦克 myth-survivor
-        "key": "agtk_97cd318efe1ebf6a28908e6199da68ccf9ce",
+        "key": "agtk_cce872653e5d5b90f76db3ac370a2d2809b6",
         "file": "bt-tank-submit.js",
         "branch": "main",
         "build_cmd": ["node", "build.js"],

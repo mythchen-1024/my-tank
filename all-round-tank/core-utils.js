@@ -1300,11 +1300,8 @@ function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
   var p1 = [myPos[0] + dd[0], myPos[1] + dd[1]];
   var p2 = [myPos[0] + dd[0] * 2, myPos[1] + dd[1] * 2];
   if (!isPassable(game, p1, enemyPos)) return false;
-  if (!isPassable(game, p2, enemyPos)) {
-    if (stepIntoBulletPath(enemyBullets, p1, game)) return false;
-    return true;
-  }
-  if (stepIntoBulletPath(enemyBullets, p1, game)) return false;
+  // p1 不检查子弹：boost 跳跃跳过中间格，引擎不碰撞（坦克先移动到 p2，子弹后结算）
+  if (!isPassable(game, p2, enemyPos)) return true;
   if (stepIntoBulletPath(enemyBullets, p2, game)) return false;
   return true;
 }

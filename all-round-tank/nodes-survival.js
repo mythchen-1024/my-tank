@@ -31,6 +31,24 @@ function createHardSurvivalTree(shieldNode, deferredSkillNode) {
       })
     ]),
 
+    // 2.5 boost 穿弹闪避：已加速 + 常规闪避失败 → go 2格跳过中间子弹到安全终点
+    Sequence('boost-through-dodge', [
+      Guard('is-boosted', function (bb) {
+        return !!(bb.me.status && bb.me.status.boosted);
+      }),
+      Guard('no-normal-dodge', function (bb) { return !senseBulletDodge(bb); }),
+      Guard('has-boost-through', function (bb) { return !!senseBoostThroughDodge(bb); }),
+      Action('do-boost-through', function (bb) {
+        var plan = senseBoostThroughDodge(bb);
+        if (plan.turns === 0) {
+          bb.me.go();
+        } else {
+          bbTurnToward(bb, plan.dir);
+          bb.me.go();
+        }
+      })
+    ]),
+
     // 3. 紧急传送逃生：常规移动躲不开时传送到安全落点
     Sequence('escape-teleport', [
       Guard('no-dodge-available', function (bb) { return !senseBulletDodge(bb); }),
