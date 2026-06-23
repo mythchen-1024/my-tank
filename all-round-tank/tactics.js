@@ -1439,6 +1439,11 @@ function findBoostThroughDodge(me, enemyBullets, game, enemyPos, enemyTank) {
   }
   return best;
 }
+
+
+/**
+ * 时序躲避存在性判定：从 myPos(车头 myDir) 面对给定子弹集，是否存在"来得及"脱离的相邻格。
+ * 完全复用 findBulletDodge 的时序铁律（朝向即脱离 incoming>=1；需转向 incoming>=3 才不会在转向帧被命中），
  * 但只返回布尔值，供"先射后走"在开火预演后复用——子弹集为推进过的快照即可。
  * 子弹集已含过载配对弹(collectEnemyBullets 推断)，因此多子弹/双弹一并纳入时序校验。
  */
