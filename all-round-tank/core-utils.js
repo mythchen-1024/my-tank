@@ -754,6 +754,8 @@ function shortestPathInfo(start, target, game, blockPos) {
 }
 
 
+var BFS_MAX_ITERATIONS = 500; // 20×20=400 格地图上限，留余量防极端
+
 function _computeShortestPathInfo(start, target, game, blockPos) {
   const w = game.map.length;
   const h = game.map[0].length;
@@ -764,7 +766,8 @@ function _computeShortestPathInfo(start, target, game, blockPos) {
   seen[key(start)] = true;
   dist[key(start)] = 0;
 
-  for (let qi = 0; qi < queue.length; qi++) {
+  var limit = Math.min(queue.length + BFS_MAX_ITERATIONS, BFS_MAX_ITERATIONS);
+  for (let qi = 0; qi < queue.length && qi < limit; qi++) {
     const p = queue[qi];
     for (let i = 0; i < DIRS.length; i++) {
       const n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
