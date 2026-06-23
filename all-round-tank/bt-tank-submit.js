@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-23T03:32:37.153Z
+// 构建时间: 2026-06-23T03:40:35.722Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -5946,9 +5946,9 @@ function createBombNodes(profile) {
  * 默认参数（通用基线）
  */
 var SKILL_MATCHUP_DEFAULTS = {
-  freezeKillRange: 4,        // 冰杀触发距离
+  freezeKillRange: 6,        // 冰冻设置触发距离（无射线时，≤此距离才冻+走位；有射线时无距离限制）
   freezeKillRequireShot: false, // 是否要求已有射线才冻（vs护盾等需更严格）
-  stunKillRange: 5,          // 晕杀触发距离
+  stunKillRange: 7,          // 眩晕设置触发距离（无射线时；有射线时无距离限制，6帧够走位）
   overloadRange: 5,          // 过载触发距离
   overloadRequireShot: false,// 过载是否要求已对准（vs传送等需更谨慎）
   poisonRange: 5,            // 下毒触发距离
@@ -6150,60 +6150,78 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
   var mp = getSkillMatchupParams(mySkillType, enemySkillType);
   var children = [];
 
-  // ---- Freeze-kill: 近距 + 同线/可同线 → 冰冻后瞄准开火 ----
+  // ---- Freeze 系列：冰冻是全局技能（无距离限制），冻2帧内敌方无法行动 ----
+  // 数学：子弹2格/帧。已对准+距4=2帧到达(冻中必杀)；距6=3帧到(刚解冻仅1帧闪)；
+  //       需转1帧+距4=3帧后到(解冻1帧闪)。故：有射线就值得冻。
   if (mySkillType === 'freeze') {
+
+    // (1) freeze-snipe：有射线（任意距离）→ 直接冻 → 下帧开火
+    //     最高优先级：已同线，冻住就射，距离越近命中越稳
     children.push(
-      Sequence('freeze-kill', [
+      Sequence('freeze-snipe', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
-        Guard('close-range', function (bb) { return bb.distToEnemy <= mp.freezeKillRange; }),
         Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
-        // 敌人开盾时不冻（冻后开火也被盾挡，浪费冰冻）
         Guard('not-shielded', function (bb) {
           if (!mp.freezeAvoidShielded) return true;
           return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
         }),
-        // 有射线或1步内可到射线（vs护盾等需更严格：必须有直接射线）
-        Guard('has-or-near-shot', function (bb) {
-          if (bb.shotDir) return true;
-          if (mp.freezeKillRequireShot) return false; // 严格模式：必须有直接射线
-          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
-          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
-          return dx <= 1 || dy <= 1;
-        }),
         Guard('no-self-danger', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
-        Action('do-freeze-kill', function (bb) {
-          if (bb.shotDir && bb.myDir === bb.shotDir) {
-            bbSpeak(bb, '冰杀!');
-            bbUseSkill(bb, 'freeze');
-          } else if (bb.shotDir) {
-            bbSpeak(bb, '冰冻!');
-            bbUseSkill(bb, 'freeze');
-          } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
-            if (step) bbMoveToward(bb, step);
-          }
+        Action('do-freeze-snipe', function (bb) {
+          bbSpeak(bb, bb.distToEnemy <= 4 ? '冰杀!' : '冰射!');
+          bbUseSkill(bb, 'freeze');
         })
       ])
     );
 
-    // 冰冻后续：敌人被冻住时抓紧瞄准开火
+    // (2) freeze-setup：无射线但可见 + 近/中距 → 冻住后利用2帧走到射线位
+    //     距离 ≤ freezeKillRange(默认6)：冻后2帧走位到线上有机会开火
+    children.push(
+      Sequence('freeze-setup', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
+        Guard('no-direct-shot', function (bb) { return !bb.shotDir; }),
+        Guard('reachable-range', function (bb) { return bb.distToEnemy <= mp.freezeKillRange; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+        Guard('not-shielded', function (bb) {
+          if (!mp.freezeAvoidShielded) return true;
+          return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
+        }),
+        // 1-2步内可到射线（冻2帧内要走到位+开火）
+        Guard('near-firing-lane', function (bb) {
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 2 || dy <= 2;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-freeze-setup', function (bb) {
+          bbSpeak(bb, '冰冻!');
+          bbUseSkill(bb, 'freeze');
+        })
+      ])
+    );
+
+    // (3) freeze-followup：敌人被冻住时抓紧瞄准开火（覆盖冻后追杀）
     children.push(
       Sequence('freeze-followup', [
         Guard('enemy-frozen', function (bb) {
           return !!(bb.enemy && bb.enemy.status && bb.enemy.status.frozen);
         }),
-        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Action('do-freeze-followup', function (bb) {
           if (bb.shotDir) {
-            if (bb.myDir === bb.shotDir) { bbSpeak(bb, '冰杀!'); bbFire(bb); }
-            else bbTurnToward(bb, bb.shotDir);
+            if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '冰杀!'); bbFire(bb); }
+            else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
+            // 已对准但枪没好：等下帧再射（不浪费冰冻窗口去做别的）
           } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
             if (step) bbMoveToward(bb, step);
           }
         })
@@ -6211,54 +6229,73 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
     );
   }
 
-  // ---- Stun-kill: 近距 → 眩晕后开火（6帧混乱无法躲）----
+  // ---- Stun 系列：眩晕是全局技能，6帧混乱（go/turn 50%反向）无法有效闪避 ----
+  // 6帧比freeze的2帧更宽裕，有更多走位+瞄准时间
   if (mySkillType === 'stun') {
+
+    // (1) stun-snipe：有射线（任意距离）→ 晕 → 下帧开火
+    //     6帧混乱期间敌人无法有效闪避，距离越近命中越稳
     children.push(
-      Sequence('stun-kill', [
+      Sequence('stun-snipe', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
-        Guard('close-range', function (bb) { return bb.distToEnemy <= mp.stunKillRange; }),
         Guard('stun-ready', function (bb) { return canStun(bb.me, bb.enemy); }),
+        Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
-        // 眩晕无视护盾（stun 不造成伤害），但后续开火时仍需检查
         Guard('can-shoot-after', function (bb) {
-          if (mp.stunBypassShield) return bb.gunIsReady;
+          if (mp.stunBypassShield) return true;
           return canShoot(bb.me, bb.enemy);
-        }),
-        Guard('has-or-near-shot', function (bb) {
-          if (bb.shotDir) return true;
-          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
-          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
-          return dx <= 1 || dy <= 1;
         }),
         Guard('no-self-danger', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
-        Action('do-stun-kill', function (bb) {
-          if (bb.shotDir) {
-            bbSpeak(bb, '晕杀!');
-            bbUseSkill(bb, 'stun');
-          } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
-            if (step) bbMoveToward(bb, step);
-          }
+        Action('do-stun-snipe', function (bb) {
+          bbSpeak(bb, bb.distToEnemy <= 4 ? '晕杀!' : '晕射!');
+          bbUseSkill(bb, 'stun');
         })
       ])
     );
 
-    // 眩晕后续：敌人被眩晕时抓紧瞄准开火
+    // (2) stun-setup：无射线但中距 → 晕住后利用6帧走到射线位开火
+    children.push(
+      Sequence('stun-setup', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('stun-ready', function (bb) { return canStun(bb.me, bb.enemy); }),
+        Guard('no-direct-shot', function (bb) { return !bb.shotDir; }),
+        Guard('reachable-range', function (bb) { return bb.distToEnemy <= mp.stunKillRange; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('can-shoot-after', function (bb) {
+          if (mp.stunBypassShield) return true;
+          return canShoot(bb.me, bb.enemy);
+        }),
+        // 3步内可到射线（6帧混乱够走3步+转向+开火）
+        Guard('near-firing-lane', function (bb) {
+          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
+          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
+          return dx <= 3 || dy <= 3;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-stun-setup', function (bb) {
+          bbSpeak(bb, '眩晕!');
+          bbUseSkill(bb, 'stun');
+        })
+      ])
+    );
+
+    // (3) stun-followup：敌人被眩晕时抓紧瞄准开火
     children.push(
       Sequence('stun-followup', [
         Guard('enemy-stunned', function (bb) {
           return !!(bb.enemy && bb.enemy.status && bb.enemy.status.stunned);
         }),
-        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Action('do-stun-followup', function (bb) {
           if (bb.shotDir) {
-            if (bb.myDir === bb.shotDir) { bbSpeak(bb, '晕杀!'); bbFire(bb); }
-            else bbTurnToward(bb, bb.shotDir);
+            if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '晕杀!'); bbFire(bb); }
+            else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
           } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 3);
             if (step) bbMoveToward(bb, step);
           }
         })
