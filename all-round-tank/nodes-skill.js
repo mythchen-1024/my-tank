@@ -423,7 +423,11 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
         }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          // 技能激活占1帧无法移动：若敌正瞄准我且能开火，距离≤4格(2帧内到)则不激活
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         Action('do-overload-prep', function (bb) {
           bbSpeak(bb, '过载!');
@@ -524,7 +528,10 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           Guard('cloak-ready', function (bb) { return canCloak(bb.me); }),
           Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
           Guard('no-self-danger', function (bb) {
-            return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+            if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+            if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+                enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+            return true;
           }),
           Action('do-cloak-sneak', function (bb) {
             bbSpeak(bb, '潜行!');
@@ -629,7 +636,10 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('boost-ready', function (bb) { return canBoost(bb.me); }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         Action('do-boost-chase', function (bb) {
           bbSpeak(bb, '加速攻!');
@@ -680,7 +690,10 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         Guard('boost-ready', function (bb) { return canBoost(bb.me); }),
         Guard('star-distance', function (bb) { return bb.distToStar >= 3; }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         // 对传送敌开局：前15帧敌 tp 就绪时不抢星(传送瞬移必先到)；之后新星敌 tp 多半在 CD 照常 boost
         Guard('not-tp-opening', function (bb) {
@@ -764,7 +777,10 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           return enemyStarDist <= bb.distToStar + 2 + mp.skillStarContestDelta && bb.distToStar <= 6;
         }),
         Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
         }),
         Action('do-cloak-star', function (bb) {
           bbSpeak(bb, '隐身星!');
