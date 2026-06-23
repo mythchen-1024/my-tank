@@ -252,7 +252,7 @@ function senseMoveCandidate(bb) {
 
 function senseSafeNeighbor(bb) {
   return sense(bb, 'safeNeighbor', function () {
-    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy);
+    return bestSafeNeighbor(bb.myPos, bb.game, bb.enemyPos, bb.enemyTank, bb.enemyBullets, bb.enemy, bb.memory);
   });
 }
 

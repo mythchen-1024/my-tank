@@ -506,12 +506,35 @@ function createMovementTree(profile, mySkillType) {
   children.push(
     Sequence('escape-ambush', [
       Guard('enemy-recently-seen', function (bb) {
-        return !!bb.memory.lastEnemyPos && !bb.enemyPos &&
-          (bb.frame - bb.memory.lastEnemySeenFrame <= 8) &&
-          !enemyIsCloakType(bb.enemy);
+        if (!bb.memory.lastEnemyPos || bb.enemyPos) return false;
+        if (enemyIsCloakType(bb.enemy)) return false;
+        if (bb.frame - bb.memory.lastEnemySeenFrame <= 8) return true;
+        // bushHeatmap 高置信条目存在时延长窗口（蹲草敌可能持续数十帧不动）
+        var hm = bb.memory.bushHeatmap;
+        if (hm) {
+          for (var k in hm) {
+            if (hm.hasOwnProperty(k) && hm[k].score >= 50) return true;
+          }
+        }
+        return false;
       }),
       Guard('ambush-step', function (bb) {
-        var step = escapeAmbushLine(bb.myPos, bb.memory.lastEnemyPos, bb.game, bb.enemyBullets);
+        // 优先用 lastEnemyPos；过时时改用 bushHeatmap 中最高分位置
+        var dangerPos = bb.memory.lastEnemyPos;
+        if (bb.frame - bb.memory.lastEnemySeenFrame > 8) {
+          var hm = bb.memory.bushHeatmap;
+          var bestK = null, bestS = 0;
+          if (hm) {
+            for (var k in hm) {
+              if (hm.hasOwnProperty(k) && hm[k].score > bestS) { bestS = hm[k].score; bestK = k; }
+            }
+          }
+          if (bestK) {
+            var parts = bestK.split(',');
+            dangerPos = [parseInt(parts[0]), parseInt(parts[1])];
+          }
+        }
+        var step = escapeAmbushLine(bb.myPos, dangerPos, bb.game, bb.enemyBullets);
         if (!step) return false;
         bb._cache._ambushStep = step;
         return true;
@@ -530,6 +553,14 @@ function createMovementTree(profile, mySkillType) {
         if (!vt) return false;
         var step = nextStepToward(bb.myPos, vt, bb.game, null);
         if (!step) return false;
+        var standoff = safeStandoffDistance(bb.enemy);
+        if (!isSafeStep(step, bb.myPos, bb.enemyPos, bb.game,
+            bb.enemy, standoff, false, bb.enemyBullets, bb.memory)) {
+          step = safestNonDeadEndStep(bb.myPos, bb.game, bb.enemyPos, bb.enemyBullets);
+          if (!step) return false;
+          if (!isSafeStep(step, bb.myPos, bb.enemyPos, bb.game,
+              bb.enemy, standoff, false, bb.enemyBullets, bb.memory)) return false;
+        }
         bb._cache._patrolStep = step;
         return true;
       }),
@@ -573,6 +604,8 @@ function createMovementTree(profile, mySkillType) {
         if (anyBulletThreatens(bullets, p, bb.game)) continue;
         var score = distanceFromEdges(p, bb.game);
         if (bb.enemyPos) score += manhattan(p, bb.enemyPos);
+        if (!bb.enemyPos && bb.memory &&
+            stepIntoHiddenEnemyFireLine(p, bb.myPos, bb.game, bb.memory, false)) score -= 80;
         if (score > bestScore) { bestScore = score; best = p; }
       }
       if (best) { bbDirectGo(bb, best); return; }
