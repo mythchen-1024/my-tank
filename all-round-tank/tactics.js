@@ -1202,6 +1202,18 @@ function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
   // 来源1: lastEnemyPos（12帧内有效）
   if (memory.lastEnemyPos && frame - memory.lastEnemySeenFrame <= 12) {
     if (_hiddenFireLineBlocked(memory.lastEnemyPos, next, myPos, game, isStar)) return true;
+    // 来源1b: 沿敌最后朝向外推的预测位置（隐身/消失后可能继续前进）
+    var age = frame - memory.lastEnemySeenFrame;
+    if (memory.lastEnemyDir && age >= 2 && age <= 6) {
+      var dxDir = { right: 1, left: -1, up: 0, down: 0 };
+      var dyDir = { right: 0, left: 0, up: -1, down: 1 };
+      var dx = dxDir[memory.lastEnemyDir], dy = dyDir[memory.lastEnemyDir];
+      for (var step = 1; step <= Math.min(age, 4); step++) {
+        var pred = [memory.lastEnemyPos[0] + dx * step, memory.lastEnemyPos[1] + dy * step];
+        if (!isPassable(game, pred, null)) break;
+        if (_hiddenFireLineBlocked(pred, next, myPos, game, isStar)) return true;
+      }
+    }
   }
 
   // 来源2: bushHeatmap 高置信度条目（蹲草敌持续有效，不受12帧限制）
@@ -2184,13 +2196,17 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!enemyIsCloakType(enemy)) return null;
   if (!state || !state.lastEnemyPos) return null;
   const age = ((game && game.frames) || 0) - state.lastEnemySeenFrame;
-  if (age < 0 || age > 4) return null; // 只打刚隐身的短窗口，避免凭旧记忆乱射
+  if (age < 0 || age > 4) return null;
 
   const myPos = me.tank.position;
   if (anyBulletThreatens(enemyBullets || [], myPos, game)) return null;
 
   const positions = hiddenCloakPositions(enemy, enemyTank, game, state);
   if (positions.length === 0) positions.push(state.lastEnemyPos);
+
+  const lastDir = state.lastEnemyDir || null;
+  const dxDir = { right: 1, left: -1, up: 0, down: 0 };
+  const dyDir = { right: 0, left: 0, up: -1, down: 1 };
 
   let bestDir = null;
   let bestScore = -9999;
@@ -2200,12 +2216,19 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
     const dir = clearShotDirection(myPos, p, game);
     if (!dir) continue;
     const dist = manhattan(myPos, p);
-    if (dist > 5) continue; // 隐身盲射只覆盖贴近伏击区
+    if (dist > 5) continue;
 
-    // 当前炮口方向命中优先：符合“敌最后隐身前在我炮口方向，就朝当前方向开炮”。
-    const facingBonus = dir === me.tank.direction ? 120 : 0;
+    // 方向偏好：沿敌最后朝向的位置更可能是实际位置
+    let dirBias = 0;
+    if (lastDir) {
+      const dpx = p[0] - state.lastEnemyPos[0];
+      const dpy = p[1] - state.lastEnemyPos[1];
+      const dotProduct = dpx * dxDir[lastDir] + dpy * dyDir[lastDir];
+      dirBias = dotProduct > 0 ? dotProduct * 15 : dotProduct * 5;
+    }
+    const facingBonus = dir === me.tank.direction ? 60 : 0;
     const lastBias = manhattan(p, state.lastEnemyPos) <= 1 ? 12 : 0;
-    const score = facingBonus + lastBias - dist * 5 - age * 4;
+    const score = dirBias + facingBonus + lastBias - dist * 5 - age * 4;
     if (score > bestScore) {
       bestScore = score;
       bestDir = dir;

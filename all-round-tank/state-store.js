@@ -183,6 +183,7 @@ function trackEnemy(state, enemyTank, myPos, game) {
   if (enemyTank && enemyTank.position) {
     var prevPos = state.lastEnemyPos;
     state.lastEnemyPos = enemyTank.position.slice();
+    state.lastEnemyDir = enemyTank.direction || null;
     state.lastEnemySeenFrame = (game && game.frames) || 0;
     if (prevPos && samePos(prevPos, enemyTank.position)) {
       state.enemyStationaryFrames = (state.enemyStationaryFrames || 0) + 1;
