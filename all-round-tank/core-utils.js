@@ -1288,11 +1288,10 @@ function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
   var p2 = [myPos[0] + dd[0] * 2, myPos[1] + dd[1] * 2];
   if (!isPassable(game, p1, enemyPos)) return false;
   if (!isPassable(game, p2, enemyPos)) {
-    // 第二格不通也可以，boost 遇障碍提前停（走1格也有价值）
-    if (anyBulletThreatens(enemyBullets, p1, game)) return false;
+    if (stepIntoBulletPath(enemyBullets, p1, game)) return false;
     return true;
   }
-  if (anyBulletThreatens(enemyBullets, p1, game)) return false;
-  if (anyBulletThreatens(enemyBullets, p2, game)) return false;
+  if (stepIntoBulletPath(enemyBullets, p1, game)) return false;
+  if (stepIntoBulletPath(enemyBullets, p2, game)) return false;
   return true;
 }
