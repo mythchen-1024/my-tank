@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-23T09:15:28.052Z
+// 构建时间: 2026-06-23T10:48:31.761Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -3677,6 +3677,35 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
 }
 
 
+/**
+ * 找到星附近适合冰冻伏击的草丛：
+ * - 是草丛格('o')
+ * - 到星有清晰射线（能覆盖星所在行/列）
+ * - 离星 2-5 格（太近暴露风险大，太远射线被挡概率高）
+ * - 离我当前位置可达且较近（优先选更近的草丛）
+ * 返回最佳草丛坐标或 null。
+ */
+function findFreezeAmbushBush(myPos, star, game, enemyPos) {
+  var best = null, bestScore = -9999;
+  var w = game.map.length, h = game.map[0].length;
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (tileAt(game, [x, y]) !== 'o') continue;
+      var p = [x, y];
+      var dStar = manhattan(p, star);
+      if (dStar < 2 || dStar > 5) continue;
+      if (!clearShotDirection(p, star, game)) continue;
+      var dMe = manhattan(p, myPos);
+      if (dMe > 8) continue;
+      var score = 20 - dMe * 2 - dStar;
+      if (enemyPos && clearShotDirection(p, enemyPos, game)) score += 5;
+      if (score > bestScore) { bestScore = score; best = p; }
+    }
+  }
+  return best;
+}
+
+
 function findPostTeleportShift(landingPos, star, game, enemyBullets) {
   var candidates = [];
   for (var i = 0; i < DIRS.length; i++) {
@@ -6174,12 +6203,30 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
   var children = [];
 
   // ---- Freeze 系列：冰冻是全局技能（无距离限制），冻2帧内敌方无法行动 ----
-  // 数学：子弹2格/帧。已对准+距4=2帧到达(冻中必杀)；距6=3帧到(刚解冻仅1帧闪)；
-  //       需转1帧+距4=3帧后到(解冻1帧闪)。故：有射线就值得冻。
+  // 冻住=敌2帧无法闪避+无法抢星+无法走位，压制价值极高。有射线就冻，高频压制。
+  // 伏击combo：草丛开火后下帧冻（敌刚传送落地位置固定，先射后冻=必中）。
   if (mySkillType === 'freeze') {
+
+    // (0) freeze-combo-followup：上帧伏击开炮 → 本帧冻（子弹在飞 + 敌刚落地 = 必中）
+    children.push(
+      Sequence('freeze-combo-followup', [
+        Guard('fired-last-frame', function (bb) {
+          return bb.memory && bb.memory._firedForFreeze === bb.frame - 1;
+        }),
+        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Action('do-freeze-combo', function (bb) {
+          bbSpeak(bb, '冰锁!');
+          bbUseSkill(bb, 'freeze');
+        })
+      ])
+    );
 
     // (1) freeze-snipe：有射线（任意距离）→ 直接冻 → 下帧开火
     //     最高优先级：已同线，冻住就射，距离越近命中越稳
+    //     已对准时：F0冻→F1射→距4:F2到(冻中)=必杀
+    //     差1转时：F0冻→F1转→F2射→距2:命中/距4:解冻帧≈50%命中
+    //     远距(>6)但有线：冻住虽不一定杀到，但打断敌节奏+阻止抢星仍有大价值
     children.push(
       Sequence('freeze-snipe', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
@@ -6713,6 +6760,90 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         Action('do-freeze-star', function (bb) {
           bbSpeak(bb, '冰星!');
           bbUseSkill(bb, 'freeze');
+        })
+      ])
+    );
+
+    // ---- Freeze-ambush：蹲草伏击（通用策略） ----
+    // 敌人比我更快到星时，与其正面竞速不如蹲在星附近草丛：
+    //   敌来抢星进入射线 → 我已对准 → 开火+冰冻 = 击杀/重伤
+    //   敌人看不到我（草丛隐身）→ 没有预判躲避能力
+    // 触发条件：星存在 + 敌人比我更近星 + 星附近有合适草丛
+    children.push(
+      Sequence('freeze-ambush', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('ambush-viable-enemy', function (bb) {
+          if (enemyIsOverloadType(bb.enemy)) return false;
+          if (bb.enemy && bb.enemy.skill && bb.enemy.skill.type === 'shield') return false;
+          if (bb.enemy && bb.enemy.skill && bb.enemy.skill.type === 'boost') return false;
+          return true;
+        }),
+        Guard('enemy-faster-to-star', function (bb) {
+          if (!bb.enemyPos) return true;
+          var myDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          var eDist = manhattan(bb.enemyPos, bb.star);
+          if (myDist < 0) return true;
+          return eDist + 2 < myDist;
+        }),
+        Guard('not-already-ambush', function (bb) {
+          return !bb.memory._freezeAmbush || !samePos(bb.myPos, bb.memory._freezeAmbush.bush);
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('has-ambush-bush', function (bb) {
+          var bush = findFreezeAmbushBush(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          if (!bush) return false;
+          bb._cache._freezeAmbushBush = bush;
+          return true;
+        }),
+        Action('do-freeze-ambush-move', function (bb) {
+          var bush = bb._cache._freezeAmbushBush;
+          bb.memory._freezeAmbush = { bush: bush, star: bb.star.slice(), frame: bb.frame };
+          bbSpeak(bb, '埋伏');
+          bbMoveToward(bb, bush);
+        })
+      ])
+    );
+
+    // 蹲守阶段：已到达草丛位，等待敌人出现
+    children.push(
+      Sequence('freeze-ambush-hold', [
+        Guard('in-ambush-bush', function (bb) {
+          var a = bb.memory._freezeAmbush;
+          if (!a) return false;
+          if (!bb.star || !samePos(bb.star, a.star)) { bb.memory._freezeAmbush = null; return false; }
+          if (bb.frame - a.frame > 25) { bb.memory._freezeAmbush = null; return false; }
+          return samePos(bb.myPos, a.bush) && iAmHidden(bb.me, bb.game);
+        }),
+        Guard('still-safe', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-freeze-ambush-hold', function (bb) {
+          if (bb.enemyTank && bb.gunIsReady) {
+            var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
+            if (shotDir) {
+              if (bb.myDir === shotDir) {
+                if (canFreeze(bb.me, bb.enemy)) {
+                  bbSpeak(bb, '伏击!'); bbFire(bb);
+                  bb.memory._firedForFreeze = bb.frame;
+                } else {
+                  bbSpeak(bb, '伏击!'); bbFire(bb);
+                }
+              } else {
+                if (canFreeze(bb.me, bb.enemy)) {
+                  bbSpeak(bb, '冰伏!'); bbUseSkill(bb, 'freeze');
+                } else {
+                  bbTurnToward(bb, shotDir);
+                }
+              }
+              bb.memory._freezeAmbush = null;
+              return;
+            }
+          }
+          var faceDir = clearShotDirection(bb.myPos, bb.star, bb.game);
+          if (faceDir && bb.myDir !== faceDir) { bbTurnToward(bb, faceDir); return; }
+          bbSpeak(bb, '蹲伏');
         })
       ])
     );

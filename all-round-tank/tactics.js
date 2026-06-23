@@ -2370,6 +2370,35 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
 }
 
 
+/**
+ * 找到星附近适合冰冻伏击的草丛：
+ * - 是草丛格('o')
+ * - 到星有清晰射线（能覆盖星所在行/列）
+ * - 离星 2-5 格（太近暴露风险大，太远射线被挡概率高）
+ * - 离我当前位置可达且较近（优先选更近的草丛）
+ * 返回最佳草丛坐标或 null。
+ */
+function findFreezeAmbushBush(myPos, star, game, enemyPos) {
+  var best = null, bestScore = -9999;
+  var w = game.map.length, h = game.map[0].length;
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (tileAt(game, [x, y]) !== 'o') continue;
+      var p = [x, y];
+      var dStar = manhattan(p, star);
+      if (dStar < 2 || dStar > 5) continue;
+      if (!clearShotDirection(p, star, game)) continue;
+      var dMe = manhattan(p, myPos);
+      if (dMe > 8) continue;
+      var score = 20 - dMe * 2 - dStar;
+      if (enemyPos && clearShotDirection(p, enemyPos, game)) score += 5;
+      if (score > bestScore) { bestScore = score; best = p; }
+    }
+  }
+  return best;
+}
+
+
 function findPostTeleportShift(landingPos, star, game, enemyBullets) {
   var candidates = [];
   for (var i = 0; i < DIRS.length; i++) {
