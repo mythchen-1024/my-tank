@@ -580,6 +580,20 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           return enemyAimsAt(bb.myPos, bb.enemyTank, bb.game);
         }),
         Guard('close-range', function (bb) { return bb.distToEnemy <= mp.shieldCounterRange; }),
+        // 盾碎后反击可行性：盾挡第一发后我需要 turnDist 帧转向+开火，
+        // 如果敌人能在这之前补第二发打到我，开盾=白死
+        Guard('can-counter-after-shield', function (bb) {
+          var turnFrames = turnDistance(bb.myDir, bb.shotDir);
+          var myCounterFrames = turnFrames + 1; // 转向+开火，子弹还要飞
+          // 敌人下一发到达我的帧数：距离/弹速 (距离1时 = 1帧就到)
+          var enemyNextHitFrames = Math.ceil(bb.distToEnemy / BULLET_SPEED);
+          // 如果敌人能立刻再射(非过载单弹冷却约15帧不能连射)
+          if (enemyCanFireSoon(bb.enemy)) {
+            // 敌人补枪到达 <= 我反击出手，盾白开
+            if (enemyNextHitFrames <= myCounterFrames) return false;
+          }
+          return true;
+        }),
         Action('do-shield-counter', function (bb) {
           bbSpeak(bb, '盾击!');
           bbUseSkill(bb, 'shield');
