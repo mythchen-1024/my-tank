@@ -283,22 +283,24 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
       ])
     );
 
-    // (3) freeze-followup：敌人被冻住时抓紧瞄准开火（覆盖冻后追杀）
+    // (3) freeze-followup：敌人被冻住时抓紧瞄准开火（仅在杀伤区内追杀）
+    //     门控：冻锁 2 帧 + 子弹 2 格/帧 → 同线无墙曼哈顿 ≤4 才追得上(解冻前子弹已在途)。
+    //     远距/不同线的冻是 freeze-star 抢星冻敌——此处必须让位，否则会去
+    //     nextStepToFiringLane 朝够不着的敌人挪步，把抢星的 2 帧白白浪费（mat_CyF 复盘）。
     children.push(
       Sequence('freeze-followup', [
         Guard('enemy-frozen', function (bb) {
           return !!(bb.enemy && bb.enemy.status && bb.enemy.status.frozen);
         }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('in-freeze-kill-range', function (bb) {
+          // 同线(shotDir 存在)且 ≤4 格才可能在冻结窗口内命中；否则让位给抢星
+          return !!bb.shotDir && bb.distToEnemy <= 4;
+        }),
         Action('do-freeze-followup', function (bb) {
-          if (bb.shotDir) {
-            if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '冰杀!'); bbFire(bb); }
-            else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
-            // 已对准但枪没好：等下帧再射（不浪费冰冻窗口去做别的）
-          } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
-            if (step) bbMoveToward(bb, step);
-          }
+          if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '冰杀!'); bbFire(bb); }
+          else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
+          // 已对准但枪没好：等下帧再射（不浪费冰冻窗口去做别的）
         })
       ])
     );

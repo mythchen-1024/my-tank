@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-23T03:46:36.497Z
+// 构建时间: 2026-06-23T04:24:29.969Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -5820,9 +5820,15 @@ function createAttackTree(profile) {
     children.push(
       Sequence('guard-line', [
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
+        // 让位后撤的门控：只在敌"真握双弹"(已过载/cd<=1)且近距时才放弃守线。
+        // 不能用 distToEnemy>=standoff 当硬闸——overload 流 standoff 恒=5，会把
+        // "敌双弹已用掉、冷却中、我同行先手"的干净开火窗口也一刀切否决(mat_GhEi 墙角
+        // [1,1] 同行先手却不开火、被普通补射打死)。senseGuardLineShot 内部已正确区分
+        // 握弹/空窗，外层只在真握双弹时让位，其余信任内部判断。
         Guard('not-cornered-guard', function (bb) {
           if (!bb.enemyTank) return true;
-          return bb.distToEnemy >= safeStandoffDistance(bb.enemy);
+          if (!enemyDoubleLaneThreat(bb.enemy)) return true; // 敌没握双弹 → 放行开火
+          return bb.distToEnemy >= safeStandoffDistance(bb.enemy); // 真握双弹近距才让位后撤
         }),
         Action('do-guard-line', function (bb) {
           var shot = senseGuardLineShot(bb);
@@ -6211,22 +6217,24 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
       ])
     );
 
-    // (3) freeze-followup：敌人被冻住时抓紧瞄准开火（覆盖冻后追杀）
+    // (3) freeze-followup：敌人被冻住时抓紧瞄准开火（仅在杀伤区内追杀）
+    //     门控：冻锁 2 帧 + 子弹 2 格/帧 → 同线无墙曼哈顿 ≤4 才追得上(解冻前子弹已在途)。
+    //     远距/不同线的冻是 freeze-star 抢星冻敌——此处必须让位，否则会去
+    //     nextStepToFiringLane 朝够不着的敌人挪步，把抢星的 2 帧白白浪费（mat_CyF 复盘）。
     children.push(
       Sequence('freeze-followup', [
         Guard('enemy-frozen', function (bb) {
           return !!(bb.enemy && bb.enemy.status && bb.enemy.status.frozen);
         }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('in-freeze-kill-range', function (bb) {
+          // 同线(shotDir 存在)且 ≤4 格才可能在冻结窗口内命中；否则让位给抢星
+          return !!bb.shotDir && bb.distToEnemy <= 4;
+        }),
         Action('do-freeze-followup', function (bb) {
-          if (bb.shotDir) {
-            if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '冰杀!'); bbFire(bb); }
-            else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
-            // 已对准但枪没好：等下帧再射（不浪费冰冻窗口去做别的）
-          } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
-            if (step) bbMoveToward(bb, step);
-          }
+          if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '冰杀!'); bbFire(bb); }
+          else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
+          // 已对准但枪没好：等下帧再射（不浪费冰冻窗口去做别的）
         })
       ])
     );
