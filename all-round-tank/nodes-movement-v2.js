@@ -468,6 +468,27 @@ function createMovementTree(profile, mySkillType) {
     ])
   );
 
+  // ---- 追星破墙：被墙阻隔绕路远时打穿土墙走捷径 ----
+  children.push(
+    Sequence('star-dig', [
+      Guard('star-exists', function (bb) { return !!bb.star; }),
+      Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+      Guard('stuck-or-far', function (bb) {
+        return (bb.memory.stuckFrames || 0) >= 4 ||
+          pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos) >= 8;
+      }),
+      Guard('no-bullet-threat', function (bb) {
+        return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+      }),
+      Guard('has-star-dig', function (bb) { return !!senseStarDigShot(bb); }),
+      Action('do-star-dig', function (bb) {
+        var dir = senseStarDigShot(bb);
+        if (bb.myDir === dir) { bbSpeak(bb, '破墙追星'); bbFire(bb); }
+        else bbTurnToward(bb, dir);
+      })
+    ])
+  );
+
   // ---- 脱离双弹覆盖带 ----
   children.push(
     Sequence('band-escape', [

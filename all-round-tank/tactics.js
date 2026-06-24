@@ -1306,24 +1306,62 @@ function findDigDirection(pos, game, target) {
     let x = pos[0] + d.dx;
     let y = pos[1] + d.dy;
     let range = 1;
-    
-    // 沿该方向查找
-    while (tileAt(game, [x, y]) !== "x") {
+
+    while (range <= 8) {
       const t = tileAt(game, [x, y]);
-      if (t === "m") { // 发现土块
+      if (t === 'x') break;
+      if (t === 'm') {
         const after = [x + d.dx, y + d.dy];
-        // 打分：土块距离 + 打碎后距离目标的距离
-        const targetScore = target ? manhattan(after, target) : 0;
-        const score = range * 3 + targetScore;
-        if (score < bestScore) {
-          bestScore = score;
+        const afterTile = tileAt(game, after);
+        if (afterTile === 'x' || afterTile === 'm') break;
+        if (target) {
+          var afterDist = pathDistance(after, target, game, null);
+          if (afterDist < 0) break;
+          const score = range * 3 + afterDist;
+          if (score < bestScore) { bestScore = score; bestDir = d.name; }
+        } else {
+          const score = range * 3;
+          if (score < bestScore) { bestScore = score; bestDir = d.name; }
+        }
+        break;
+      }
+      if (t !== '.' && t !== 'o') break;
+      x += d.dx; y += d.dy; range++;
+    }
+  }
+  return bestDir;
+}
+
+
+function findStarDigShot(myPos, star, game, enemyPos) {
+  if (!star) return null;
+  var currentDist = pathDistance(myPos, star, game, enemyPos);
+  if (currentDist === 0) return null;
+  if (currentDist < 0) currentDist = 99;
+
+  var bestDir = null, bestSave = 0;
+  for (var i = 0; i < DIRS.length; i++) {
+    var d = DIRS[i];
+    var x = myPos[0] + d.dx, y = myPos[1] + d.dy;
+    var range = 1;
+    while (range <= 8) {
+      var t = tileAt(game, [x, y]);
+      if (t === 'x') break;
+      if (t === 'm') {
+        var after = [x + d.dx, y + d.dy];
+        var afterTile = tileAt(game, after);
+        if (afterTile === 'x' || afterTile === 'm') break;
+        var afterDist = pathDistance(after, star, game, enemyPos);
+        if (afterDist < 0) break;
+        var saved = currentDist - (range + afterDist);
+        if (saved >= 3 && saved > bestSave) {
+          bestSave = saved;
           bestDir = d.name;
         }
         break;
       }
-      x += d.dx;
-      y += d.dy;
-      range++;
+      if (t !== '.' && t !== 'o') break;
+      x += d.dx; y += d.dy; range++;
     }
   }
   return bestDir;

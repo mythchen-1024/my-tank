@@ -269,6 +269,12 @@ function senseDigDirection(bb) {
   });
 }
 
+function senseStarDigShot(bb) {
+  return sense(bb, 'starDigDir', function () {
+    return findStarDigShot(bb.myPos, bb.star, bb.game, bb.enemyPos);
+  });
+}
+
 // ---- 炸弹传感器 ----
 
 function senseBombThreat(bb) {
