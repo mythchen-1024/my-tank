@@ -108,6 +108,11 @@ function refreshBlackboard(bb, me, enemy, game) {
   recordAssassinOutcome(bb.memory, enemy, bb.enemyTank, game);
   trackEnemyBush(bb.memory, bb.enemyTank, bb.enemy, game);
   trackEnemy(bb.memory, bb.enemyTank, bb.myPos, game);
+  // 攻击转向计数器：位置移动了说明不再卡住空转，重置
+  if (!bb.memory.lastMyPos || !samePos(bb.memory.lastMyPos, bb.myPos)) {
+    bb.memory.interceptTurnFrames = 0;
+    bb.memory.guardLineTurnFrames = 0;
+  }
   trackStuck(bb.memory, bb.myPos);
   cleanExpiredBombs(bb.memory, bb.frame);
   // 幽灵弹补偿：推算视锥外不可见的子弹位置（必须在 memory 初始化之后）

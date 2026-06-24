@@ -67,6 +67,9 @@ function createAttackTree(profile) {
           var enmDist = bb.enemyPos ? pathDistance(bb.enemyPos, bb.star, bb.game, null) : 99;
           return myDist > enmDist;
         }),
+        Guard('not-intercept-stale', function (bb) {
+          return (bb.memory.interceptTurnFrames || 0) < 4;
+        }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
@@ -86,8 +89,13 @@ function createAttackTree(profile) {
         }),
         Action('do-intercept', function (bb) {
           var dir = bb._cache._interceptDir;
-          if (bb.myDir === dir) { bbSpeak(bb, '拦截!'); bbFire(bb); }
-          else bbTurnToward(bb, dir);
+          if (bb.myDir === dir) {
+            bbSpeak(bb, '拦截!'); bbFire(bb);
+            bb.memory.interceptTurnFrames = 0;
+          } else {
+            bbTurnToward(bb, dir);
+            bb.memory.interceptTurnFrames = (bb.memory.interceptTurnFrames || 0) + 1;
+          }
         })
       ])
     );
@@ -177,6 +185,9 @@ function createAttackTree(profile) {
           var enmDist = bb.enemyPos ? pathDistance(bb.enemyPos, bb.star, bb.game, null) : 99;
           return myDist > enmDist;
         }),
+        Guard('not-guard-stale', function (bb) {
+          return (bb.memory.guardLineTurnFrames || 0) < 4;
+        }),
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
         // 让位后撤的门控：只在敌"真握双弹"(已过载/cd<=1)且近距时才放弃守线。
         // 不能用 distToEnemy>=standoff 当硬闸——overload 流 standoff 恒=5，会把
@@ -190,8 +201,13 @@ function createAttackTree(profile) {
         }),
         Action('do-guard-line', function (bb) {
           var shot = senseGuardLineShot(bb);
-          if (shot.fire) { bbSpeak(bb, '守线!'); bbFire(bb); }
-          else bbTurnToward(bb, shot.dir);
+          if (shot.fire) {
+            bbSpeak(bb, '守线!'); bbFire(bb);
+            bb.memory.guardLineTurnFrames = 0;
+          } else {
+            bbTurnToward(bb, shot.dir);
+            bb.memory.guardLineTurnFrames = (bb.memory.guardLineTurnFrames || 0) + 1;
+          }
         })
       ])
     );
