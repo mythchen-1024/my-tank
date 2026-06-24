@@ -156,8 +156,11 @@ function createObjectiveTree(profile, mySkillType) {
   );
 
   // ---- 星星争夺预瞄守点 ----
+  // 卡住超时放弃：守位只转向不移动，超过 8 帧无进展说明敌人不会踩进射线，
+  // 让 star-chase 的绕路/窗口突破逻辑接管（mat_EwO：守了 123 帧白等）
   children.push(
     Sequence('star-guard', [
+      Guard('not-stuck-guarding', function (bb) { return (bb.memory.stuckFrames || 0) < 8; }),
       Guard('has-star-guard', function (bb) { return !!senseStarGuard(bb); }),
       Action('do-star-guard', function (bb) {
         var sg = senseStarGuard(bb);

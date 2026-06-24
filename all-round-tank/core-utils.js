@@ -1326,6 +1326,31 @@ function overloadOffsetShotDir(myPos, enemyPos, game) {
   return null;
 }
 
+
+function hasNearbyFiringLane(myPos, enemyPos, game, maxSteps) {
+  if (!myPos || !enemyPos) return false;
+  if (clearShotDirection(myPos, enemyPos, game)) return true;
+  var visited = {};
+  var queue = [myPos];
+  visited[myPos[0] + ',' + myPos[1]] = 0;
+  for (var qi = 0; qi < queue.length; qi++) {
+    var p = queue[qi];
+    var d = visited[p[0] + ',' + p[1]];
+    if (d >= maxSteps) continue;
+    for (var i = 0; i < DIRS.length; i++) {
+      var n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
+      var nk = n[0] + ',' + n[1];
+      if (visited[nk] !== undefined) continue;
+      if (!isPassable(game, n, enemyPos)) continue;
+      visited[nk] = d + 1;
+      if (clearShotDirection(n, enemyPos, game)) return true;
+      queue.push(n);
+    }
+  }
+  return false;
+}
+
+
 /**
  * 判断 boost go() 前方2格是否安全可通行
  */

@@ -305,11 +305,8 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           if (!mp.freezeAvoidShielded) return true;
           return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
         }),
-        // 1-2步内可到射线（冻2帧内要走到位+开火）
         Guard('near-firing-lane', function (bb) {
-          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
-          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
-          return dx <= 2 || dy <= 2;
+          return hasNearbyFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
         }),
         Guard('no-self-danger', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
@@ -382,11 +379,8 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           if (mp.stunBypassShield) return true;
           return canShoot(bb.me, bb.enemy);
         }),
-        // 3步内可到射线（6帧混乱够走3步+转向+开火）
         Guard('near-firing-lane', function (bb) {
-          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
-          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
-          return dx <= 3 || dy <= 3;
+          return hasNearbyFiringLane(bb.myPos, bb.enemyPos, bb.game, 3);
         }),
         Guard('no-self-danger', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
@@ -430,12 +424,9 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         // vs 护盾等需要已对准才过载（避免过载后10帧内找不到射线浪费）
         Guard('has-or-near-shot', function (bb) {
           if (bb.shotDir) return true;
-          // 错位线也算"有射线"：副弹可命中
           if (overloadOffsetShotDir(bb.myPos, bb.enemyPos, bb.game)) return true;
-          if (mp.overloadRequireShot) return false; // 严格模式：必须有射线
-          var dx = Math.abs(bb.myPos[0] - bb.enemyPos[0]);
-          var dy = Math.abs(bb.myPos[1] - bb.enemyPos[1]);
-          return dx <= 2 || dy <= 2;
+          if (mp.overloadRequireShot) return false;
+          return hasNearbyFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
         }),
         // vs 护盾流：等盾碎再过载
         Guard('enemy-not-shielded', function (bb) {
