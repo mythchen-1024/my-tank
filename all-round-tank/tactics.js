@@ -1403,6 +1403,14 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     // 1. 如果不用转向直接能走，1帧脱离。前面已经校验过 p 目前不在弹道上，所以直接通过。
     if (!needTurn) {
       if (incomingFrames < 1) continue;
+      // boost 态: go() 实际走2格到 p2, p2 也必须安全(否则让 boost-through-dodge 处理)
+      if (me.status && me.status.boosted) {
+        var p2 = [myPos[0] + d.dx * 2, myPos[1] + d.dy * 2];
+        if (isPassable(game, p2, enemyPos) &&
+            (anyBulletThreatens(bullets, p2, game) ||
+             stepIntoBulletPath(bullets, p2, game) ||
+             enemyAimsAt(p2, enemy && enemy.tank, game))) continue;
+      }
     } else {
       // 时序：转 N 次 + 走 1 步 = N+1 帧脱离。平手时仍尝试（引擎先移动再判碰撞）
       var turns = turnDistance(me.tank.direction, d.name);

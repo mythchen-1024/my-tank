@@ -366,18 +366,33 @@ function bbDirectGo(bb, target) {
     var alt = _findSafeAlternativeStep(bb);
     if (alt) {
       var altDir = directionBetween(bb.myPos, alt);
-      if (altDir === bb.myDir) bb.me.go();
-      else if (altDir) bbTurnToward(bb, altDir);
+      if (altDir === bb.myDir) {
+        if (!_bbBoostLandingDangerous(bb, altDir)) bb.me.go();
+      } else if (altDir) bbTurnToward(bb, altDir);
     } else {
       var dir = directionBetween(bb.myPos, target);
-      if (dir === bb.myDir) bb.me.go();
-      else if (dir) bbTurnToward(bb, dir);
+      if (dir === bb.myDir) {
+        if (!_bbBoostLandingDangerous(bb, dir)) bb.me.go();
+      } else if (dir) bbTurnToward(bb, dir);
     }
     return;
   }
   var dir = directionBetween(bb.myPos, target);
-  if (dir === bb.myDir) bb.me.go();
-  else if (dir) bbTurnToward(bb, dir);
+  if (dir === bb.myDir) {
+    if (!_bbBoostLandingDangerous(bb, dir)) bb.me.go();
+  } else if (dir) bbTurnToward(bb, dir);
+}
+
+function _bbBoostLandingDangerous(bb, dir) {
+  if (!(bb.me.status && bb.me.status.boosted)) return false;
+  var d = DIRS[dirIndex(dir)];
+  if (!d) return false;
+  var p2 = [bb.myPos[0] + d.dx * 2, bb.myPos[1] + d.dy * 2];
+  if (!isPassable(bb.game, p2, bb.enemyPos)) return false;
+  if (stepIntoBulletPath(bb.enemyBullets, p2, bb.game)) return true;
+  if (enemyAimsAt(p2, bb.enemyTank, bb.game)) return true;
+  if (predictedOverloadThreatens(bb.enemy, p2, bb.game)) return true;
+  return false;
 }
 
 function _findSafeAlternativeStep(bb) {

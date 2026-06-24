@@ -577,6 +577,23 @@ function minBulletFramesTo(bullets, pos, game) {
 
 
 /**
+ * boost 终点安全检查：加速态 go() 走2格，检查第2格是否危险。
+ * 如果不在 boost 态或第2格是墙(会自然刹车在第1格)则返回 false(安全)。
+ */
+function _boostLandingDangerous(me, myPos, dir, game, enemyPos, enemyTank, bullets, enemy) {
+  if (!(me.status && me.status.boosted)) return false;
+  var d = DIRS[dirIndex(dir)];
+  if (!d) return false;
+  var p2 = [myPos[0] + d.dx * 2, myPos[1] + d.dy * 2];
+  if (!isPassable(game, p2, enemyPos)) return false;
+  if (stepIntoBulletPath(bullets, p2, game)) return true;
+  if (enemyAimsAt(p2, enemyTank, game)) return true;
+  if (predictedOverloadThreatens(enemy, p2, game)) return true;
+  return false;
+}
+
+
+/**
  * 寻路移动助手。如果下一步不安全，就改走最快脱离的安全方向（避免转向→撞墙→转回的死循环）。
  */
 function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets, enemy) {
@@ -591,18 +608,17 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets, enemy) {
     const escape = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy);
     if (escape) {
       const edir = directionBetween(myPos, escape);
-      // 当前朝向即脱离方向 -> 立刻前进（不浪费一帧转向）；否则转向它
-      if (edir === me.tank.direction) me.go();
-      else turnToward(me, edir);
+      if (edir === me.tank.direction) {
+        if (!_boostLandingDangerous(me, myPos, edir, game, enemyPos, enemyTank, bullets, enemy)) me.go();
+      } else turnToward(me, edir);
       return;
     }
-    // 实在没有更优安全格：只有当前前方也安全时才直走；否则宁可原地转向也不能踩进子弹。
-    // No.1 复盘(mat_FPf/mat_8aY)：旧兜底只检查可通行，会把我从 [1,12] 推进 [2,12] 接下行弹。
     const ahead = nextInDirection(myPos, me.tank.direction);
     if (isPassable(game, ahead, enemyPos) &&
         !enemyAimsAt(ahead, enemyTank, game) &&
         !stepIntoBulletPath(bullets, ahead, game) &&
-        !predictedOverloadThreatens(enemy, ahead, game)) me.go();
+        !predictedOverloadThreatens(enemy, ahead, game) &&
+        !_boostLandingDangerous(me, myPos, me.tank.direction, game, enemyPos, enemyTank, bullets, enemy)) me.go();
     else me.turn("right");
     return;
   }
@@ -612,7 +628,12 @@ function moveToward(me, game, next, enemyPos, enemyTank, enemyBullets, enemy) {
 
   // 方向一致则前进，否则转向该方向
   if (me.tank.direction === dir) {
-    me.go();
+    if (!_boostLandingDangerous(me, myPos, dir, game, enemyPos, enemyTank, bullets, enemy)) {
+      me.go();
+    } else {
+      var esc = fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy);
+      if (esc) turnToward(me, directionBetween(myPos, esc));
+    }
   } else {
     turnToward(me, dir);
   }
@@ -675,19 +696,33 @@ function breakStuckStep(me, game, enemyPos, enemyTank, enemyBullets, prevPos, en
  */
 function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy) {
   const myPos = me.tank.position;
+  const isBoosted = !!(me.status && me.status.boosted);
   let best = null;
   let bestCost = 99;
   let bestTie = -9999;
+  let fallback = null;
+  let fallbackCost = 99;
   for (let i = 0; i < DIRS.length; i++) {
     const d = DIRS[i];
     const p = [myPos[0] + d.dx, myPos[1] + d.dy];
     if (!isPassable(game, p, enemyPos)) continue;
-    if (stepIntoBulletPath(bullets, p, game)) continue; // 脱离格不能在弹道上，也不能被子弹下一帧扫到
-    if (predictedOverloadThreatens(enemy, p, game)) continue; // 过载就绪时，预判双弹车道也不能作为逃生格
-    if (enemyAimsAt(p, enemyTank, game)) continue;       // 也不能撞进敌方炮线
+    if (stepIntoBulletPath(bullets, p, game)) continue;
+    if (predictedOverloadThreatens(enemy, p, game)) continue;
+    if (enemyAimsAt(p, enemyTank, game)) continue;
 
     const turnFrames = d.name === me.tank.direction ? 0 : 1;
-    const cost = turnFrames + 1; // +1 为前进帧
+    const cost = turnFrames + 1;
+    // boost: p2 也安全的优先；p2 危险的作为 fallback
+    if (isBoosted) {
+      var p2 = [myPos[0] + d.dx * 2, myPos[1] + d.dy * 2];
+      if (isPassable(game, p2, enemyPos) &&
+          (stepIntoBulletPath(bullets, p2, game) ||
+           enemyAimsAt(p2, enemyTank, game) ||
+           predictedOverloadThreatens(enemy, p2, game))) {
+        if (cost < fallbackCost) { fallbackCost = cost; fallback = p; }
+        continue;
+      }
+    }
     const tie = distanceFromEdges(p, game);
     if (cost < bestCost || (cost === bestCost && tie > bestTie)) {
       bestCost = cost;
@@ -695,7 +730,7 @@ function fastestEscapeNeighbor(me, game, enemyPos, enemyTank, bullets, enemy) {
       best = p;
     }
   }
-  return best;
+  return best || fallback;
 }
 
 
