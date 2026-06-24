@@ -206,15 +206,36 @@ function createMovementTree(profile, mySkillType) {
     children.push(
       Sequence('bush-hold', [
         Guard('is-overload-enemy', function (bb) { return enemyIsOverloadType(bb.enemy); }),
+        Guard('bush-has-purpose', function (bb) {
+          var isBoosted = !!(bb.me.status && bb.me.status.boosted);
+          if (isBoosted) return false; // boost 期间绝不蹲草，要利用机动性
+
+          // 高价值情况：无限蹲
+          // 1. 星在我射线上（伏击价值）
+          if (bb.star && clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
+          // 2. 敌人可见且近（≤6），有射杀机会
+          if (bb.enemyTank && bb.distToEnemy <= 6) return true;
+          // 3. CD 冷却中（等 boost CD 恢复后再出击）
+          if (bb.me.skill && bb.me.skill.cooldown > 0 && bb.me.skill.cooldown <= 12) return true;
+
+          // 低价值情况：限时蹲（最多 12 帧），超时则出草巡逻
+          if (bb.mySkillType === 'boost') {
+            var campFrames = bb.memory.bushCampFrames || 0;
+            if (campFrames >= 12) return false;
+          }
+          return true;
+        }),
         Guard('no-star-or-star-bait', function (bb) {
           if (!bb.star) return true;
           // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
           if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
           // 星不在炮线但敌人近星（≤8步可达）：出草传星会暴露自己
           if (bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8) return true;
-          // 星远(>8格)或传送即将就绪：留在草丛等CD直传，不出草步行追星
-          if (bb.teleportIsReady || manhattan(bb.myPos, bb.star) > 8) return true;
-          return false;
+          // 非 boost 坦克：星远或传送就绪时留在草丛等
+          if (bb.teleportIsReady || (bb.mySkillType !== 'boost' && manhattan(bb.myPos, bb.star) > 8)) return true;
+          // boost 坦克：星在≤10 格内就出草追
+          if (bb.mySkillType === 'boost' && manhattan(bb.myPos, bb.star) <= 10) return false;
+          return true;
         }),
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
         Guard('bush-safe', function (bb) {
@@ -262,9 +283,11 @@ function createMovementTree(profile, mySkillType) {
             var betterBush = findBetterAmbushBush(bb.myPos, bb.star, bb.game, bb.enemyBullets);
             if (betterBush) {
               bbDirectGo(bb, betterBush.step);
+              bb.memory.bushCampFrames = (bb.memory.bushCampFrames || 0) + 1;
               return;
             }
           }
+          bb.memory.bushCampFrames = (bb.memory.bushCampFrames || 0) + 1;
           primeShortIntent(bb.memory, 'hold', bb.myPos, bb.frame, 3);
           bbSpeak(bb, '蹲草');
         })

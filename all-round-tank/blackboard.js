@@ -114,6 +114,8 @@ function refreshBlackboard(bb, me, enemy, game) {
     bb.memory.guardLineTurnFrames = 0;
   }
   trackStuck(bb.memory, bb.myPos);
+  // bush-hold 限时计数器：不在草丛时重置
+  if (!iAmHidden(me, game)) bb.memory.bushCampFrames = 0;
   cleanExpiredBombs(bb.memory, bb.frame);
   // 幽灵弹补偿：推算视锥外不可见的子弹位置（必须在 memory 初始化之后）
   var phantoms = updatePhantomBullets(bb.memory, bb.enemyBullets, game);

@@ -109,6 +109,9 @@ function createSoftSurvivalTree(profile) {
   if (profile.dodgeBand) {
     children.push(
       Sequence('overload-lane-dodge', [
+        Guard('not-boosted-ol', function (bb) {
+          return !(bb.me.status && bb.me.status.boosted);
+        }),
         Guard('not-hidden-in-bush', function (bb) {
           if (iAmHidden(bb.me, bb.game)) return false;
           return true;
@@ -144,6 +147,9 @@ function createSoftSurvivalTree(profile) {
   if (profile.bushCamperDefense) {
     children.push(
       Sequence('bush-camper-dodge', [
+        Guard('not-boosted-bc', function (bb) {
+          return !(bb.me.status && bb.me.status.boosted);
+        }),
         Guard('enemy-hidden', function (bb) { return !bb.enemyTank; }),
         Guard('not-star-stuck-bush', function (bb) {
           if (!bb.star) return true;

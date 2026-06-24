@@ -682,8 +682,14 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('not-leading-with-star', function (bb) {
           // 领先时不冒险用 boost 追击（保CD守分更重要）
           if (bb.isWinning) return false;
-          // 有星且打平时也保留 boost 抢星（进攻浪费 CD=丢星）
-          if (bb.star && !bb.isLosing) return false;
+          // 对传送敌：星存在时保留 boost 冲星（传送敌能瞬移逃脱，追杀 ROI 低）
+          if (bb.star && !bb.isLosing && bb.enemyTank) {
+            if (enemySkillType === 'teleport') return false;
+            var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+            // 我比敌更近星或差不多 → 留 boost 冲星
+            if (bb.distToStar <= enemyStarDist + 2) return false;
+          }
+          // 有星但敌人明显更近(差3+)且非传送 → 星抢不过，允许 boost 杀敌
           return true;
         }),
         Guard('medium-range', function (bb) {
@@ -767,6 +773,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
   var children = [];
 
   // ---- Boost-star-rush: 加速冲星（go() 走2格）----
+  // 策略：只在高置信能先到时才冲星，否则留 CD 给甩狙
   if (mySkillType === 'boost') {
     children.push(
       Sequence('boost-star-rush', [
@@ -779,44 +786,34 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
               enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
           return true;
         }),
-        // 对传送敌：敌 tp 就绪 + 敌离星更近(或差不多) → 传送瞬移必先到，boost 抢不过
-        // (mat_K3GZG6WLj9RE2xstT/mat_Btr71T1hb8u267tIn: 敌 tp 秒吃，boost 白耗CD)
         Guard('not-tp-unwinnable', function (bb) {
           if (enemySkillType !== 'teleport') return true;
           if (!enemyTeleportReady(bb.enemy)) return true;
           if (!bb.enemyTank) return true;
           var enemyStarDist = manhattan(bb.enemyPos, bb.star);
-          // 敌离星≤自己距离+1 且 tp 就绪 → 必被抢，不浪费 boost
           return bb.distToStar < enemyStarDist - 1;
         }),
-        // 竞争激烈时才用：敌人也在追星或距星差不多
-        Guard('star-contested', function (bb) {
-          if (!bb.enemyTank) return true;
-          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
-          return enemyStarDist <= bb.distToStar + 3 + mp.skillStarContestDelta;
-        }),
-        // 抢得到才用：我落后太多时 boost 也追不回，别白扔在必输的星上。
-        // boost≈6帧×2格/帧，最多追回约6格差距；超出则放弃(mat_28DHb 把
-        // boost 扔在20格外、敌6格就能到的星上→6帧站桩浪费→后续被贴脸打死)。
-        Guard('star-winnable', function (bb) {
+        // 竞速判定：boost 给予约6步有效优势（6帧×1额外步）
+        // 对传送敌另有 not-tp-unwinnable 专门处理，此处保持宽泛允许冲星
+        Guard('star-race-winnable', function (bb) {
           if (!bb.enemyTank) return true;
           var enemyStarDist = manhattan(bb.enemyPos, bb.star);
           return bb.distToStar <= enemyStarDist + 6;
         }),
-        // 终点安全：boost 到星后如果敌人能贴脸直射 → 抢1星换1命=白送
-        // (mat_DINvwJgInmEE3aaVC/mat_CMEQ8uBCE4lKQiGU9: boost冲星→boost过期→被射杀)
+        // 竞争激烈时才用：敌人也在追星或距星差不多（不浪费在无竞争的安全星上）
+        Guard('star-contested', function (bb) {
+          if (!bb.enemyTank) return true;
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return enemyStarDist <= bb.distToStar + 3;
+        }),
         Guard('endpoint-safe', function (bb) {
           if (!bb.enemyTank) return true;
           var starEnemyDist = manhattan(bb.star, bb.enemyPos);
-          // 敌离星≤3 + 能开火 → 我到星时敌已贴脸，boost 过期立刻暴露
           if (starEnemyDist <= 3 && enemyCanFireSoon(bb.enemy)) return false;
-          // 敌与星同线 + 距离≤5 + 能开火 → 我停在星上就是活靶
           if (starEnemyDist <= 5 && enemyCanFireSoon(bb.enemy)) {
             var shotToStar = clearShotDirection(bb.enemyPos, bb.star, bb.game);
             if (shotToStar) return false;
           }
-          // boost 路径经过敌人附近：BFS下一步朝星方向，如果路径会经过敌人≤2范围则不安全
-          // (mat_F4SNc9focSf0u5I6T: boost从[4,7]冲向[6,13]经过敌[9,12]附近被overload双杀)
           var myEnemyDist = bb.distToEnemy;
           if (myEnemyDist <= 8 && enemyCanFireSoon(bb.enemy)) {
             var step = nextStepToward(bb.myPos, bb.star, bb.game, bb.enemyPos);
