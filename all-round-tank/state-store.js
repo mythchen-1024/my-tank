@@ -163,7 +163,8 @@ function resolveShortIntentStep(me, enemy, enemyTank, enemyBullets, game, state)
   const aimBlocks = enemyAimsAt(step, enemyTank, game) && !starGrabExempt;
   if (!isPassable(game, step, enemyPos) || aimBlocks ||
       stepIntoBulletPath(bullets, step, game) ||
-      (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff))) {
+      (enemyPos && stepEntersKillZone(myPos, step, enemyPos, game, enemy, standoff)) ||
+      (!enemyPos && stepIntoHiddenEnemyFireLine(step, myPos, game, state, intent.kind === "star"))) {
     clearShortIntent(state);
     return null;
   }

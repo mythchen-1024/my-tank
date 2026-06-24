@@ -375,12 +375,8 @@ function bbDirectGo(bb, target) {
       if (altDir === bb.myDir) {
         if (!_bbBoostLandingDangerous(bb, altDir)) bb.me.go();
       } else if (altDir) bbTurnToward(bb, altDir);
-    } else {
-      var dir = directionBetween(bb.myPos, target);
-      if (dir === bb.myDir) {
-        if (!_bbBoostLandingDangerous(bb, dir)) bb.me.go();
-      } else if (dir) bbTurnToward(bb, dir);
     }
+    // 无安全替代格时原地等待，不冲入火线
     return;
   }
   var dir = directionBetween(bb.myPos, target);

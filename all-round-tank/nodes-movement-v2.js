@@ -404,10 +404,18 @@ function createMovementTree(profile, mySkillType) {
         }
         // 更宽松的子弹窗口：严重卡住(≥10帧) + 当前没子弹威胁目标格 + 非双弹 → 放行
         // (解决蹲草敌周期性射击间有3-4帧安全窗口但原有豁免不匹配的情况)
+        // 但必须排除隐藏敌火线(mat_5GvDSIdf4q0DW6MzT: 敌蹲草反复开火封行,豁免无视hidden fire line→送死)
+        // 以及可见敌同线能开火(mat_Eg32r5kvaqsHAaQhJ: d=2但敌面对且枪就绪→同帧击杀)
         if ((bb.memory.stuckFrames || 0) >= 10 &&
             !anyBulletThreatens(bb.enemyBullets, starPath.step, bb.game) &&
             !enemyDoubleLaneThreat(bb.enemy)) {
-          if (!bb.enemyPos || manhattan(starPath.step, bb.enemyPos) >= 2) return true;
+          if (!bb.enemyPos) {
+            if (!stepIntoHiddenEnemyFireLine(starPath.step, bb.myPos, bb.game, bb.memory,
+                samePos(starPath.step, bb.star))) return true;
+          } else if (manhattan(starPath.step, bb.enemyPos) >= 2) {
+            var dirToStep = clearShotDirection(bb.enemyPos, starPath.step, bb.game);
+            if (!dirToStep || !enemyCanFireSoon(bb.enemy)) return true;
+          }
         }
         // 最优步不安全 → 探索次优路径：尝试其他方向的邻格作为第一步
         var bestAlt = null, bestAltDist = 9999;

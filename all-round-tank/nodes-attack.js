@@ -60,6 +60,13 @@ function createAttackTree(profile) {
   if (profile.attackAggression !== 'low') {
     children.push(
       Sequence('intercept-shot', [
+        Guard('not-racing-star', function (bb) {
+          if (!bb.star) return true;
+          var myDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          if (myDist < 0 || myDist > 3) return true;
+          var enmDist = bb.enemyPos ? pathDistance(bb.enemyPos, bb.star, bb.game, null) : 99;
+          return myDist > enmDist;
+        }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
@@ -163,6 +170,13 @@ function createAttackTree(profile) {
   if (profile.attackAggression === 'medium' || profile.attackAggression === 'high') {
     children.push(
       Sequence('guard-line', [
+        Guard('not-racing-star', function (bb) {
+          if (!bb.star) return true;
+          var myDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          if (myDist < 0 || myDist > 3) return true;
+          var enmDist = bb.enemyPos ? pathDistance(bb.enemyPos, bb.star, bb.game, null) : 99;
+          return myDist > enmDist;
+        }),
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
         // 让位后撤的门控：只在敌"真握双弹"(已过载/cd<=1)且近距时才放弃守线。
         // 不能用 distToEnemy>=standoff 当硬闸——overload 流 standoff 恒=5，会把
