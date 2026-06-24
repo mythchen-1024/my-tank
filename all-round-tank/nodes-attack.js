@@ -310,6 +310,17 @@ function createBombNodes(profile) {
     ])
   );
 
+  // 1.5 抢星封追：吃星瞬间放弹封住追击者
+  children.push(
+    Sequence('grab-bomb', [
+      Guard('has-grab-bomb', function (bb) { return !!sensePostGrabBomb(bb); }),
+      Action('do-grab-bomb', function (bb) {
+        bbSpeak(bb, '封追!');
+        bbThrowBomb(bb);
+      })
+    ])
+  );
+
   // 2. 抢星封路：星附近放弹封锁敌人来路
   children.push(
     Sequence('star-bomb', [
@@ -321,7 +332,18 @@ function createBombNodes(profile) {
     ])
   );
 
-  // 3. 草丛陷阱：蹲草时放弹阴人
+  // 3. 窄道预埋：主动封锁敌人必经窄道
+  children.push(
+    Sequence('choke-bomb', [
+      Guard('has-choke-bomb', function (bb) { return !!senseChokeBomb(bb); }),
+      Action('do-choke-bomb', function (bb) {
+        bbSpeak(bb, '预埋!');
+        bbThrowBomb(bb);
+      })
+    ])
+  );
+
+  // 4. 草丛陷阱：蹲草时放弹阴人
   children.push(
     Sequence('bush-bomb', [
       Guard('has-bush-bomb', function (bb) { return !!senseBushBomb(bb); }),

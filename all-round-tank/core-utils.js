@@ -1135,6 +1135,50 @@ function inBombBlast(pos, bombPos, game) {
 }
 
 
+function getBombBlastTiles(bombPos, game) {
+  var tiles = {};
+  tiles[key(bombPos)] = true;
+  for (var i = 0; i < DIRS.length; i++) {
+    for (var r = 1; r <= BOMB_BLAST_RANGE; r++) {
+      var p = [bombPos[0] + DIRS[i].dx * r, bombPos[1] + DIRS[i].dy * r];
+      if (!inBounds(p, game)) break;
+      var tile = game.map[p[0]][p[1]];
+      if (tile === 'x') break;
+      tiles[key(p)] = true;
+      if (tile === 'm') break;
+    }
+  }
+  return tiles;
+}
+
+
+function pathDistanceBlockSet(start, target, game, blockSet) {
+  if (!target || !start) return -1;
+  if (samePos(start, target)) return 0;
+  var w = game.map.length, h = game.map[0].length;
+  var queue = [start], head = 0;
+  var dist = {};
+  dist[key(start)] = 0;
+  while (head < queue.length && head < 500) {
+    var p = queue[head++];
+    var pd = dist[key(p)];
+    for (var i = 0; i < DIRS.length; i++) {
+      var n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
+      var k = key(n);
+      if (dist[k] !== undefined) continue;
+      if (n[0] < 0 || n[1] < 0 || n[0] >= w || n[1] >= h) continue;
+      if (blockSet[k]) continue;
+      var tile = game.map[n[0]][n[1]];
+      if (!samePos(n, target) && tile !== '.' && tile !== 'o') continue;
+      dist[k] = pd + 1;
+      if (samePos(n, target)) return pd + 1;
+      queue.push(n);
+    }
+  }
+  return -1;
+}
+
+
 function bombTimeLeft(bomb, frame) {
   if (bomb.detonateFrame !== undefined) return bomb.detonateFrame - frame;
   if (bomb.placedFrame !== undefined) return (bomb.placedFrame + BOMB_FUSE_FRAMES) - frame;

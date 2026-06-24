@@ -2546,6 +2546,38 @@ function findBushBomb(me, enemy, enemyTank, game, state, frame) {
 }
 
 
+function findChokeBomb(me, enemy, enemyTank, game, state, frame) {
+  if (!bombReady(me)) return null;
+  if (!game.star || !enemyTank || !enemyTank.position) return null;
+  var myPos = me.tank.position;
+  var enemyPos = enemyTank.position;
+  var dist = manhattan(myPos, enemyPos);
+  if (dist < 4 || dist > 10) return null;
+  if (openNeighborCount(myPos, game) > 2) return null;
+  if (inBombBlast(game.star, myPos, game)) return null;
+  if (!canEscapeAfterBomb(myPos, me.tank.direction, game, enemyPos, [], state, frame)) return null;
+  var baselineDist = pathDistance(enemyPos, game.star, game, null);
+  if (baselineDist < 0 || baselineDist > 14) return null;
+  var blastTiles = getBombBlastTiles(myPos, game);
+  var detourDist = pathDistanceBlockSet(enemyPos, game.star, game, blastTiles);
+  var gain = (detourDist < 0) ? 99 : (detourDist - baselineDist);
+  if (gain < 4) return null;
+  return { type: 'choke', gain: gain };
+}
+
+
+function findPostGrabBomb(me, enemy, enemyTank, game, state, frame) {
+  if (!bombReady(me)) return null;
+  if (game.star) return null;
+  var myPos = me.tank.position;
+  var enemyPos = enemyTank ? enemyTank.position : (state.lastEnemyPos || null);
+  if (!enemyPos) return null;
+  if (manhattan(myPos, enemyPos) > 6) return null;
+  if (!canEscapeAfterBomb(myPos, me.tank.direction, game, enemyPos, [], state, frame)) return null;
+  return { type: 'grab' };
+}
+
+
 function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!teleportReady(me) || !game.star) return null;
   var frame = game.frames || 0;

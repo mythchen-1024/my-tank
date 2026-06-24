@@ -326,6 +326,19 @@ function senseBlindBushShot(bb) {
   });
 }
 
+function senseChokeBomb(bb) {
+  return sense(bb, 'chokeBomb', function () {
+    return findChokeBomb(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory, bb.frame);
+  });
+}
+
+function sensePostGrabBomb(bb) {
+  return sense(bb, 'postGrabBomb', function () {
+    if (!bb._lastGrabFrame || bb.frame !== bb._lastGrabFrame) return null;
+    return findPostGrabBomb(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory, bb.frame);
+  });
+}
+
 // ============================================================
 // 动作包装器（统一从 bb 取参数，简化节点代码）
 // ============================================================
