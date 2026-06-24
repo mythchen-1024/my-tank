@@ -457,11 +457,13 @@ function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, s
   var myPos = me.tank.position;
   var hm = state.bushHeatmap;
 
-  // 收集所有高概率草丛（score >= 50）对我的射击线威胁
+  // 只对高置信度条目(>=65)响应：walk(80+)/teleport(100)新鲜入草触发，
+  // 扩散(40)/看门狗维持(52)不触发，避免整片草丛永久"危险"(mat_AH4im3mff5)
+  var DODGE_THRESHOLD = 65;
   var threatened = false;
   var dangerDirs = {};
   for (var k in hm) {
-    if (!hm.hasOwnProperty(k) || hm[k].score < 50) continue;
+    if (!hm.hasOwnProperty(k) || hm[k].score < DODGE_THRESHOLD) continue;
     var parts = k.split(',');
     var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
     var shotDir = clearShotDirection(bushPos, myPos, game);
@@ -472,16 +474,15 @@ function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, s
   }
   if (!threatened) return null;
 
-  // 找不在任何高概率草丛射击线上的安全相邻格
+  // 找不在任何高置信草丛射击线上的安全相邻格
   var best = null, bestScore = -9999;
   for (var i = 0; i < DIRS.length; i++) {
     var p = [myPos[0] + DIRS[i].dx, myPos[1] + DIRS[i].dy];
     if (!isPassable(game, p, null)) continue;
     if (stepIntoBulletPath(enemyBullets || [], p, game)) continue;
-    // 检查新位置是否仍在某个高概率草丛射击线上
     var stillDanger = false;
     for (var kk in hm) {
-      if (!hm.hasOwnProperty(kk) || hm[kk].score < 50) continue;
+      if (!hm.hasOwnProperty(kk) || hm[kk].score < DODGE_THRESHOLD) continue;
       var pp = kk.split(',');
       var bp = [parseInt(pp[0]), parseInt(pp[1])];
       if (clearShotDirection(bp, p, game) && manhattan(bp, p) <= 8) {

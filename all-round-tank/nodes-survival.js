@@ -110,9 +110,12 @@ function createSoftSurvivalTree(profile) {
     children.push(
       Sequence('overload-lane-dodge', [
         Guard('not-hidden-in-bush', function (bb) {
-          // 草丛隐身时敌人看不到我，预测弹道无意义，不出草
           if (iAmHidden(bb.me, bb.game)) return false;
           return true;
+        }),
+        Guard('enemy-close-enough', function (bb) {
+          // 敌远(>=7)时预测弹道飞行3.5帧+才到，有充足反应时间，不预闪(mat_3hbcDixqC)
+          return bb.distToEnemy < 7;
         }),
         Guard('in-overload-band', function (bb) { return !!senseOverloadLaneDodge(bb); }),
         Action('dodge-overload-band', function (bb) {
