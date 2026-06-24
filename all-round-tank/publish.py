@@ -34,12 +34,14 @@ BASE_URL = "https://agentank.ai"
 # 坦克档案：每档案绑定 key / 默认文件 / 默认分支 / 构建命令 / 署名。
 # build_cmd 为 None 表示单文件无需构建。
 # myth-survivor agtk_cce872653e5d5b90f76db3ac370a2d2809b6 冰冻
+# myth-tank001 agtk_4b1cdd58062b79c270f0983872acaeddac07 传送
 # myth-tank006 agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4 加速
 # myth-tank007 agtk_97f38c3f2cd8666b86ba86d407a7c758bc24 护盾
 # myth-tank008 agtk_97cd318efe1ebf6a28908e6199da68ccf9ce 超载
+# myth-tank009 agtk_7dfcb309cbcf0b41efe34117d388401b2819 眩晕
 TANK_PROFILES = {
     "bt": {  # 默认：行为树坦克 myth-survivor
-        "key": "agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4",
+        "key": "agtk_97f38c3f2cd8666b86ba86d407a7c758bc24",
         "file": "bt-tank-submit.js",
         "branch": "main",
         "build_cmd": ["node", "build.js"],
@@ -140,17 +142,46 @@ def cmd_matches(tank_key, limit=5):
 
 
 def minify_js(code):
-    """轻量级 JS 压缩: 去注释、去多余空白, 保留换行(ASI 安全)。
+    """使用 Terser 进行 JS 压缩（变量名缩短+死代码消除+常量折叠）。
 
-    逐字符扫描, 正确跳过字符串内容, 不破坏字符串字面量里的 // 或 /*。
-    仅适用于无模板字符串/正则字面量的脚本(本项目坦克脚本满足该约束)。
+    如果 Terser 不可用则回退到轻量级压缩（去注释+去空白）。
     """
+    # 先尝试用 Terser 深度压缩
+    try:
+        result = subprocess.run(
+            ["terser", "--compress", "--mangle"],
+            input=code,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=os.path.dirname(__file__) or ".",
+            timeout=60,
+            shell=True,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            print("  [压缩引擎: Terser]")
+            return result.stdout.strip()
+        else:
+            print(f"  [Terser 失败, 回退轻量压缩] stderr: {result.stderr[:200]}")
+    except FileNotFoundError:
+        print("  [Terser 未安装, 回退轻量压缩] 建议: npm install -g terser")
+    except subprocess.TimeoutExpired:
+        print("  [Terser 超时, 回退轻量压缩]")
+    except Exception as e:
+        print(f"  [Terser 异常, 回退轻量压缩] {e}")
+
+    # 回退: 轻量级压缩(去注释+去空白)
+    return _minify_js_fallback(code)
+
+
+def _minify_js_fallback(code):
+    """轻量级 JS 压缩回退: 去注释、去多余空白, 保留换行(ASI 安全)。"""
     out = []
     i, n = 0, len(code)
     while i < n:
         c = code[i]
         nxt = code[i + 1] if i + 1 < n else ""
-        if c in ('"', "'"):  # 字符串字面量, 原样保留
+        if c in ('"', "'"):
             quote = c
             out.append(c)
             i += 1
@@ -164,11 +195,11 @@ def minify_js(code):
                 i += 1
                 if ch == quote:
                     break
-        elif c == "/" and nxt == "/":  # 行注释
+        elif c == "/" and nxt == "/":
             i += 2
             while i < n and code[i] != "\n":
                 i += 1
-        elif c == "/" and nxt == "*":  # 块注释
+        elif c == "/" and nxt == "*":
             i += 2
             while i < n and not (code[i] == "*" and i + 1 < n and code[i + 1] == "/"):
                 i += 1

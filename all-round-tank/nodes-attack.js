@@ -198,6 +198,23 @@ function createAttackTree(profile) {
     ])
   );
 
+  // 卡住盲射升级：反复卡住 + 星存在 + 敌不可见 → 强制朝草丛开火逼现身
+  children.push(
+    Sequence('stuck-bush-fire', [
+      Guard('star-stuck', function (bb) {
+        return !!bb.star && (bb.memory.stuckFrames || 0) >= 8;
+      }),
+      Guard('enemy-hidden', function (bb) { return !bb.enemyTank; }),
+      Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+      Guard('has-blind-target', function (bb) { return !!senseBlindBushShot(bb); }),
+      Action('do-stuck-fire', function (bb) {
+        var shot = senseBlindBushShot(bb);
+        if (bb.myDir === shot.dir) { bbSpeak(bb, '逼现!'); bbFire(bb); }
+        else bbTurnToward(bb, shot.dir);
+      })
+    ])
+  );
+
   // 通用草丛盲射：敌人消失后朝其最后位置附近的草丛开枪
   children.push(
     Sequence('blind-bush-shot', [

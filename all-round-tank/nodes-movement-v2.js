@@ -388,6 +388,14 @@ function createMovementTree(profile, mySkillType) {
           var shieldDist = manhattan(starPath.step, bb.enemyPos);
           if (shieldDist >= 2) return true;
         }
+        // 子弹窗口豁免：敌人子弹在途(不能再射) + 我方已卡住 → d>=2 暂时安全，放行冲星
+        if ((bb.memory.stuckFrames || 0) >= 6 &&
+            bb.enemy && bb.enemy.bullet && bb.enemy.bullet.position && !enemyDoubleLaneThreat(bb.enemy)) {
+          if (bb.enemyPos) {
+            var bulletWindowDist = manhattan(starPath.step, bb.enemyPos);
+            if (bulletWindowDist >= 2) return true;
+          }
+        }
         // 最优步不安全 → 探索次优路径：尝试其他方向的邻格作为第一步
         var bestAlt = null, bestAltDist = 9999;
         for (var i = 0; i < DIRS.length; i++) {
@@ -401,6 +409,31 @@ function createMovementTree(profile, mySkillType) {
           if (altDist < bestAltDist) { bestAltDist = altDist; bestAlt = p; }
         }
         if (bestAlt && bestAltDist <= starPath.dist + 2) {
+          bb._cache._starPath = { step: bestAlt, dist: bestAltDist + 1 };
+          return true;
+        }
+        // 2-step 绕路：卡住6帧+ 且 4邻全不安全时，看 2 步内能否绕过死区
+        if ((bb.memory.stuckFrames || 0) >= 6) {
+        for (var i2 = 0; i2 < DIRS.length; i2++) {
+          var p1 = [bb.myPos[0] + DIRS[i2].dx, bb.myPos[1] + DIRS[i2].dy];
+          if (!isPassable(bb.game, p1, bb.enemyPos)) continue;
+          if (samePos(p1, starPath.step)) continue;
+          if (anyBulletThreatens(bb.enemyBullets, p1, bb.game)) continue;
+          for (var j2 = 0; j2 < DIRS.length; j2++) {
+            var p2 = [p1[0] + DIRS[j2].dx, p1[1] + DIRS[j2].dy];
+            if (!isPassable(bb.game, p2, bb.enemyPos)) continue;
+            if (!isSafeStep(p2, p1, bb.enemyPos, bb.game,
+              bb.enemy, standoff, samePos(p2, bb.star), bb.enemyBullets, bb.memory)) continue;
+            var altDist2 = pathDistance(p2, bb.star, bb.game, bb.enemyPos);
+            if (altDist2 < 0) continue;
+            var totalDist = altDist2 + 2;
+            if (totalDist < bestAltDist && totalDist <= starPath.dist + 4) {
+              bestAltDist = totalDist; bestAlt = p1;
+            }
+          }
+        }
+        } // end stuckFrames gate
+        if (bestAlt) {
           bb._cache._starPath = { step: bestAlt, dist: bestAltDist + 1 };
           return true;
         }

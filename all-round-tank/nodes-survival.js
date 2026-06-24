@@ -158,6 +158,12 @@ function createSoftSurvivalTree(profile) {
         if (iAmHidden(bb.me, bb.game) && enemyIsOverloadType(bb.enemy)) return false;
         return true;
       }),
+      Guard('not-star-stuck', function (bb) {
+        if (!bb.star) return true;
+        if ((bb.memory.stuckFrames || 0) < 12) return true;
+        var myStarDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+        return myStarDist < 0 || myStarDist > 5;
+      }),
       Guard('has-aim-dodge', function (bb) { return !!senseAimDodge(bb); }),
       Action('do-aim-dodge', function (bb) {
         bbMoveToward(bb, senseAimDodge(bb));

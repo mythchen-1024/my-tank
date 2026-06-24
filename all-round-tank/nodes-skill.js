@@ -390,7 +390,7 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
             if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '晕杀!'); bbFire(bb); }
             else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
           } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 3);
+            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
             if (step) bbMoveToward(bb, step);
           }
         })

@@ -1777,6 +1777,7 @@ function findOverloadLaneDodge(me, enemy, enemyTank, game, enemyPos) {
  */
 function findAimDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank) return null;
+  if (enemy && enemy.status && enemy.status.stunned) return null;
   var isDirectAim = enemyAimsAt(me.tank.position, enemyTank, game);
   if (!isDirectAim && !enemyBoostFlickThreat(me.tank.position, enemy, enemyTank, game)) return null;
   // 隐身豁免：草丛中敌人看不见我，炮口朝向不是真正的瞄准，无需空躲。
@@ -1890,6 +1891,7 @@ function shouldContestStarOverAim(me, enemy, enemyTank, enemyBullets, game) {
  */
 function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
   if (!enemyTank || !enemyPos) return null;
+  if (enemy && enemy.status && enemy.status.stunned) return null;
   // 隐身豁免：草丛中敌人看不见我，同线威胁不成立，无需规避。
   // 但以下情况不豁免：overload 激活 / 敌人近距（≤3格贴脸即使隐身也危险）
   // 近距反豁免的例外：枪就绪 + 有射击线 → 草丛先手优势，应射击而非出草逃跑
