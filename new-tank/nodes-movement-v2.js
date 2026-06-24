@@ -193,7 +193,10 @@ function createMovementTree(profile) {
           // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
           if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
           // 星不在炮线但敌人近星（≤8步可达）：出草传星会暴露自己
-          return !!bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8;
+          if (bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8) return true;
+          // 星远(>8格)或传送即将就绪：留在草丛等CD直传，不出草步行追星
+          if (bb.teleportIsReady || manhattan(bb.myPos, bb.star) > 8) return true;
+          return false;
         }),
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
         Guard('bush-safe', function (bb) {
