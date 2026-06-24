@@ -670,6 +670,8 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
         Guard('not-leading-with-star', function (bb) {
           if (bb.isWinning && bb.star) return false;
+          // 有星且打平时也保留 boost 抢星（进攻浪费 CD=丢星）
+          if (bb.star && !bb.isLosing) return false;
           return true;
         }),
         Guard('medium-range', function (bb) {
@@ -765,11 +767,15 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
               enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
           return true;
         }),
-        // 对传送敌开局：前15帧敌 tp 就绪时不抢星(传送瞬移必先到)；之后新星敌 tp 多半在 CD 照常 boost
-        Guard('not-tp-opening', function (bb) {
+        // 对传送敌：敌 tp 就绪 + 敌离星更近(或差不多) → 传送瞬移必先到，boost 抢不过
+        // (mat_K3GZG6WLj9RE2xstT/mat_Btr71T1hb8u267tIn: 敌 tp 秒吃，boost 白耗CD)
+        Guard('not-tp-unwinnable', function (bb) {
           if (enemySkillType !== 'teleport') return true;
-          if (bb.framesLeft > MAX_GAME_FRAMES - 15) return !enemyTeleportReady(bb.enemy);
-          return true;
+          if (!enemyTeleportReady(bb.enemy)) return true;
+          if (!bb.enemyTank) return true;
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          // 敌离星≤自己距离+1 且 tp 就绪 → 必被抢，不浪费 boost
+          return bb.distToStar < enemyStarDist - 1;
         }),
         // 竞争激烈时才用：敌人也在追星或距星差不多
         Guard('star-contested', function (bb) {
@@ -784,6 +790,20 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (!bb.enemyTank) return true;
           var enemyStarDist = manhattan(bb.enemyPos, bb.star);
           return bb.distToStar <= enemyStarDist + 6;
+        }),
+        // 终点安全：boost 到星后如果敌人能贴脸直射 → 抢1星换1命=白送
+        // (mat_DINvwJgInmEE3aaVC/mat_CMEQ8uBCE4lKQiGU9: boost冲星→boost过期→被射杀)
+        Guard('endpoint-safe', function (bb) {
+          if (!bb.enemyTank) return true;
+          var starEnemyDist = manhattan(bb.star, bb.enemyPos);
+          // 敌离星≤3 + 能开火 → 我到星时敌已贴脸，boost 过期立刻暴露
+          if (starEnemyDist <= 3 && enemyCanFireSoon(bb.enemy)) return false;
+          // 敌与星同线 + 距离≤5 + 能开火 → 我停在星上就是活靶
+          if (starEnemyDist <= 5 && enemyCanFireSoon(bb.enemy)) {
+            var shotToStar = clearShotDirection(bb.enemyPos, bb.star, bb.game);
+            if (shotToStar) return false;
+          }
+          return true;
         }),
         Action('do-boost-star', function (bb) {
           bbSpeak(bb, '加速星!');
