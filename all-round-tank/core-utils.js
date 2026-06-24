@@ -1354,7 +1354,7 @@ function hasNearbyFiringLane(myPos, enemyPos, game, maxSteps) {
 /**
  * 判断 boost go() 前方2格是否安全可通行
  */
-function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
+function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets, enemyTank, enemy) {
   var dd = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[myDir];
   if (!dd) return false;
   var p1 = [myPos[0] + dd[0], myPos[1] + dd[1]];
@@ -1363,5 +1363,9 @@ function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets) {
   // p1 不检查子弹：boost 跳跃跳过中间格，引擎不碰撞（坦克先移动到 p2，子弹后结算）
   if (!isPassable(game, p2, enemyPos)) return true;
   if (stepIntoBulletPath(enemyBullets, p2, game)) return false;
+  // 近敌制动：落点距敌≤2 且敌能开火 → 不安全（boost 过期后无反应时间）
+  if (enemyPos && manhattan(p2, enemyPos) <= 2 && enemyCanFireSoon(enemy)) return false;
+  // 落点在敌炮口正对方向 → 不安全
+  if (enemyAimsAt(p2, enemyTank, game) && enemyCanFireSoon(enemy)) return false;
   return true;
 }

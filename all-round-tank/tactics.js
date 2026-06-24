@@ -1213,7 +1213,10 @@ function wallBlocksEnemyShot(next, enemyPos, game) {
 function stepIntoHiddenEnemyFireLine(next, myPos, game, memory, isStar) {
   if (!memory) return false;
   var frame = (game && game.frames) || 0;
-  var stuckRelax = (memory.stuckFrames || 0) >= 4;
+  var stuck = memory.stuckFrames || 0;
+  var stuckRelax = stuck >= 4;
+  // 高卡住帧数时完全放行：防止热力图扩散导致的无限震荡(mat_KIVHqQI7CpDLwTbF0)
+  if (stuck >= 10 && isStar) return false;
 
   // 来源1: lastEnemyPos（12帧内有效）
   if (memory.lastEnemyPos && frame - memory.lastEnemySeenFrame <= 12) {

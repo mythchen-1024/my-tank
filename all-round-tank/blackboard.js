@@ -338,6 +338,7 @@ function bbTeleport(bb, pos) {
 
 function bbMoveToward(bb, target) {
   if (!bb.enemyPos && bb.memory && target &&
+      (bb.memory.stuckFrames || 0) < 12 &&
       stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
         !!(bb.star && samePos(target, bb.star)))) {
     var alt = _findSafeAlternativeStep(bb);
@@ -372,6 +373,7 @@ function bbUseSkill(bb, skillName, arg1, arg2) {
 
 function bbDirectGo(bb, target) {
   if (!bb.enemyPos && bb.memory && target &&
+      (bb.memory.stuckFrames || 0) < 12 &&
       stepIntoHiddenEnemyFireLine(target, bb.myPos, bb.game, bb.memory,
         !!(bb.star && samePos(target, bb.star)))) {
     var alt = _findSafeAlternativeStep(bb);

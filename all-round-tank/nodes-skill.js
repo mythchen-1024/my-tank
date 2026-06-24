@@ -680,7 +680,8 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
         Guard('not-leading-with-star', function (bb) {
-          if (bb.isWinning && bb.star) return false;
+          // 领先时不冒险用 boost 追击（保CD守分更重要）
+          if (bb.isWinning) return false;
           // 有星且打平时也保留 boost 抢星（进攻浪费 CD=丢星）
           if (bb.star && !bb.isLosing) return false;
           return true;
@@ -814,6 +815,23 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
             var shotToStar = clearShotDirection(bb.enemyPos, bb.star, bb.game);
             if (shotToStar) return false;
           }
+          // boost 路径经过敌人附近：BFS下一步朝星方向，如果路径会经过敌人≤2范围则不安全
+          // (mat_F4SNc9focSf0u5I6T: boost从[4,7]冲向[6,13]经过敌[9,12]附近被overload双杀)
+          var myEnemyDist = bb.distToEnemy;
+          if (myEnemyDist <= 8 && enemyCanFireSoon(bb.enemy)) {
+            var step = nextStepToward(bb.myPos, bb.star, bb.game, bb.enemyPos);
+            if (step) {
+              var stepDir = directionBetween(bb.myPos, step);
+              if (stepDir) {
+                var dv = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[stepDir];
+                for (var look = 1; look <= 6; look++) {
+                  var proj = [bb.myPos[0] + dv[0] * look, bb.myPos[1] + dv[1] * look];
+                  if (!inBounds(proj, bb.game)) break;
+                  if (manhattan(proj, bb.enemyPos) <= 2) return false;
+                }
+              }
+            }
+          }
           return true;
         }),
         Action('do-boost-star', function (bb) {
@@ -846,7 +864,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (!goDir) { bbMoveToward(bb, bb.star); return; }
           // 已对准：前进方向安全才 go(走2格)，否则交回常规安全移动(走1格)
           if (bb.myDir === goDir) {
-            if (boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) bb.me.go();
+            if (boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy)) bb.me.go();
             else bbMoveToward(bb, bb.star);
             return;
           }
@@ -855,7 +873,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           // 仅当(a)只需转1次(180°掉头吃不到免费窗口) 且 (b)转后方向安全 才组合;
           // 否则照常只转向(下一帧再走)。
           if (turnDistance(bb.myDir, goDir) === 1 &&
-              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets)) {
+              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy)) {
             bbTurnToward(bb, goDir);
             bb.me.go();
           } else {
