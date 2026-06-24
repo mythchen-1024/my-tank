@@ -194,7 +194,10 @@ function createMovementTree(profile, mySkillType) {
           // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
           if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
           // 星不在炮线但敌人近星（≤8步可达）：出草传星会暴露自己
-          return !!bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8;
+          if (bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8) return true;
+          // 星远(>8格)或传送即将就绪：留在草丛等CD直传，不出草步行追星
+          if (bb.teleportIsReady || manhattan(bb.myPos, bb.star) > 8) return true;
+          return false;
         }),
         Guard('i-am-hidden', function (bb) { return iAmHidden(bb.me, bb.game); }),
         Guard('bush-safe', function (bb) {
@@ -294,6 +297,26 @@ function createMovementTree(profile, mySkillType) {
     ])
   );
 
+  // ---- 争星空窗推进 ----
+  children.push(
+    Sequence('star-contest', [
+      Guard('star-exists', function (bb) { return !!bb.star; }),
+      Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+      Guard('both-near-star', function (bb) {
+        return bb.distToStar <= 6 && manhattan(bb.enemyPos, bb.star) <= 6;
+      }),
+      Guard('has-contest-push', function (bb) {
+        var push = findStarContestPush(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.enemyBullets);
+        if (!push) return false;
+        bb._cache._contestPush = push;
+        return true;
+      }),
+      Action('do-contest-push', function (bb) {
+        bbDirectGo(bb, bb._cache._contestPush.step);
+      })
+    ])
+  );
+
   // ---- 追星 ----
   children.push(
     Sequence('star-chase', [
@@ -317,6 +340,17 @@ function createMovementTree(profile, mySkillType) {
         if (isSafeStep(starPath.step, bb.myPos, bb.enemyPos, bb.game,
           bb.enemy, standoff, samePos(starPath.step, bb.star), bb.enemyBullets, bb.memory)) {
           return true;
+        }
+        // 追星宽松豁免：敌人不面对我或弹管空时，d=3 也可接受
+        if (bb.enemyTank && bb.enemyPos) {
+          var dist = manhattan(starPath.step, bb.enemyPos);
+          if (dist === 3 && !anyBulletThreatens(bb.enemyBullets, starPath.step, bb.game)) {
+            var dirToStep = clearShotDirection(bb.enemyPos, starPath.step, bb.game);
+            if (!dirToStep) return true;
+            var enemyFacing = (dirToStep === bb.enemyTank.direction);
+            if (!enemyFacing) return true;
+            if (!enemyCanFireSoon(bb.enemy)) return true;
+          }
         }
         // 最优步不安全 → 探索次优路径：尝试其他方向的邻格作为第一步
         var bestAlt = null, bestAltDist = 9999;

@@ -250,7 +250,10 @@ function shouldChaseStar(myPos, enemyPos, game, starPath, enemy, fleeMode, me, e
   }
   // 如果比敌人更近（或差距在容忍范围内），就去抢
   // +4 容忍：敌人传送也需1帧+2等待+补走+转向，实际到达不比走路快多少
-  return enemyDist < 0 || myEffectiveDist <= enemyDist + 4;
+  // 有射线到星时放宽到+6：能拦截来敌，不必过于保守让位
+  var tolerance = 4;
+  if (clearShotDirection(myPos, game.star, game)) tolerance = 6;
+  return enemyDist < 0 || myEffectiveDist <= enemyDist + tolerance;
 }
 
 

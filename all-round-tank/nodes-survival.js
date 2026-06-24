@@ -109,6 +109,11 @@ function createSoftSurvivalTree(profile) {
   if (profile.dodgeBand) {
     children.push(
       Sequence('overload-lane-dodge', [
+        Guard('not-hidden-in-bush', function (bb) {
+          // 草丛隐身时敌人看不到我，预测弹道无意义，不出草
+          if (iAmHidden(bb.me, bb.game)) return false;
+          return true;
+        }),
         Guard('in-overload-band', function (bb) { return !!senseOverloadLaneDodge(bb); }),
         Action('dodge-overload-band', function (bb) {
           bbMoveToward(bb, senseOverloadLaneDodge(bb));

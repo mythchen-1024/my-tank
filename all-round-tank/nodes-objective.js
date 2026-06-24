@@ -166,6 +166,29 @@ function createObjectiveTree(profile, mySkillType) {
     ])
   );
 
+  // ---- 星点拦截射击：敌人朝星直线推进时提前开火 ----
+  children.push(
+    Sequence('star-intercept-fire', [
+      Guard('star-exists', function (bb) { return !!bb.star; }),
+      Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+      Guard('enemy-approaching-star', function (bb) {
+        var shot = findStarInterceptShot(bb.me, bb.enemy, bb.enemyTank, bb.game);
+        if (!shot) return false;
+        bb._cache._starIntercept = shot;
+        return true;
+      }),
+      Action('do-star-intercept', function (bb) {
+        var shot = bb._cache._starIntercept;
+        if (bb.myDir === shot.dir) {
+          bbSpeak(bb, '拦截!');
+          bbFire(bb);
+        } else {
+          bbTurnToward(bb, shot.dir);
+        }
+      })
+    ])
+  );
+
   // ---- 传送刺杀（profile 开关控制，仅传送技能） ----
   if (profile.enableAssassination && mySkillType === 'teleport') {
     children.push(

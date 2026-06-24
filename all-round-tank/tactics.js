@@ -2568,3 +2568,66 @@ function findAmbushGrassScan(myPos, myDir, star, game, state) {
   candidates.sort(function (a, b) { return b.score - a.score; });
   return candidates[0].dir;
 }
+
+
+function findStarContestPush(me, enemy, enemyTank, game, enemyBullets) {
+  if (!game.star || !enemyTank) return null;
+  var myPos = me.tank.position;
+  var enemyPos = enemyTank.position;
+  if (manhattan(myPos, game.star) > 6 || manhattan(enemyPos, game.star) > 6) return null;
+
+  var hasWindow = false;
+
+  var dirToStar = directionBetween(enemyPos, game.star);
+  var dirToMe = clearShotDirection(enemyPos, myPos, game);
+  // 空窗1: 敌人方向既不朝星也不朝我
+  if (enemyTank.direction !== dirToStar &&
+      (!dirToMe || enemyTank.direction !== dirToMe)) {
+    hasWindow = true;
+  }
+  // 空窗2: 弹管空 + 不面朝我
+  if (!enemyCanFireSoon(enemy) && (!dirToMe || dirToMe !== enemyTank.direction)) {
+    hasWindow = true;
+  }
+  // 空窗3: 敌人正后撤（方向背对星）
+  var opposites = { up: 'down', down: 'up', left: 'right', right: 'left' };
+  if (dirToStar && enemyTank.direction === opposites[dirToStar]) {
+    hasWindow = true;
+  }
+
+  if (!hasWindow) return null;
+
+  var starPath = shortestPathInfo(myPos, game.star, game, enemyPos);
+  if (!starPath || !starPath.step) return null;
+  if (anyBulletThreatens(enemyBullets, starPath.step, game)) return null;
+  if (stepIntoBulletPath(enemyBullets, starPath.step, game)) return null;
+
+  return { step: starPath.step };
+}
+
+
+function findStarInterceptShot(me, enemy, enemyTank, game) {
+  if (!game.star || !enemyTank) return null;
+  if (!gunReady(me)) return null;
+  var myPos = me.tank.position;
+  var enemyPos = enemyTank.position;
+  var star = game.star;
+
+  var shotDir = clearShotDirection(myPos, star, game);
+  if (!shotDir) return null;
+
+  var enemyDirToStar = directionBetween(enemyPos, star);
+  if (!enemyDirToStar || enemyTank.direction !== enemyDirToStar) return null;
+  if (enemyPos[0] !== star[0] && enemyPos[1] !== star[1]) return null;
+  var enemyDistToStar = manhattan(enemyPos, star);
+  if (enemyDistToStar < 1 || enemyDistToStar > 4) return null;
+
+  var myTurnFrames = turnDistance(me.tank.direction, shotDir);
+  var bulletFrames = myTurnFrames + Math.ceil(manhattan(myPos, star) / BULLET_SPEED);
+  var enemyArrival = enemyDistToStar;
+
+  if (bulletFrames <= enemyArrival && bulletFrames >= enemyArrival - 1) {
+    return { dir: shotDir, turnFrames: myTurnFrames };
+  }
+  return null;
+}
