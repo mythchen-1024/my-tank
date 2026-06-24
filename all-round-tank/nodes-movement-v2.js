@@ -389,12 +389,24 @@ function createMovementTree(profile, mySkillType) {
           if (shieldDist >= 2) return true;
         }
         // 子弹窗口豁免：敌人子弹在途(不能再射) + 我方已卡住 → d>=2 暂时安全，放行冲星
+        // 但中途步(非抢星最后一步)排除步入敌炮口正对方向(mat_6OkNLt5u: d=2同行被弹回即射杀)
+        // 最后一步(dist≤1=直接吃星)豁免此限制：抢到就跑，1帧暴露可接受
         if ((bb.memory.stuckFrames || 0) >= 6 &&
             bb.enemy && bb.enemy.bullet && bb.enemy.bullet.position && !enemyDoubleLaneThreat(bb.enemy)) {
           if (bb.enemyPos) {
             var bulletWindowDist = manhattan(starPath.step, bb.enemyPos);
-            if (bulletWindowDist >= 2) return true;
+            if (bulletWindowDist >= 2 &&
+                (starPath.dist <= 1 || !enemyAimsAt(starPath.step, bb.enemyTank, bb.game))) return true;
           }
+        }
+        // 蹲点封锁突破：敌蹲星旁持续开火封锁(mat_AEYpdxLQVymJqeci2: 敌[3,7]朝up射，
+        // 星[3,6]被kill zone+子弹周期封死128帧)。利用射击间隙窗口强冲：
+        // 敌弹在途(不能再射) + 当前无弹威胁目标格 + 目标贴近星 → 放行(允许 d=1 kill zone)
+        if ((bb.memory.stuckFrames || 0) >= 8 && starPath.dist <= 2 &&
+            bb.enemy && bb.enemy.bullet && bb.enemy.bullet.position &&
+            !enemyDoubleLaneThreat(bb.enemy) &&
+            !anyBulletThreatens(bb.enemyBullets, starPath.step, bb.game)) {
+          return true;
         }
         // 蹲草封锁强冲豁免：严重卡住(≥12帧) + 星在2步内 → 无论 kill zone 都冲星
         // (mat_4heiXPL7UUB: 敌蹲[7,11]连射，星[7,10] d=1永远被kill zone封死→超时输)

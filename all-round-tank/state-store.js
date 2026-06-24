@@ -249,12 +249,37 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
   var stats = state.bushCamperStats;
 
   // ── 敌方出草重置：可见且不在草丛 → 清空热力图 ──
+  // 改进：出草时记录敌人行进方向，对前方相邻草丛预加热力（草丛间过渡追踪）
   if (enemyTank && enemyTank.position && tileAt(game, enemyTank.position) !== "o") {
+    // 先预测：敌人正在行进（与上帧位置不同）且前方有草丛 → 可能即将进入
+    var preSeeded = false;
+    if (state.lastEnemyPos && !samePos(state.lastEnemyPos, enemyTank.position)) {
+      var eDir = enemyTank.direction;
+      var dxMap = { right: 1, left: -1, up: 0, down: 0 };
+      var dyMap = { right: 0, left: 0, up: -1, down: 1 };
+      if (eDir && dxMap[eDir] !== undefined) {
+        var ep = enemyTank.position;
+        for (var look = 1; look <= 3; look++) {
+          var ahead = [ep[0] + dxMap[eDir] * look, ep[1] + dyMap[eDir] * look];
+          if (!inBounds(ahead, game)) break;
+          var t = tileAt(game, ahead);
+          if (t === 'x' || t === 'm') break;
+          if (t === 'o') {
+            _bushHeatAdd(hm, ahead, 70, frame, 'transit');
+            preSeeded = true;
+          }
+        }
+      }
+    }
+    // 清空旧热力（保留刚预种的 transit 条目）
     for (var k in hm) {
-      if (hm.hasOwnProperty(k)) delete hm[k];
+      if (hm.hasOwnProperty(k) && hm[k].source !== 'transit') delete hm[k];
+    }
+    // transit 条目也需要标记为非 transit 以便后续正常衰减
+    for (var k in hm) {
+      if (hm.hasOwnProperty(k) && hm[k].source === 'transit') hm[k].source = 'walk-predict';
     }
     stats.bushStationaryFrames = 0;
-    // 更新子弹可见标记，防止下次进草时误判已有老弹为"草丛新开炮"
     state.bushBulletSeen = !!(enemy && enemy.bullet && enemy.bullet.position);
     return;
   }
@@ -275,22 +300,46 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
         hm[k].score = 52;
       }
     }
+    // ── 热力扩散：隐身超过6帧后，向相邻草丛扩散热力（模拟草内移动） ──
+    var age = frame - (state.lastEnemySeenFrame || 0);
+    if (age >= 6 && age % 4 === 0) {
+      var spreads = [];
+      for (var k in hm) {
+        if (!hm.hasOwnProperty(k) || hm[k].score < 50) continue;
+        var parts = k.split(',');
+        var bx = parseInt(parts[0]), by = parseInt(parts[1]);
+        for (var i = 0; i < DIRS.length; i++) {
+          var adj = [bx + DIRS[i].dx, by + DIRS[i].dy];
+          if (tileAt(game, adj) === 'o' && !hm[key(adj)]) {
+            spreads.push(adj);
+          }
+        }
+      }
+      for (var s = 0; s < spreads.length; s++) {
+        _bushHeatAdd(hm, spreads[s], 40, frame, 'spread');
+      }
+    }
   }
 
   // ── 途径 1：走进草丛 ──
   // 上帧可见（lastEnemyPos 有值且 lastEnemySeenFrame 是上一帧），本帧不可见
+  // 改进：利用 lastEnemyDir 对行进方向的草丛加更高权重
   if (!enemyTank && state.lastEnemyPos && state.lastEnemySeenFrame >= frame - 1) {
     var lp = state.lastEnemyPos;
     if (tileAt(game, lp) === "o") {
       _bushHeatAdd(hm, lp, 80, frame, 'walk');
       stats.walkIntoBush++;
     } else {
-      // 相邻格有草丛：敌人走一步就进了草
       var adjFound = false;
+      var eDir = state.lastEnemyDir;
+      var dxMap = { right: 1, left: -1, up: 0, down: 0 };
+      var dyMap = { right: 0, left: 0, up: -1, down: 1 };
       for (var i = 0; i < DIRS.length; i++) {
         var adj = [lp[0] + DIRS[i].dx, lp[1] + DIRS[i].dy];
         if (tileAt(game, adj) === "o") {
-          _bushHeatAdd(hm, adj, 60, frame, 'walk');
+          // 行进方向的草丛得更高热力（更可能是目的地）
+          var inDir = eDir && (DIRS[i].dx === dxMap[eDir] && DIRS[i].dy === dyMap[eDir]);
+          _bushHeatAdd(hm, adj, inDir ? 90 : 50, frame, 'walk');
           adjFound = true;
         }
       }
