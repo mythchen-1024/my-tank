@@ -21,7 +21,7 @@
  * 默认参数（通用基线）
  */
 var SKILL_MATCHUP_DEFAULTS = {
-  freezeKillRange: 6,        // 冰冻设置触发距离（无射线时，≤此距离才冻+走位；有射线时无距离限制）
+  freezeKillRange: 5,        // 冰冻设置触发距离（无射线时，≤此距离才冻+走位；有射线时≤4限制）
   freezeKillRequireShot: false, // 是否要求已有射线才冻（vs护盾等需更严格）
   stunKillRange: 7,          // 眩晕设置触发距离（无射线时；有射线时无距离限制，6帧够走位）
   overloadRange: 5,          // 过载触发距离
@@ -245,16 +245,36 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
       ])
     );
 
-    // (1) freeze-snipe：有射线（任意距离）→ 直接冻 → 下帧开火
-    //     最高优先级：已同线，冻住就射，距离越近命中越稳
+    // (0.5) freeze-star-deny：星竞争时冻住对手让自己先吃
+    //     优先级高于 freeze-snipe：有星争时 deny > kill attempt
+    children.push(
+      Sequence('freeze-star-deny', [
+        Guard('star-exists', function (bb) { return !!bb.star; }),
+        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('star-contested', function (bb) {
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          return enemyStarDist <= bb.distToStar + 2 && bb.distToStar <= 8;
+        }),
+        Guard('no-self-danger', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Action('do-freeze-star-deny', function (bb) {
+          bbSpeak(bb, '冰星!');
+          bbUseSkill(bb, 'freeze');
+        })
+      ])
+    );
+
+    // (1) freeze-snipe：有射线 + 近距(≤4) → 直接冻 → 下帧开火
     //     已对准时：F0冻→F1射→距4:F2到(冻中)=必杀
     //     差1转时：F0冻→F1转→F2射→距2:命中/距4:解冻帧≈50%命中
-    //     远距(>6)但有线：冻住虽不一定杀到，但打断敌节奏+阻止抢星仍有大价值
     children.push(
       Sequence('freeze-snipe', [
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+        Guard('in-kill-range', function (bb) { return bb.distToEnemy <= 4; }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
         Guard('not-shielded', function (bb) {
@@ -265,7 +285,7 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
         Action('do-freeze-snipe', function (bb) {
-          bbSpeak(bb, bb.distToEnemy <= 4 ? '冰杀!' : '冰射!');
+          bbSpeak(bb, '冰杀!');
           bbUseSkill(bb, 'freeze');
         })
       ])
@@ -920,29 +940,8 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
     );
   }
 
-  // ---- Freeze-star: 抢星竞争时冻住对手 ----
+  // ---- Freeze-ambush：蹲草伏击（通用策略） ----
   if (mySkillType === 'freeze') {
-    children.push(
-      Sequence('freeze-star', [
-        Guard('star-exists', function (bb) { return !!bb.star; }),
-        Guard('freeze-ready', function (bb) { return canFreeze(bb.me, bb.enemy); }),
-        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
-        // 敌人比我更近星或差不多 → 冻住它先吃
-        Guard('enemy-closer', function (bb) {
-          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
-          return enemyStarDist <= bb.distToStar + mp.skillStarContestDelta && bb.distToStar <= 6;
-        }),
-        Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
-        }),
-        Action('do-freeze-star', function (bb) {
-          bbSpeak(bb, '冰星!');
-          bbUseSkill(bb, 'freeze');
-        })
-      ])
-    );
-
-    // ---- Freeze-ambush：蹲草伏击（通用策略） ----
     // 敌人比我更快到星时，与其正面竞速不如蹲在星附近草丛：
     //   敌来抢星进入射线 → 我已对准 → 开火+冰冻 = 击杀/重伤
     //   敌人看不到我（草丛隐身）→ 没有预判躲避能力
