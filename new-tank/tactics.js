@@ -1940,23 +1940,23 @@ function findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemy
 
 
 
-function canPreemptiveShot(myPos, myDir, enemyTank, game) {
+function canPreemptiveShot(myPos, myDir, enemyTank, game, maxSteps) {
   if (!enemyTank) return null;
   const d = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[enemyTank.direction];
   if (!d) return null;
-  // 2帧预判：检查敌人沿当前方向走1~2步后是否进入我的射线
-  for (var step = 1; step <= 2; step++) {
+  var limit = maxSteps || 2;
+  for (var step = 1; step <= limit; step++) {
     var epNext = [enemyTank.position[0] + d[0] * step, enemyTank.position[1] + d[1] * step];
     if (!isPassable(game, epNext, null)) break;
     var shotDir = clearShotDirection(myPos, epNext, game);
     if (!shotDir) continue;
-    // 子弹到达帧 = 转向帧 + 飞行帧；敌到达帧 = step帧（每帧走1格）
     var turnFrames = turnDistance(myDir, shotDir);
     var bulletDist = manhattan(myPos, epNext);
     var bulletArrival = turnFrames + Math.ceil(bulletDist / BULLET_SPEED);
     var enemyArrival = step;
-    // 子弹准时或提前1帧到达（提前1帧子弹在交叉点等敌人=有效命中）
-    if (bulletArrival <= enemyArrival && bulletArrival >= enemyArrival - 1) return shotDir;
+    // 伏击模式(maxSteps>2)：子弹可提前2帧到达(在交叉点等敌人路过)
+    var tolerance = limit > 2 ? 2 : 1;
+    if (bulletArrival <= enemyArrival && bulletArrival >= enemyArrival - tolerance) return shotDir;
   }
   return null;
 }
@@ -2001,7 +2001,8 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
   // 敌人到达交叉点的帧数：每帧走1格，fire frame 内也移动
   var enemyArrival = enemySteps - 1;
 
-  if (bulletArrival !== enemyArrival) return null;
+  // 允许子弹提前1帧到达交叉点(在交叉点等1帧敌人路过)
+  if (bulletArrival > enemyArrival || bulletArrival < enemyArrival - 1) return null;
 
   var intersection = (d[1] !== 0)
     ? [ePos[0], myPos[1]]
@@ -2016,6 +2017,105 @@ function canAmbushLeadShot(myPos, myDir, enemyTank, game) {
   }
 
   return shotDir;
+}
+
+
+/**
+ * 伏击远距预瞄：敌人当前方向走 3~6 步后将穿过我的某条射线。
+ * 不要求弹道时间精确对齐（那是 canPreemptiveShot 的职责），
+ * 只负责提前转向到正确方向，保证敌人进入 1~2 步开火区时炮口已对准。
+ * 额外考虑敌人朝星方向拐弯的情况（预判交叉点）。
+ * 返回应预瞄的方向 或 null。
+ */
+function canAmbushPreAim(myPos, myDir, enemyTank, star, game) {
+  if (!enemyTank) return null;
+  var ePos = enemyTank.position;
+  var eDir = enemyTank.direction;
+  var d = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[eDir];
+  if (!d) return null;
+
+  // A) 沿敌当前方向 3~6 步，找第一条穿越我射线的方向
+  for (var step = 3; step <= 6; step++) {
+    var epNext = [ePos[0] + d[0] * step, ePos[1] + d[1] * step];
+    if (!isPassable(game, epNext, null)) break;
+    var shotDir = clearShotDirection(myPos, epNext, game);
+    if (shotDir) return shotDir;
+  }
+
+  // B) 敌人→星路径预判：如果敌人不在星同线，会拐弯追星，
+  //    预判敌人走到与我同行/同列时的交叉格
+  if (star) {
+    // 横向交叉：敌走到与我同行(y相同)的点
+    if (ePos[1] !== myPos[1]) {
+      var crossX = [ePos[0], myPos[1]];
+      var stepsToRow = Math.abs(ePos[1] - myPos[1]);
+      // 敌当前方向是否朝这一行走
+      var headingToRow = (d[1] > 0 && myPos[1] > ePos[1]) || (d[1] < 0 && myPos[1] < ePos[1]);
+      if (headingToRow && stepsToRow >= 3 && stepsToRow <= 8 &&
+          isPassable(game, crossX, null)) {
+        var xDir = clearShotDirection(myPos, crossX, game);
+        if (xDir) return xDir;
+      }
+    }
+    // 纵向交叉：敌走到与我同列(x相同)的点
+    if (ePos[0] !== myPos[0]) {
+      var crossY = [myPos[0], ePos[1]];
+      var stepsToCol = Math.abs(ePos[0] - myPos[0]);
+      var headingToCol = (d[0] > 0 && myPos[0] > ePos[0]) || (d[0] < 0 && myPos[0] < ePos[0]);
+      if (headingToCol && stepsToCol >= 3 && stepsToCol <= 8 &&
+          isPassable(game, crossY, null)) {
+        var yDir = clearShotDirection(myPos, crossY, game);
+        if (yDir) return yDir;
+      }
+    }
+  }
+  return null;
+}
+
+
+/**
+ * 沿连通草丛 BFS，找 1~3 步内对星有射线的更优伏击位置。
+ * 要求路径全是草丛(不暴露)，且目标格对星有清晰射线。
+ * 返回 { dest, step, shotDir } 或 null。
+ */
+function findBetterAmbushBush(myPos, star, game, enemyBullets) {
+  if (!star) return null;
+  // 当前位置已有射线，不需要挪
+  if (clearShotDirection(myPos, star, game)) return null;
+
+  var queue = [{ pos: myPos, step: null, dist: 0 }];
+  var seen = {}; seen[key(myPos)] = true;
+  var best = null, bestScore = -9999;
+
+  for (var qi = 0; qi < queue.length; qi++) {
+    var cur = queue[qi];
+    if (cur.dist >= 3) continue;
+
+    for (var i = 0; i < DIRS.length; i++) {
+      var np = [cur.pos[0] + DIRS[i].dx, cur.pos[1] + DIRS[i].dy];
+      var nk = key(np);
+      if (seen[nk]) continue;
+      seen[nk] = true;
+      if (tileAt(game, np) !== 'o') continue; // 只走草丛，不暴露
+      if (anyBulletThreatens(enemyBullets || [], np, game)) continue;
+
+      var firstStep = cur.step || np;
+      var newDist = cur.dist + 1;
+
+      var sDir = clearShotDirection(np, star, game);
+      if (sDir) {
+        // 离星近 + 步数少 = 更优
+        var score = 100 - newDist * 15 - manhattan(np, star) * 3 +
+                    distanceFromEdges(np, game) * 2;
+        if (score > bestScore) {
+          bestScore = score;
+          best = { dest: np, step: firstStep, shotDir: sDir };
+        }
+      }
+      queue.push({ pos: np, step: firstStep, dist: newDist });
+    }
+  }
+  return best;
 }
 
 

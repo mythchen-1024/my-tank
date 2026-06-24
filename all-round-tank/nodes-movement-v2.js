@@ -104,7 +104,9 @@ function createMovementTree(profile, mySkillType) {
             !clearShotDirection(bb.myPos, bb.star, bb.game)) {
           bb.memory.ambushState = null; return false;
         }
-        return samePos(bb.myPos, a.pos) && iAmHidden(bb.me, bb.game);
+        // 允许重定位中间帧：在伏击位或正在草丛中移动(距伏击位≤2)都算
+        return iAmHidden(bb.me, bb.game) &&
+          (samePos(bb.myPos, a.pos) || manhattan(bb.myPos, a.pos) <= 2);
       }),
       Guard('still-safe', function (bb) {
         return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
@@ -124,14 +126,20 @@ function createMovementTree(profile, mySkillType) {
             else { bbTurnToward(bb, shotDir); }
             return;
           }
-          // 预射击：敌人下一步将进入我的射线
-          var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          // 预射击：伏击模式扩展到4步预判
+          var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game, 4);
           if (!preDir) {
             preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
           }
           if (preDir) {
             if (bb.myDir === preDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
             else { bbTurnToward(bb, preDir); }
+            return;
+          }
+          // 远距预瞄：敌3~6步外将穿线 → 提前转向
+          var aimDir = canAmbushPreAim(bb.myPos, bb.myDir, bb.enemyTank, bb.star, bb.game);
+          if (aimDir && bb.myDir !== aimDir) {
+            bbTurnToward(bb, aimDir);
             return;
           }
         }
@@ -168,6 +176,15 @@ function createMovementTree(profile, mySkillType) {
             } else {
               bbTurnToward(bb, scanDir);
             }
+            return;
+          }
+        }
+        // 草丛重定位：当前位对星无射线 → 沿连通草丛挚到有射线的位置
+        if (!faceDir && bb.star) {
+          var better = findBetterAmbushBush(bb.myPos, bb.star, bb.game, bb.enemyBullets);
+          if (better) {
+            bbDirectGo(bb, better.step);
+            a.pos = better.dest.slice();
             return;
           }
         }
@@ -224,14 +241,28 @@ function createMovementTree(profile, mySkillType) {
               if (bb.myDir === bb.shotDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
               bbTurnToward(bb, bb.shotDir); return;
             }
-            // 敌下一步将进入炮线：提前转向等待
-            var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+            // 预射击：伏击模式扩展到4步预判
+            var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game, 4);
             if (!preDir) {
               preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
             }
             if (preDir) {
               if (bb.myDir === preDir) { bbSpeak(bb, '草伏!'); bbFire(bb); return; }
               bbTurnToward(bb, preDir); return;
+            }
+            // 远距预瞄：敌3~6步外将穿线 → 提前转向
+            var aimDir = canAmbushPreAim(bb.myPos, bb.myDir, bb.enemyTank, bb.star, bb.game);
+            if (aimDir && bb.myDir !== aimDir) {
+              bbTurnToward(bb, aimDir);
+              return;
+            }
+          }
+          // 草丛重定位：有星但对星无射线 → 沿连通草丛挪到有射线的位置
+          if (bb.star && !clearShotDirection(bb.myPos, bb.star, bb.game)) {
+            var betterBush = findBetterAmbushBush(bb.myPos, bb.star, bb.game, bb.enemyBullets);
+            if (betterBush) {
+              bbDirectGo(bb, betterBush.step);
+              return;
             }
           }
           primeShortIntent(bb.memory, 'hold', bb.myPos, bb.frame, 3);
