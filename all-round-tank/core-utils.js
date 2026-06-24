@@ -912,6 +912,21 @@ function enemyBoostFlickThreat(myPos, enemy, enemyTank, game) {
 }
 
 
+function enemySnapFireThreat(pos, enemy, enemyTank, game) {
+  if (!enemyTank || !enemy) return false;
+  if (enemyIsOverloadType(enemy)) return false;
+  if (!enemyCanFireSoon(enemy)) return false;
+  var dirToPos = clearShotDirection(enemyTank.position, pos, game);
+  if (!dirToPos) return false;
+  var dist = manhattan(enemyTank.position, pos);
+  if (dist > 4) return false;
+  var turns = turnDistance(enemyTank.direction, dirToPos);
+  if (turns !== 1) return false;
+  var bulletArrival = 1 + Math.ceil(dist / BULLET_SPEED);
+  return bulletArrival <= 3;
+}
+
+
 /**
  * 获取沿某方向前进一步的坐标
  */

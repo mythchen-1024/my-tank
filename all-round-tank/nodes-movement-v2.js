@@ -314,6 +314,8 @@ function createMovementTree(profile, mySkillType) {
           if (!isPassable(bb.game, p, bb.enemyPos)) continue;
           if (anyBulletThreatens(bb.enemyBullets, p, bb.game)) continue;
           var score = manhattan(p, dangerPos) * 3 + openNeighborCount(p, bb.game);
+          var dirToP = directionBetween(bb.myPos, p);
+          if (dirToP === bb.myDir) score += 50;
           if (score > bestScore) { bestScore = score; best = p; }
         }
         if (best) primeShortIntent(bb.memory, 'retreat', best, bb.frame, 2);

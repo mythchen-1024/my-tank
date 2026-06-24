@@ -46,6 +46,19 @@ function createHardSurvivalTree(shieldNode, deferredSkillNode) {
           bbTurnToward(bb, plan.dir);
           bb.me.go();
         }
+        // 穿弹甩狙：落点有射线到敌人 → 排队 turn+fire，下帧自动 turnFire
+        if (bb.enemyTank && bb.gunIsReady && canShoot(bb.me, bb.enemy)) {
+          var shotDir = clearShotDirection(plan.target, bb.enemyPos, bb.game);
+          if (shotDir && manhattan(plan.target, bb.enemyPos) >= 3 &&
+              manhattan(plan.target, bb.enemyPos) <= 6) {
+            var afterDir = plan.turns === 0 ? bb.myDir : plan.dir;
+            if (turnDistance(afterDir, shotDir) <= 1) {
+              turnToward(bb.me, shotDir);
+              bb.me.fire();
+              bbSpeak(bb, '穿弹甩狙!');
+            }
+          }
+        }
       })
     ]),
 

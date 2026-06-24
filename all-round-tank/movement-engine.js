@@ -29,6 +29,9 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   // 还要排除下一帧会扫到的子弹轨道，避免”当前安全、下一拍吃弹”的假安全。
   if (enemyBullets && stepIntoBulletPath(enemyBullets, next, game)) return false;
   if (predictedOverloadThreatens(enemy, next, game)) return false;
+  // 甩狙威胁：敌1帧转向即可射到 next 且子弹3帧内到达
+  var et = (enemy && enemy.tank) || null;
+  if (enemyPos && et && enemySnapFireThreat(next, enemy, et, game)) return false;
   // 隐身敌射线检查：敌不可见时避免走入其最后已知位置的射击线
   if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(next, myPos, game, memory, allowStarDeadEnd)) return false;
   return true;

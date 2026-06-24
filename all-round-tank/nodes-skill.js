@@ -680,16 +680,9 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
         Guard('not-leading-with-star', function (bb) {
-          // 领先时不冒险用 boost 追击（保CD守分更重要）
-          if (bb.isWinning) return false;
-          // 对传送敌：星存在时保留 boost 冲星（传送敌能瞬移逃脱，追杀 ROI 低）
-          if (bb.star && !bb.isLosing && bb.enemyTank) {
-            if (enemySkillType === 'teleport') return false;
-            var enemyStarDist = manhattan(bb.enemyPos, bb.star);
-            // 我比敌更近星或差不多 → 留 boost 冲星
-            if (bb.distToStar <= enemyStarDist + 2) return false;
-          }
-          // 有星但敌人明显更近(差3+)且非传送 → 星抢不过，允许 boost 杀敌
+          if (bb.myStars - bb.enmStars >= 2) return false;
+          if (bb.star && enemySkillType === 'teleport' && bb.distToStar <= 3) return false;
+          if (enemySkillType === 'overload' && bb.isWinning) return false;
           return true;
         }),
         Guard('medium-range', function (bb) {

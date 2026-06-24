@@ -104,6 +104,47 @@ function createAttackTree(profile) {
     );
   }
 
+  // 甩狙预冲：go一步到甩狙位 + turn+fire 排队秒射
+  if (profile.attackAggression !== 'low') {
+    children.push(
+      Sequence('snap-approach', [
+        Guard('gun-ready-sa', function (bb) { return bb.gunIsReady; }),
+        Guard('enemy-visible-sa', function (bb) { return !!bb.enemyTank; }),
+        Guard('not-overload-sa', function (bb) { return !enemyDoubleLaneThreat(bb.enemy); }),
+        Guard('no-direct-shot-sa', function (bb) { return !bb.shotDir; }),
+        Guard('no-bullet-incoming-sa', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('has-snap-approach', function (bb) { return !!senseSnapApproach(bb); }),
+        Action('do-snap-approach', function (bb) {
+          var plan = senseSnapApproach(bb);
+          bbSpeak(bb, '甩狙!');
+          bb.me.go();
+          turnToward(bb.me, plan.dir);
+          bb.me.fire();
+        })
+      ])
+    );
+
+    // 甩狙秒射：已在同线 3-6 格 + 转向≤1 → turnFire
+    children.push(
+      Sequence('snap-fire', [
+        Guard('gun-ready-sf', function (bb) { return bb.gunIsReady; }),
+        Guard('enemy-visible-sf', function (bb) { return !!bb.enemyTank; }),
+        Guard('not-overload-sf', function (bb) { return !enemyDoubleLaneThreat(bb.enemy); }),
+        Guard('no-bullet-incoming-sf', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('has-snap-fire', function (bb) { return !!senseSnapFireShot(bb); }),
+        Action('do-snap-fire', function (bb) {
+          var dir = senseSnapFireShot(bb);
+          if (bb.myDir === dir) { bbSpeak(bb, '甩狙!'); bbFire(bb); }
+          else { bbSpeak(bb, '甩狙!'); bbTurnToward(bb, dir); bbFire(bb); }
+        })
+      ])
+    );
+  }
+
   // 直射：同线无障碍 + 可开火
   if (profile.attackAggression !== 'low') {
     children.push(
@@ -172,6 +213,26 @@ function createAttackTree(profile) {
         Action('do-fire-risky', function (bb) {
           if (bb.myDir === bb.shotDir) { bbSpeak(bb, '开炮!'); bbFire(bb); }
           else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+  }
+
+  // 破墙攻击：打穿土墙直接命中敌人
+  if (profile.attackAggression !== 'low' && profile.attackAggression !== 'none') {
+    children.push(
+      Sequence('attack-dig', [
+        Guard('no-direct-shot-ad', function (bb) { return !bb.shotDir; }),
+        Guard('gun-ready-ad', function (bb) { return bb.gunIsReady; }),
+        Guard('enemy-visible-ad', function (bb) { return !!bb.enemyTank; }),
+        Guard('not-in-danger-ad', function (bb) {
+          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+        }),
+        Guard('has-attack-dig', function (bb) { return !!senseAttackDigShot(bb); }),
+        Action('do-attack-dig', function (bb) {
+          var dir = senseAttackDigShot(bb);
+          if (bb.myDir === dir) { bbSpeak(bb, '破墙!'); bbFire(bb); }
+          else bbTurnToward(bb, dir);
         })
       ])
     );

@@ -1372,6 +1372,86 @@ function findStarDigShot(myPos, star, game, enemyPos) {
 }
 
 
+function findAttackDigShot(me, enemy, enemyTank, game, memory) {
+  if (!enemyTank) return null;
+  if (!gunReady(me)) return null;
+  var myPos = me.tank.position;
+  var enemyPos = enemyTank.position;
+  if (clearShotDirection(myPos, enemyPos, game)) return null;
+  var dist = manhattan(myPos, enemyPos);
+  if (dist < 3 || dist > 7) return null;
+
+  var bestDir = null, bestScore = -1;
+  for (var i = 0; i < DIRS.length; i++) {
+    var d = DIRS[i];
+    var x = myPos[0] + d.dx, y = myPos[1] + d.dy;
+    var range = 1;
+    while (range <= 6) {
+      var t = tileAt(game, [x, y]);
+      if (t === 'x') break;
+      if (t === 'm') {
+        var afterWall = [x + d.dx, y + d.dy];
+        if (tileAt(game, afterWall) === 'x' || tileAt(game, afterWall) === 'm') break;
+        var canHitEnemy = false;
+        var bx = afterWall[0], by = afterWall[1];
+        for (var r = 0; r <= 8; r++) {
+          if (bx === enemyPos[0] && by === enemyPos[1]) { canHitEnemy = true; break; }
+          var bt = tileAt(game, [bx, by]);
+          if (bt === 'x' || bt === 'm') break;
+          if (bx < 0 || by < 0 || bx >= game.map.length || by >= game.map[0].length) break;
+          bx += d.dx; by += d.dy;
+        }
+        if (canHitEnemy) {
+          var turnCost = turnDistance(me.tank.direction, d.name);
+          var score = 10 - range - turnCost;
+          if (score > bestScore) { bestScore = score; bestDir = d.name; }
+        }
+        break;
+      }
+      if (t !== '.' && t !== 'o') break;
+      x += d.dx; y += d.dy; range++;
+    }
+  }
+  return bestDir;
+}
+
+
+function findSnapFireShot(me, enemy, enemyTank, game, enemyPos) {
+  if (!enemyTank || !enemyPos) return null;
+  if (!gunReady(me)) return null;
+  if (!canShoot(me, enemy)) return null;
+  var myPos = me.tank.position;
+  var shotDir = clearShotDirection(myPos, enemyPos, game);
+  if (!shotDir) return null;
+  var dist = manhattan(myPos, enemyPos);
+  if (dist < 3 || dist > 6) return null;
+  var turns = turnDistance(me.tank.direction, shotDir);
+  if (turns > 1) return null;
+  return shotDir;
+}
+
+
+function findSnapApproach(me, enemy, enemyTank, game, enemyPos) {
+  if (!enemyTank || !enemyPos) return null;
+  if (!gunReady(me)) return null;
+  if (!canShoot(me, enemy)) return null;
+  var myPos = me.tank.position;
+  var myDir = me.tank.direction;
+  if (clearShotDirection(myPos, enemyPos, game)) return null;
+  var d = DIRS[dirIndex(myDir)];
+  if (!d) return null;
+  var nextPos = [myPos[0] + d.dx, myPos[1] + d.dy];
+  if (!isPassable(game, nextPos, enemyPos)) return null;
+  var shotDir = clearShotDirection(nextPos, enemyPos, game);
+  if (!shotDir) return null;
+  var dist = manhattan(nextPos, enemyPos);
+  if (dist < 3 || dist > 6) return null;
+  var turns = turnDistance(myDir, shotDir);
+  if (turns > 1) return null;
+  return { dir: shotDir, nextPos: nextPos };
+}
+
+
 /**
  * 寻找最靠近地图中心的空地
  */

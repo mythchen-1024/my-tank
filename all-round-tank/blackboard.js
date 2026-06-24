@@ -326,6 +326,24 @@ function senseBlindBushShot(bb) {
   });
 }
 
+function senseAttackDigShot(bb) {
+  return sense(bb, 'attackDigShot', function () {
+    return findAttackDigShot(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+  });
+}
+
+function senseSnapFireShot(bb) {
+  return sense(bb, 'snapFireShot', function () {
+    return findSnapFireShot(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.enemyPos);
+  });
+}
+
+function senseSnapApproach(bb) {
+  return sense(bb, 'snapApproach', function () {
+    return findSnapApproach(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.enemyPos);
+  });
+}
+
 function senseChokeBomb(bb) {
   return sense(bb, 'chokeBomb', function () {
     return findChokeBomb(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory, bb.frame);
