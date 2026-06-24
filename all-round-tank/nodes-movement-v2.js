@@ -383,6 +383,11 @@ function createMovementTree(profile, mySkillType) {
             if (!enemyCanFireSoon(bb.enemy)) return true;
           }
         }
+        // 护盾豁免：开盾中被打也不死，d>=2 都可接受（d=1 贴脸仍危险因为盾只4帧）
+        if (bb.me.status && bb.me.status.shielded && bb.enemyPos) {
+          var shieldDist = manhattan(starPath.step, bb.enemyPos);
+          if (shieldDist >= 2) return true;
+        }
         // 最优步不安全 → 探索次优路径：尝试其他方向的邻格作为第一步
         var bestAlt = null, bestAltDist = 9999;
         for (var i = 0; i < DIRS.length; i++) {

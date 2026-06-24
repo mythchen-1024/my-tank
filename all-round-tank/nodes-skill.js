@@ -574,6 +574,26 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
     );
   }
 
+  // ---- Shield-mirror-rush: 敌方开盾逼近时我方也开盾对抗 ----
+  if (mySkillType === 'shield') {
+    children.push(
+      Sequence('shield-mirror-rush', [
+        Guard('enemy-shielded', function (bb) {
+          return !!(bb.enemyTank && bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
+        }),
+        Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
+        Guard('not-stunned', function (bb) {
+          return !(bb.me.status && bb.me.status.stunned);
+        }),
+        Guard('enemy-close', function (bb) { return bb.distToEnemy <= 6; }),
+        Action('do-shield-mirror', function (bb) {
+          bbSpeak(bb, '盾对盾!');
+          bbUseSkill(bb, 'shield');
+        })
+      ])
+    );
+  }
+
   // ---- Shield-counter: 与敌同线 → 开盾安全对射 ----
   if (mySkillType === 'shield') {
     children.push(
@@ -622,6 +642,21 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Action('do-shield-fire', function (bb) {
           if (bb.myDir === bb.shotDir) { bbSpeak(bb, '盾射!'); bbFire(bb); }
           else bbTurnToward(bb, bb.shotDir);
+        })
+      ])
+    );
+
+    // 护盾逼近：开盾中 + 无射线 → 利用无敌时间逼近到射线位
+    children.push(
+      Sequence('shield-advance', [
+        Guard('is-shielded', function (bb) {
+          return !!(bb.me.status && bb.me.status.shielded);
+        }),
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('no-shot-line', function (bb) { return !bb.shotDir; }),
+        Action('do-shield-advance', function (bb) {
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
+          if (step) bbMoveToward(bb, step);
         })
       ])
     );
@@ -825,7 +860,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
     );
   }
 
-  // ---- Shield-star-rush: 开盾冲星（抢星路上有危险时）----
+  // ---- Shield-star-rush: 开盾冲星（竞争抢星时勇敢开盾）----
   if (mySkillType === 'shield') {
     children.push(
       Sequence('shield-star-rush', [
@@ -834,7 +869,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           return !(bb.me.status && bb.me.status.stunned);
         }),
         Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
-        Guard('star-close', function (bb) { return bb.distToStar <= 4; }),
+        Guard('star-close', function (bb) { return bb.distToStar <= 6; }),
         // stun 敌人同线近距 + stun 就绪 → 不冲（stun 先手使盾失效）
         Guard('no-stun-preempt', function (bb) {
           if (!bb.enemyTank || !enemyIsStunType(bb.enemy)) return true;
@@ -842,14 +877,20 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (!clearShotDirection(bb.enemyPos, bb.myPos, bb.game)) return true;
           return bb.distToEnemy > 5;
         }),
-        // 只在有危险时才用盾（敌瞄着星或有子弹威胁路线）
-        Guard('star-dangerous', function (bb) {
+        // 存在竞争或威胁就开盾（不要求敌人必须瞄我）
+        Guard('star-contested-or-dangerous', function (bb) {
+          // 有子弹正飞来 → 开盾挡
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return true;
           if (!bb.enemyTank) return false;
-          // 敌人在我去星的路上且瞄着我
-          return enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) && bb.distToEnemy <= 5;
-        }),
-        Guard('no-self-danger', function (bb) {
-          return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+          // 敌人瞄着我
+          if (enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) && bb.distToEnemy <= 6) return true;
+          // 敌人也在追星（距星差不多或比我近）
+          var enemyStarDist = manhattan(bb.enemyPos, bb.star);
+          if (enemyStarDist <= bb.distToStar + 2) return true;
+          // 追星路径经过敌人射线
+          var starPath = shortestPathInfo(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          if (starPath && starPath.step && clearShotDirection(bb.enemyPos, starPath.step, bb.game)) return true;
+          return false;
         }),
         Action('do-shield-star', function (bb) {
           bbSpeak(bb, '盾星!');

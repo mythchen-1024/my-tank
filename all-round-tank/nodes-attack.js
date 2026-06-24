@@ -48,7 +48,7 @@ function createAttackTree(profile) {
           return !!(bb.enemyTank && bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
         }),
         Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
-        Guard('close-range', function (bb) { return bb.distToEnemy <= 3; }),
+        Guard('close-range', function (bb) { return bb.distToEnemy <= 5; }),
         Action('do-shield-preaim', function (bb) {
           if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
         })
