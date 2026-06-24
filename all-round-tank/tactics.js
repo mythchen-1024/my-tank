@@ -2351,6 +2351,17 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, s
       preAimDir = dy < 0 ? 'up' : 'down';
     }
   }
+  // 校验预瞄方向至少有3格无墙走廊，否则子弹出膛即撞墙浪费(mat_J8lxX83O)
+  var paDelta = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[preAimDir];
+  if (paDelta) {
+    var paBlocked = false;
+    for (var paStep = 1; paStep <= 3; paStep++) {
+      var paCell = [myPos[0] + paDelta[0] * paStep, myPos[1] + paDelta[1] * paStep];
+      var paTile = tileAt(game, paCell);
+      if (paTile === 'x' || paTile === 'm') { paBlocked = true; break; }
+    }
+    if (paBlocked) return null;
+  }
 
   if (state) {
     state.guardPreAimDir = preAimDir;

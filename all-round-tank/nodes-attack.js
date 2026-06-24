@@ -70,6 +70,9 @@ function createAttackTree(profile) {
         Guard('not-intercept-stale', function (bb) {
           return (bb.memory.interceptTurnFrames || 0) < 4;
         }),
+        Guard('not-stuck-spinning', function (bb) {
+          return (bb.memory.stuckFrames || 0) < 8;
+        }),
         Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
@@ -187,6 +190,9 @@ function createAttackTree(profile) {
         }),
         Guard('not-guard-stale', function (bb) {
           return (bb.memory.guardLineTurnFrames || 0) < 4;
+        }),
+        Guard('not-stuck-spinning', function (bb) {
+          return (bb.memory.stuckFrames || 0) < 8;
         }),
         Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
         // 让位后撤的门控：只在敌"真握双弹"(已过载/cd<=1)且近距时才放弃守线。

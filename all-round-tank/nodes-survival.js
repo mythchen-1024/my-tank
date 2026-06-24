@@ -170,6 +170,8 @@ function createSoftSurvivalTree(profile) {
         if (stuck < 6) return true;
         var myStarDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
         if (myStarDist < 0) return true;
+        // 敌可见且近距瞄准 → 威胁真实，不压制 aim-dodge(mat_J8lxX83O)
+        if (bb.enemyTank && bb.distToEnemy <= 5) return true;
         // 卡住6帧+ 且星可达 → 压制 aim-dodge，让追星/攻击有机会执行
         return false;
       }),
