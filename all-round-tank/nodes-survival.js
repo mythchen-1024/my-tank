@@ -142,6 +142,12 @@ function createSoftSurvivalTree(profile) {
     children.push(
       Sequence('bush-camper-dodge', [
         Guard('enemy-hidden', function (bb) { return !bb.enemyTank; }),
+        Guard('not-star-stuck-bush', function (bb) {
+          if (!bb.star) return true;
+          if ((bb.memory.stuckFrames || 0) < 6) return true;
+          var myStarDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          return myStarDist < 0;
+        }),
         Guard('has-bush-dodge', function (bb) { return !!senseBushCamperDodge(bb); }),
         Action('do-bush-camper-dodge', function (bb) {
           bbMoveToward(bb, senseBushCamperDodge(bb));
@@ -160,9 +166,12 @@ function createSoftSurvivalTree(profile) {
       }),
       Guard('not-star-stuck', function (bb) {
         if (!bb.star) return true;
-        if ((bb.memory.stuckFrames || 0) < 12) return true;
+        var stuck = bb.memory.stuckFrames || 0;
+        if (stuck < 6) return true;
         var myStarDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
-        return myStarDist < 0 || myStarDist > 5;
+        if (myStarDist < 0) return true;
+        // 卡住6帧+ 且星可达 → 压制 aim-dodge，让追星/攻击有机会执行
+        return false;
       }),
       Guard('has-aim-dodge', function (bb) { return !!senseAimDodge(bb); }),
       Action('do-aim-dodge', function (bb) {
@@ -178,6 +187,12 @@ function createSoftSurvivalTree(profile) {
         if (bb.memory.ambushState && iAmHidden(bb.me, bb.game)) return false;
         if (iAmHidden(bb.me, bb.game) && enemyIsOverloadType(bb.enemy)) return false;
         return true;
+      }),
+      Guard('not-star-stuck-duel', function (bb) {
+        if (!bb.star) return true;
+        if ((bb.memory.stuckFrames || 0) < 6) return true;
+        var myStarDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+        return myStarDist < 0;
       }),
       Guard('has-line-duel', function (bb) { return !!senseLineDuelDodge(bb); }),
       Action('do-line-duel-dodge', function (bb) {

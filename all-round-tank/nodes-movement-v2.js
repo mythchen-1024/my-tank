@@ -396,6 +396,19 @@ function createMovementTree(profile, mySkillType) {
             if (bulletWindowDist >= 2) return true;
           }
         }
+        // 蹲草封锁强冲豁免：严重卡住(≥12帧) + 星在2步内 → 无论 kill zone 都冲星
+        // (mat_4heiXPL7UUB: 敌蹲[7,11]连射，星[7,10] d=1永远被kill zone封死→超时输)
+        // 拿1星vs超时必输，哪怕被击杀也划算；且蹲草敌人射击有间隙可穿插
+        if ((bb.memory.stuckFrames || 0) >= 12 && starPath.dist <= 2) {
+          if (!anyBulletThreatens(bb.enemyBullets, starPath.step, bb.game)) return true;
+        }
+        // 更宽松的子弹窗口：严重卡住(≥10帧) + 当前没子弹威胁目标格 + 非双弹 → 放行
+        // (解决蹲草敌周期性射击间有3-4帧安全窗口但原有豁免不匹配的情况)
+        if ((bb.memory.stuckFrames || 0) >= 10 &&
+            !anyBulletThreatens(bb.enemyBullets, starPath.step, bb.game) &&
+            !enemyDoubleLaneThreat(bb.enemy)) {
+          if (!bb.enemyPos || manhattan(starPath.step, bb.enemyPos) >= 2) return true;
+        }
         // 最优步不安全 → 探索次优路径：尝试其他方向的邻格作为第一步
         var bestAlt = null, bestAltDist = 9999;
         for (var i = 0; i < DIRS.length; i++) {
