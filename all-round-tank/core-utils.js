@@ -143,6 +143,9 @@ const ASSASSIN_MIN_RANGE = 5;
 const ASSASSIN_MAX_RANGE = 8;
 // 一局总帧数（从 replay 逆向：超时按星数判胜负，见 mat_7JO 打满 128 帧）
 var MAX_GAME_FRAMES = 128;
+// 全局调试开关：控制决策追踪(trace.push / join / print)。生产构建置 false 省每帧字符串开销。
+// 注意：不影响各动作节点内部的战术 speak（那是独立的 bbSpeak 调用）。
+var BT_DEBUG = false;
 // 冰冻技能锁定帧数（replay mat_0Wmx 逆向：applied durationFrames:2，被冻 2 帧不能移动/转向）
 const FREEZE_DURATION = 2;
 // 认定对方是"跑路流"的连续背向帧阈值：对方连续 N 帧同线却背对我，视为只逃不战（mat_AAKs "小虾"）

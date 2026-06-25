@@ -29,7 +29,7 @@ function Selector(name, children) {
       for (var i = 0; i < this.children.length; i++) {
         var s = this.children[i].tick(bb);
         if (s !== BT_FAILURE) {
-          bb._trace.push(this.children[i].name);
+          if (BT_DEBUG) bb._trace.push(this.children[i].name);
           return s;
         }
       }

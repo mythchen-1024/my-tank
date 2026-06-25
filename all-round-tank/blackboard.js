@@ -48,6 +48,7 @@ function getBlackboard(game) {
       profile: null,
       tree: null,
       profileFrame: -999,
+      _treeSig: null,
 
       // ── 调试追踪 ──
       _trace: [],
