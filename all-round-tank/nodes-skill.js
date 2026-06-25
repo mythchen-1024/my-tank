@@ -884,7 +884,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (!goDir) { bbMoveToward(bb, bb.star); return; }
           // 已对准：前进方向安全才 go(走2格)，否则交回常规安全移动(走1格)
           if (bb.myDir === goDir) {
-            if (boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy)) bb.me.go();
+            if (boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy, bb.memory)) bb.me.go();
             else bbMoveToward(bb, bb.star);
             return;
           }
@@ -893,7 +893,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           // 仅当(a)只需转1次(180°掉头吃不到免费窗口) 且 (b)转后方向安全 才组合;
           // 否则照常只转向(下一帧再走)。
           if (turnDistance(bb.myDir, goDir) === 1 &&
-              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy)) {
+              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy, bb.memory)) {
             bbTurnToward(bb, goDir);
             bb.me.go();
           } else {

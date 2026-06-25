@@ -661,7 +661,7 @@ function createMovementTree(profile, mySkillType) {
           // boost 中利用 turnGo：需转90°且路径安全时同帧 turn+go
           if (goDir && bb.me.status && bb.me.status.boosted &&
               bb.myDir !== goDir && turnDistance(bb.myDir, goDir) === 1 &&
-              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy)) {
+              boostPathSafe(bb.myPos, goDir, bb.game, bb.enemyPos, bb.enemyBullets, bb.enemyTank, bb.enemy, bb.memory)) {
             bbTurnToward(bb, goDir);
             bb.me.go();
           } else {

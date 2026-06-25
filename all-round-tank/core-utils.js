@@ -1441,7 +1441,7 @@ function hasNearbyFiringLane(myPos, enemyPos, game, maxSteps) {
 /**
  * 判断 boost go() 前方2格是否安全可通行
  */
-function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets, enemyTank, enemy) {
+function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets, enemyTank, enemy, memory) {
   var dd = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] }[myDir];
   if (!dd) return false;
   var p1 = [myPos[0] + dd[0], myPos[1] + dd[1]];
@@ -1454,5 +1454,10 @@ function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets, enemyTank, en
   if (enemyPos && manhattan(p2, enemyPos) <= 2 && enemyCanFireSoon(enemy)) return false;
   // 落点在敌炮口正对方向 → 不安全
   if (enemyAimsAt(p2, enemyTank, game) && enemyCanFireSoon(enemy)) return false;
+  // 隐藏敌火线（蹲草敌不可见时 enemyTank/enemyPos 为空，上面的可见敌检查全跳过）：
+  // 落点踩进 bushHeatmap 记录的蹲草炮口正对格 → 不安全。boost 抢星曾沿星所在列
+  // 直冲、把"敌反复从草丛同列开炮暴露的位置"前一格当安全格送死(mat_HmZzst3w7ot1xRs7N：
+  // 敌蹲[15,7]草丛朝up连开3炮,我boost冲x=15列到[15,6]炮口前格被秒)。
+  if (memory && stepIntoHiddenEnemyFireLine(p2, myPos, game, memory, !!(game && game.star))) return false;
   return true;
 }
