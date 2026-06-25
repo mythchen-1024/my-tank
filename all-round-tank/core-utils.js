@@ -797,34 +797,59 @@ var BFS_MAX_ITERATIONS = 500; // 20×20=400 格地图上限，留余量防极端
 function _computeShortestPathInfo(start, target, game, blockPos) {
   const w = game.map.length;
   const h = game.map[0].length;
+  const size = w * h;
+  // 整数索引 idx = x*h + y，替代字符串键 "x,y"：避免每格的字符串拼接+对象哈希。
+  // TypedArray 作 seen/dist/prev：数组下标访问远快于对象属性。输出格式与旧版完全一致。
+  const seen = new Uint8Array(size);
+  const distArr = new Int16Array(size);   // 地图最多 ~400 格，dist 远小于 32767
+  const prevArr = new Int32Array(size);   // 存父格索引；start 标记为 -1
+  const tx = target[0], ty = target[1];
+  const startIdx = start[0] * h + start[1];
+  seen[startIdx] = 1;
+  distArr[startIdx] = 0;
+  prevArr[startIdx] = -1;
+  const blockX = blockPos ? blockPos[0] : -999;
+  const blockY = blockPos ? blockPos[1] : -999;
+
   const queue = [start];
-  const seen = {};
-  const prev = {};
-  const dist = {};
-  seen[key(start)] = true;
-  dist[key(start)] = 0;
-
-  var limit = Math.min(queue.length + BFS_MAX_ITERATIONS, BFS_MAX_ITERATIONS);
-  for (let qi = 0; qi < queue.length && qi < limit; qi++) {
+  const map = game.map;
+  // 旧逻辑 limit = min(queue.length(=1)+500, 500) 恒为 BFS_MAX_ITERATIONS
+  for (let qi = 0; qi < queue.length && qi < BFS_MAX_ITERATIONS; qi++) {
     const p = queue[qi];
+    const pIdx = p[0] * h + p[1];
     for (let i = 0; i < DIRS.length; i++) {
-      const n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
-      const k = key(n);
-      if (seen[k]) continue;
-      if (n[0] < 0 || n[1] < 0 || n[0] >= w || n[1] >= h) continue;
-
-      // 非目标格要求可通过，目标格可以容忍被敌人占据
-      if (!samePos(n, target) && !isPassable(game, n, blockPos)) continue;
-      if (samePos(n, target) && !isPassable(game, n, null) && !samePos(target, blockPos)) continue;
-
-      seen[k] = true;
-      prev[k] = p;
-      dist[k] = dist[key(p)] + 1;
-
-      if (samePos(n, target)) {
-        return { dist: dist[k], step: firstStep(start, n, prev) };
+      const nx = p[0] + DIRS[i].dx;
+      const ny = p[1] + DIRS[i].dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const nIdx = nx * h + ny;
+      if (seen[nIdx]) continue;
+      const isTarget = (nx === tx && ny === ty);
+      // 内联 isPassable(已边界检查，无需 tileAt 越界兜底)：
+      //   可站 = 瓦片为 "." 或 "o" 且非 blockPos。
+      //   目标格容忍被敌占据：仅当目标本身就是 blockPos 时放行不可站的目标。
+      const t = map[nx][ny];
+      const walkable = (t === "." || t === "o");
+      const onBlock = (nx === blockX && ny === blockY);
+      if (!isTarget) {
+        if (!walkable || onBlock) continue;
+      } else {
+        if (!walkable && !onBlock) continue;
       }
-      queue.push(n);
+
+      seen[nIdx] = 1;
+      prevArr[nIdx] = pIdx;
+      distArr[nIdx] = distArr[pIdx] + 1;
+
+      if (isTarget) {
+        // 内联回溯第一步（等价 firstStep）：从目标往回走到 start 的直接邻居
+        let cur = nIdx;
+        while (prevArr[cur] !== -1 && prevArr[cur] !== startIdx) {
+          cur = prevArr[cur];
+        }
+        const step = (cur === startIdx) ? null : [(cur / h) | 0, cur % h];
+        return { dist: distArr[nIdx], step: step };
+      }
+      queue.push([nx, ny]);
     }
   }
   return null;
