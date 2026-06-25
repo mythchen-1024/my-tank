@@ -148,7 +148,7 @@ function createMovementTree(profile, mySkillType) {
             return;
           }
           // 预射击：伏击模式扩展到4步预判
-          var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game, 4);
+          var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game, bb.enemy);
           if (!preDir) {
             preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
           }
@@ -336,7 +336,7 @@ function createMovementTree(profile, mySkillType) {
               bbTurnToward(bb, bb.shotDir); return;
             }
             // 预射击：伏击模式扩展到4步预判
-            var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game, 4);
+            var preDir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game, bb.enemy);
             if (!preDir) {
               preDir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
             }

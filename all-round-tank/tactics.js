@@ -2172,21 +2172,24 @@ function findEnemyBulletOpenShot(me, enemy, enemyTank, enemyBullets, game, enemy
 
 
 
-function canPreemptiveShot(myPos, myDir, enemyTank, game) {
+function canPreemptiveShot(myPos, myDir, enemyTank, game, enemy) {
   if (!enemyTank) return null;
   const d = { up:[0,-1], down:[0,1], left:[-1,0], right:[1,0] }[enemyTank.direction];
   if (!d) return null;
-  // 2帧预判：检查敌人沿当前方向走1~2步后是否进入我的射线
-  for (var step = 1; step <= 2; step++) {
+  // 敌速：boost 时 2 格/帧，否则 1 格/帧（boost 状态在 enemy.status，enemyTank 上没有）
+  var enemySpeed = (enemy && enemy.status && enemy.status.boosted) ? 2 : 1;
+  // 预判窗口随敌速放大：boost 敌 2 步只花 1 帧，要往前多看几格才抓得到穿线点
+  var maxStep = 2 * enemySpeed;
+  for (var step = 1; step <= maxStep; step++) {
     var epNext = [enemyTank.position[0] + d[0] * step, enemyTank.position[1] + d[1] * step];
     if (!isPassable(game, epNext, null)) break;
     var shotDir = clearShotDirection(myPos, epNext, game);
     if (!shotDir) continue;
-    // 子弹到达帧 = 转向帧 + 飞行帧；敌到达帧 = step帧（每帧走1格）
+    // 子弹到达帧 = 转向帧 + 飞行帧；敌到达帧 = ceil(step / 敌速)（boost 时 step 格只需 step/2 帧）
     var turnFrames = turnDistance(myDir, shotDir);
     var bulletDist = manhattan(myPos, epNext);
     var bulletArrival = turnFrames + Math.ceil(bulletDist / BULLET_SPEED);
-    var enemyArrival = step;
+    var enemyArrival = Math.ceil(step / enemySpeed);
     // 子弹准时或提前1帧到达（提前1帧子弹在交叉点等敌人=有效命中）
     if (bulletArrival <= enemyArrival && bulletArrival >= enemyArrival - 1) return shotDir;
   }
@@ -2379,7 +2382,7 @@ function findGuardLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, s
   // 拦截射击（优先）：敌在移动且将穿过我射线 — 距离放宽到 9 格，抓住穿线窗口
   var enemyIsMoving = !state || !state.enemyStationaryFrames || state.enemyStationaryFrames < 2;
   if (enemyIsMoving && !enemyDoubleLaneThreat(enemy) && !enemyIsOverloadType(enemy) && dist <= 9) {
-    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
+    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game, enemy);
     if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
     // 精确提前量拦截（子弹与敌同时到达交叉点）
     const leadDir = canAmbushLeadShot(myPos, me.tank.direction, enemyTank, game);
@@ -2492,7 +2495,7 @@ function findBushLineShot(me, enemy, enemyTank, enemyBullets, game, enemyPos, st
     const dir = clearShotDirection(myPos, enemyPos, game);
     if (dir) return me.tank.direction === dir ? { fire: true } : { dir: dir };
     // 2帧预判：敌沿当前方向走1~2步后与我同线
-    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game);
+    const preDir = canPreemptiveShot(myPos, me.tank.direction, enemyTank, game, enemy);
     if (preDir) return me.tank.direction === preDir ? { fire: true } : { dir: preDir };
     // 远距精确拦截：计算子弹与敌人同时到达交叉点的提前量射击
     const leadDir = canAmbushLeadShot(myPos, me.tank.direction, enemyTank, game);

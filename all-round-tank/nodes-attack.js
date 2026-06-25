@@ -84,7 +84,7 @@ function createAttackTree(profile) {
           return !enemyDoubleLaneThreat(bb.enemy);
         }),
         Guard('has-intercept', function (bb) {
-          var dir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
+          var dir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game, bb.enemy);
           if (!dir) dir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
           if (!dir) return false;
           if (bb.myDir !== dir) return false;
