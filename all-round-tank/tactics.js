@@ -2093,7 +2093,14 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
     const escapeFrames = turns2 === 0 ? 1 : turns2 + 1;
     // 能否在中弹前离线：朝向即侧向可本帧直接 go 离线(必活)；需转向则要求敌命中更晚。
     // 修正：原 needTurn?2:1 对反向(turns=2)低估1帧，导致坦克来不及脱线时仍尝试转向。
-    const safe = escapeFrames === 1 || escapeFrames < enemyDuel;
+    // 预判侧移窄门控：敌尚未瞄我且无在途弹(纯架枪预备态)时，放行临界时序 escapeFrames==enemyDuel。
+    // 理由：此时敌本帧还在转向/未扣扳机，我转向那帧敌弹尚未生成，离线帧==敌命中帧仍先一步走掉
+    // (mat_ClK8：[17,10]朝下、敌[17,8]朝右枪好无弹，两侧移需转向 escapeFrames=2==enemyDuel=2，
+    //  被 strict< 误杀→站着原地转被同列下射秒)。敌已瞄/已出弹则不放宽，保持严格<不动既有保守修复。
+    const preAimWindow = !enemyAimingMe && !enemyHasBullet;
+    const safe = escapeFrames === 1
+      || escapeFrames < enemyDuel
+      || (preAimWindow && escapeFrames <= enemyDuel);
     if (!safe) continue;
     // 偏好当前朝向就能直接走的方向（1 帧脱离），其次保持反击角度，再次远离边缘
     const facing = d.name === me.tank.direction ? 100 : 0;
