@@ -27,7 +27,7 @@ var SKILL_MATCHUP_DEFAULTS = {
   overloadRange: 5,          // 过载触发距离
   overloadRequireShot: false,// 过载是否要求已对准（vs传送等需更谨慎）
   poisonRange: 5,            // 下毒触发距离
-  cloakSneakRange: 6,       // 隐身潜行触发距离
+  cloakSneakRange: 8,       // 隐身潜行触发距离
   cloakSneakEnabled: true,   // 是否启用隐身偷袭
   shieldCounterRange: 4,    // 盾击触发距离
   boostChaseRange: 6,       // 加速追击触发距离
@@ -85,9 +85,9 @@ var MATCHUP_OVERRIDES = {
     // vs 隐身流：双方都隐身效果互相抵消，降低优先级
     cloak:    { cloakSneakEnabled: false },
     // vs 过载流：隐身后被双弹覆盖危险大，潜行距离缩短
-    overload: { cloakSneakRange: 4 },
+    overload: { cloakSneakRange: 5 },
     // vs 冰冻流：隐身后敌人无法冻我（看不到），是好克制
-    freeze:   { cloakSneakRange: 7 },
+    freeze:   { cloakSneakRange: 8 },
   },
   shield: {
     // vs 冰冻流：被冻2帧可能被连杀，盾无法防冻，盾击距离缩短保命
@@ -602,7 +602,8 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('no-shot', function (bb) { return !bb.shotDir; }),
         Action('do-cloak-move', function (bb) {
-          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+          var rearDir = oppositeDir(bb.enemyTank.direction);
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1, rearDir, 8);
           if (step) bbMoveToward(bb, step);
         })
       ])
