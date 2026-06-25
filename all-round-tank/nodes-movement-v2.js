@@ -220,7 +220,8 @@ function createMovementTree(profile, mySkillType) {
                (bb.enemyPos && clearShotDirection(bb.myPos, bb.enemyPos, bb.game)))) {
             t.pos = bb.myPos.slice();
           } else {
-            bbMoveToward(bb, t.pos);
+            var step = nextStepToward(bb.myPos, t.pos, bb.game, bb.enemyPos);
+            if (step) bbMoveToward(bb, step);
             return;
           }
         }

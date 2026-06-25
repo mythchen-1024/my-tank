@@ -987,12 +987,22 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           return eDist + 2 < myDist;
         }),
         Guard('not-already-ambush', function (bb) {
-          return !bb.memory._freezeAmbush || !samePos(bb.myPos, bb.memory._freezeAmbush.bush);
+          var a = bb.memory._freezeAmbush;
+          if (!a) return true;
+          if (!bb.star || !samePos(bb.star, a.star)) { bb.memory._freezeAmbush = null; return true; }
+          if (bb.frame - a.frame > 25) { bb.memory._freezeAmbush = null; return true; }
+          if (samePos(bb.myPos, a.bush)) return false;
+          return true;
         }),
         Guard('no-self-danger', function (bb) {
           return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
         }),
         Guard('has-ambush-bush', function (bb) {
+          var a = bb.memory._freezeAmbush;
+          if (a && bb.star && samePos(bb.star, a.star) && bb.frame - a.frame <= 25) {
+            bb._cache._freezeAmbushBush = a.bush;
+            return true;
+          }
           var bush = findFreezeAmbushBush(bb.myPos, bb.star, bb.game, bb.enemyPos);
           if (!bush) return false;
           bb._cache._freezeAmbushBush = bush;
@@ -1000,9 +1010,12 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         }),
         Action('do-freeze-ambush-move', function (bb) {
           var bush = bb._cache._freezeAmbushBush;
-          bb.memory._freezeAmbush = { bush: bush, star: bb.star.slice(), frame: bb.frame };
+          if (!bb.memory._freezeAmbush || !samePos(bb.memory._freezeAmbush.bush, bush)) {
+            bb.memory._freezeAmbush = { bush: bush, star: bb.star.slice(), frame: bb.frame };
+          }
           bbSpeak(bb, '埋伏');
-          bbMoveToward(bb, bush);
+          var step = nextStepToward(bb.myPos, bush, bb.game, bb.enemyPos);
+          if (step) bbMoveToward(bb, step);
         })
       ])
     );
