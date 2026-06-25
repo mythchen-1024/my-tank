@@ -87,18 +87,14 @@ function createAttackTree(profile) {
           var dir = canPreemptiveShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
           if (!dir) dir = canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game);
           if (!dir) return false;
+          if (bb.myDir !== dir) return false;
           bb._cache._interceptDir = dir;
           return true;
         }),
         Action('do-intercept', function (bb) {
           var dir = bb._cache._interceptDir;
-          if (bb.myDir === dir) {
-            bbSpeak(bb, '拦截!'); bbFire(bb);
-            bb.memory.interceptTurnFrames = 0;
-          } else {
-            bbTurnToward(bb, dir);
-            bb.memory.interceptTurnFrames = (bb.memory.interceptTurnFrames || 0) + 1;
-          }
+          bbSpeak(bb, '拦截!'); bbFire(bb);
+          bb.memory.interceptTurnFrames = 0;
         })
       ])
     );
@@ -271,10 +267,8 @@ function createAttackTree(profile) {
           if (shot.fire) {
             bbSpeak(bb, '守线!'); bbFire(bb);
             bb.memory.guardLineTurnFrames = 0;
-          } else {
-            bbTurnToward(bb, shot.dir);
-            bb.memory.guardLineTurnFrames = (bb.memory.guardLineTurnFrames || 0) + 1;
           }
+          // 不再转向预瞄（浪费帧数），只在已面朝时开火
         })
       ])
     );

@@ -552,6 +552,35 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
       );
     }
 
+    // 隐身蹲草：远距离时隐身走向星附近草丛，到期后仍在草中隐蔽
+    children.push(
+      Sequence('cloak-bush-ambush', [
+        Guard('enemy-far-or-hidden', function (bb) {
+          if (bb.enemyTank && bb.distToEnemy <= 4) return false;
+          return true;
+        }),
+        Guard('star-exists-cba', function (bb) { return !!bb.star; }),
+        Guard('cloak-ready-cba', function (bb) { return canCloak(bb.me); }),
+        Guard('gun-ready-cba', function (bb) { return bb.gunIsReady; }),
+        Guard('not-already-in-bush', function (bb) {
+          return !iAmHidden(bb.me, bb.game);
+        }),
+        Guard('has-bush-target', function (bb) { return !!senseCloakBushPosition(bb); }),
+        Guard('no-self-danger-cba', function (bb) {
+          if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;
+          if (bb.enemyTank && enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy) && bb.distToEnemy <= 4) return false;
+          return true;
+        }),
+        Action('do-cloak-bush', function (bb) {
+          var bushPos = senseCloakBushPosition(bb);
+          bbSpeak(bb, '潜伏!');
+          bbUseSkill(bb, 'cloak');
+          bb.memory.cloakBushTarget = { pos: bushPos.slice(), star: bb.star.slice(), frame: bb.frame };
+        })
+      ])
+    );
+
     // 隐身状态下的伏击：已隐身 + 有射线 → 直接开火
     children.push(
       Sequence('cloak-ambush', [

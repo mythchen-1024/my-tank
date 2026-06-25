@@ -196,6 +196,54 @@ function createMovementTree(profile, mySkillType) {
     ])
   );
 
+  // ---- 隐身蹲草蹲守：cloak 到达目标草丛后等待射击 ----
+  if (mySkillType === 'cloak') children.push(
+    Sequence('cloak-bush-hold', [
+      Guard('has-cloak-bush-target', function (bb) {
+        var t = bb.memory.cloakBushTarget;
+        if (!t) return false;
+        if (bb.frame - t.frame > 25) { bb.memory.cloakBushTarget = null; return false; }
+        if (!bb.star || !samePos(bb.star, t.star)) { bb.memory.cloakBushTarget = null; return false; }
+        return true;
+      }),
+      Guard('in-bush-or-cloaked', function (bb) {
+        return iAmHidden(bb.me, bb.game);
+      }),
+      Guard('still-safe-cbh', function (bb) {
+        return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+      }),
+      Action('do-cloak-bush-hold', function (bb) {
+        var t = bb.memory.cloakBushTarget;
+        if (!samePos(bb.myPos, t.pos) && manhattan(bb.myPos, t.pos) > 0) {
+          if (iAmHidden(bb.me, bb.game) && manhattan(bb.myPos, t.pos) <= 2 &&
+              (clearShotDirection(bb.myPos, t.star, bb.game) ||
+               (bb.enemyPos && clearShotDirection(bb.myPos, bb.enemyPos, bb.game)))) {
+            t.pos = bb.myPos.slice();
+          } else {
+            bbMoveToward(bb, t.pos);
+            return;
+          }
+        }
+        if (bb.enemyTank && bb.gunIsReady) {
+          var shotDir = clearShotDirection(bb.myPos, bb.enemyPos, bb.game);
+          if (shotDir && canShoot(bb.me, bb.enemy)) {
+            if (bb.myDir === shotDir) { bbSpeak(bb, '伏击!'); bbFire(bb); }
+            else { bbTurnToward(bb, shotDir); }
+            bb.memory.cloakBushTarget = null;
+            return;
+          }
+        }
+        var faceDir = clearShotDirection(bb.myPos, t.star, bb.game);
+        if (!faceDir && bb.memory.lastEnemyPos) {
+          faceDir = clearShotDirection(bb.myPos, bb.memory.lastEnemyPos, bb.game);
+        }
+        if (faceDir && bb.myDir !== faceDir) {
+          bbTurnToward(bb, faceDir);
+        }
+      })
+    ])
+  );
+
   // ---- 蹲草等星（对 overload 双弹流 + 无星/可利用星诱敌 + 我在草丛） ----
   // 注意：不要求传送就绪——无星时原地藏着比暴露在外更安全，传送冷却中也应坚守
   // 有星时：

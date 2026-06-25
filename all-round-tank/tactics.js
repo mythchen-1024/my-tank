@@ -2508,47 +2508,76 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
   if (!enemyIsCloakType(enemy)) return null;
   if (!state || !state.lastEnemyPos) return null;
   const age = ((game && game.frames) || 0) - state.lastEnemySeenFrame;
-  if (age < 0 || age > 4) return null;
+  if (age < 0 || age > 10) return null;
 
   const myPos = me.tank.position;
   if (anyBulletThreatens(enemyBullets || [], myPos, game)) return null;
 
-  const positions = hiddenCloakPositions(enemy, enemyTank, game, state);
-  if (positions.length === 0) positions.push(state.lastEnemyPos);
+  // 阶段1：age 0-4，近距可达格预射（原有逻辑）
+  if (age <= 4) {
+    const positions = hiddenCloakPositions(enemy, enemyTank, game, state);
+    if (positions.length === 0) positions.push(state.lastEnemyPos);
 
-  const lastDir = state.lastEnemyDir || null;
-  const dxDir = { right: 1, left: -1, up: 0, down: 0 };
-  const dyDir = { right: 0, left: 0, up: -1, down: 1 };
+    const lastDir = state.lastEnemyDir || null;
+    const dxDir = { right: 1, left: -1, up: 0, down: 0 };
+    const dyDir = { right: 0, left: 0, up: -1, down: 1 };
 
-  let bestDir = null;
-  let bestScore = -9999;
-  for (let i = 0; i < positions.length; i++) {
-    const p = positions[i];
-    if (samePos(p, myPos)) continue;
-    const dir = clearShotDirection(myPos, p, game);
-    if (!dir) continue;
-    const dist = manhattan(myPos, p);
-    if (dist > 5) continue;
+    let bestDir = null;
+    let bestScore = -9999;
+    for (let i = 0; i < positions.length; i++) {
+      const p = positions[i];
+      if (samePos(p, myPos)) continue;
+      const dir = clearShotDirection(myPos, p, game);
+      if (!dir) continue;
+      const dist = manhattan(myPos, p);
+      if (dist > 5) continue;
 
-    // 方向偏好：沿敌最后朝向的位置更可能是实际位置
-    let dirBias = 0;
-    if (lastDir) {
-      const dpx = p[0] - state.lastEnemyPos[0];
-      const dpy = p[1] - state.lastEnemyPos[1];
-      const dotProduct = dpx * dxDir[lastDir] + dpy * dyDir[lastDir];
-      dirBias = dotProduct > 0 ? dotProduct * 15 : dotProduct * 5;
+      let dirBias = 0;
+      if (lastDir) {
+        const dpx = p[0] - state.lastEnemyPos[0];
+        const dpy = p[1] - state.lastEnemyPos[1];
+        const dotProduct = dpx * dxDir[lastDir] + dpy * dyDir[lastDir];
+        dirBias = dotProduct > 0 ? dotProduct * 15 : dotProduct * 5;
+      }
+      const facingBonus = dir === me.tank.direction ? 60 : 0;
+      const lastBias = manhattan(p, state.lastEnemyPos) <= 1 ? 12 : 0;
+      const score = dirBias + facingBonus + lastBias - dist * 5 - age * 4;
+      if (score > bestScore) {
+        bestScore = score;
+        bestDir = dir;
+      }
     }
-    const facingBonus = dir === me.tank.direction ? 60 : 0;
-    const lastBias = manhattan(p, state.lastEnemyPos) <= 1 ? 12 : 0;
-    const score = dirBias + facingBonus + lastBias - dist * 5 - age * 4;
-    if (score > bestScore) {
-      bestScore = score;
-      bestDir = dir;
+
+    if (bestDir) {
+      return me.tank.direction === bestDir ? { fire: true, dir: bestDir } : { dir: bestDir };
     }
   }
 
-  if (!bestDir) return null;
-  return me.tank.direction === bestDir ? { fire: true, dir: bestDir } : { dir: bestDir };
+  // 阶段2：age 5-10，星附近草丛预射
+  if (age > 4 && game.star) {
+    var star = game.star;
+    var bestBush = null, bestDist = 999, bestBushDir = null;
+    var w = game.map.length, h = game.map[0].length;
+    for (var x = 0; x < w; x++) {
+      for (var y = 0; y < h; y++) {
+        if (tileAt(game, [x, y]) !== 'o') continue;
+        var p = [x, y];
+        var dStar = manhattan(p, star);
+        if (dStar < 2 || dStar > 5) continue;
+        var dLastEnemy = manhattan(p, state.lastEnemyPos);
+        if (dLastEnemy > age + 1) continue;
+        var shotDir = clearShotDirection(myPos, p, game);
+        if (!shotDir) continue;
+        if (manhattan(myPos, p) > 7) continue;
+        if (dLastEnemy < bestDist) { bestDist = dLastEnemy; bestBush = p; bestBushDir = shotDir; }
+      }
+    }
+    if (bestBush) {
+      return me.tank.direction === bestBushDir ? { fire: true, dir: bestBushDir } : { dir: bestBushDir };
+    }
+  }
+
+  return null;
 }
 
 
@@ -2759,6 +2788,51 @@ function findFreezeAmbushBush(myPos, star, game, enemyPos) {
       if (dMe > 8) continue;
       var score = 20 - dMe * 2 - dStar;
       if (enemyPos && clearShotDirection(p, enemyPos, game)) score += 5;
+      if (score > bestScore) { bestScore = score; best = p; }
+    }
+  }
+  return best;
+}
+
+function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
+  if (!game.star) return null;
+  var myPos = me.tank.position;
+  var star = game.star;
+  var enemyPos = enemyTank ? enemyTank.position : (memory && memory.lastEnemyPos || null);
+  if (!enemyPos) return null;
+
+  var best = null, bestScore = -9999;
+  var w = game.map.length, h = game.map[0].length;
+
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (tileAt(game, [x, y]) !== 'o') continue;
+      var p = [x, y];
+      if (samePos(p, myPos)) continue;
+      var dMe = manhattan(p, myPos);
+      if (dMe > 5) continue;
+      var dStar = manhattan(p, star);
+      if (dStar < 2 || dStar > 6) continue;
+      var shotToStar = clearShotDirection(p, star, game);
+      var shotToEnemy = clearShotDirection(p, enemyPos, game);
+      if (!shotToStar && !shotToEnemy) continue;
+
+      var score = 0;
+      if (shotToStar) score += 80;
+      if (shotToEnemy) score += 40;
+      var ex = enemyPos[0], ey = enemyPos[1];
+      var xBetween = (star[0] > ex) ? (x >= ex && x <= star[0]) :
+                     (star[0] < ex) ? (x <= ex && x >= star[0]) : (x === star[0]);
+      var yBetween = (star[1] > ey) ? (y >= ey && y <= star[1]) :
+                     (star[1] < ey) ? (y <= ey && y >= star[1]) : (y === star[1]);
+      if (xBetween || yBetween) score += 30;
+      score += (6 - dMe) * 10;
+      var dEnemy = manhattan(p, enemyPos);
+      if (dEnemy >= 4) score += 10;
+      for (var di = 0; di < DIRS.length; di++) {
+        var adj = [x + DIRS[di].dx, y + DIRS[di].dy];
+        if (tileAt(game, adj) === 'o') score += 5;
+      }
       if (score > bestScore) { bestScore = score; best = p; }
     }
   }

@@ -314,6 +314,12 @@ function senseStarBushAmbush(bb) {
   });
 }
 
+function senseCloakBushPosition(bb) {
+  return sense(bb, 'cloakBushPos', function () {
+    return findCloakBushPosition(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);
+  });
+}
+
 function senseBushPreFire(bb) {
   return sense(bb, 'bushPreFire', function () {
     return findBushPreFireTarget(bb.me, bb.enemy, bb.enemyTank, bb.game, bb.memory);

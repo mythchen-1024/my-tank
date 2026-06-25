@@ -59,6 +59,7 @@ var SKILL_PROFILES = {
     attackAggression: 'medium',
     starAggression: 'high',
     bushCamp: false,
+    bushCamperDefense: true,
     dodgeBand: false,
     freezeZoneAvoid: false,
     zigzagEscape: true,          // 之字形逃跑防背后偷袭
