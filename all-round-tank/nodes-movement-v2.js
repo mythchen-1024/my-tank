@@ -207,7 +207,10 @@ function createMovementTree(profile, mySkillType) {
         return true;
       }),
       Guard('in-bush-or-cloaked', function (bb) {
-        return iAmHidden(bb.me, bb.game);
+        if (iAmHidden(bb.me, bb.game)) return true;
+        var t = bb.memory.cloakBushTarget;
+        if (t && bb.frame - t.frame <= 8 && !samePos(bb.myPos, t.pos)) return true;
+        return false;
       }),
       Guard('still-safe-cbh', function (bb) {
         return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);

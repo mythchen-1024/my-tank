@@ -537,7 +537,6 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('not-already-in-bush', function (bb) {
           return !iAmHidden(bb.me, bb.game);
         }),
-        Guard('not-on-shot-line-cba', function (bb) { return !bb.shotDir; }),
         Guard('has-bush-target', function (bb) { return !!senseCloakBushPosition(bb); }),
         Guard('no-self-danger-cba', function (bb) {
           if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;

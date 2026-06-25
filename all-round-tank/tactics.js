@@ -2809,7 +2809,7 @@ function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
       var p = [x, y];
       if (samePos(p, myPos)) continue;
       var dMe = manhattan(p, myPos);
-      if (dMe > 5) continue;
+      if (dMe > 7) continue;
       var dStar = manhattan(p, star);
       if (dStar < 2 || dStar > 6) continue;
       var shotToStar = clearShotDirection(p, star, game);
