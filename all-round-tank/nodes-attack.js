@@ -104,6 +104,10 @@ function createAttackTree(profile) {
   if (profile.attackAggression !== 'low') {
     children.push(
       Sequence('snap-approach', [
+        // 甩狙是 boost 专属杀招：boost 才有同帧 turnGo/turnFire 的额外动作预算。
+        // 非 boost 时引擎一帧只认一个命令，go+turn+fire 会丢掉后两个，把自己白送上敌炮线
+        // (mat_6DokBQTwU69ApdHHo：非 boost 的 survivor 触发 snap-approach 只走了 go，被 stun 列秒)。
+        Guard('boosted-sa', function (bb) { return !!(bb.me.status && bb.me.status.boosted); }),
         Guard('gun-ready-sa', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible-sa', function (bb) { return !!bb.enemyTank; }),
         Guard('not-overload-sa', function (bb) { return !enemyDoubleLaneThreat(bb.enemy); }),
@@ -125,6 +129,9 @@ function createAttackTree(profile) {
     // 甩狙秒射：已在同线 3-6 格 + 转向≤1 → turnFire
     children.push(
       Sequence('snap-fire', [
+        // 同 snap-approach：仅 boost 时允许 turn+fire 同帧。非 boost 的"已对准只 fire"
+        // 分支与下方 fire-direct 重复，整节点 boost 化不丢能力。
+        Guard('boosted-sf', function (bb) { return !!(bb.me.status && bb.me.status.boosted); }),
         Guard('gun-ready-sf', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible-sf', function (bb) { return !!bb.enemyTank; }),
         Guard('not-overload-sf', function (bb) { return !enemyDoubleLaneThreat(bb.enemy); }),

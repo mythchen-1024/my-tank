@@ -1,7 +1,7 @@
 // ============================================================
 // bt-tank-submit.js — 行为树坦克 AI（自动生成，请勿手动编辑）
 // 源文件: core-utils.js, tactics.js, movement-engine.js, state-store.js, bt-core.js, blackboard.js, enemy-profiler.js, nodes-survival.js, nodes-attack.js, nodes-skill.js, nodes-objective.js, nodes-movement-v2.js, tree-factory.js, entry.js
-// 构建时间: 2026-06-25T04:27:56.201Z
+// 构建时间: 2026-06-25T07:13:24.849Z
 // ============================================================
 // ===== core-utils.js =====
 // ============================================================
@@ -151,7 +151,7 @@ const ASSASSIN_MAX_RANGE = 8;
 var MAX_GAME_FRAMES = 128;
 // 全局调试开关：控制决策追踪(trace.push / join / print)。生产构建置 false 省每帧字符串开销。
 // 注意：不影响各动作节点内部的战术 speak（那是独立的 bbSpeak 调用）。
-var BT_DEBUG = false;
+var BT_DEBUG = true;
 // 冰冻技能锁定帧数（replay mat_0Wmx 逆向：applied durationFrames:2，被冻 2 帧不能移动/转向）
 const FREEZE_DURATION = 2;
 // 认定对方是"跑路流"的连续背向帧阈值：对方连续 N 帧同线却背对我，视为只逃不战（mat_AAKs "小虾"）
@@ -803,34 +803,59 @@ var BFS_MAX_ITERATIONS = 500; // 20×20=400 格地图上限，留余量防极端
 function _computeShortestPathInfo(start, target, game, blockPos) {
   const w = game.map.length;
   const h = game.map[0].length;
+  const size = w * h;
+  // 整数索引 idx = x*h + y，替代字符串键 "x,y"：避免每格的字符串拼接+对象哈希。
+  // TypedArray 作 seen/dist/prev：数组下标访问远快于对象属性。输出格式与旧版完全一致。
+  const seen = new Uint8Array(size);
+  const distArr = new Int16Array(size);   // 地图最多 ~400 格，dist 远小于 32767
+  const prevArr = new Int32Array(size);   // 存父格索引；start 标记为 -1
+  const tx = target[0], ty = target[1];
+  const startIdx = start[0] * h + start[1];
+  seen[startIdx] = 1;
+  distArr[startIdx] = 0;
+  prevArr[startIdx] = -1;
+  const blockX = blockPos ? blockPos[0] : -999;
+  const blockY = blockPos ? blockPos[1] : -999;
+
   const queue = [start];
-  const seen = {};
-  const prev = {};
-  const dist = {};
-  seen[key(start)] = true;
-  dist[key(start)] = 0;
-
-  var limit = Math.min(queue.length + BFS_MAX_ITERATIONS, BFS_MAX_ITERATIONS);
-  for (let qi = 0; qi < queue.length && qi < limit; qi++) {
+  const map = game.map;
+  // 旧逻辑 limit = min(queue.length(=1)+500, 500) 恒为 BFS_MAX_ITERATIONS
+  for (let qi = 0; qi < queue.length && qi < BFS_MAX_ITERATIONS; qi++) {
     const p = queue[qi];
+    const pIdx = p[0] * h + p[1];
     for (let i = 0; i < DIRS.length; i++) {
-      const n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
-      const k = key(n);
-      if (seen[k]) continue;
-      if (n[0] < 0 || n[1] < 0 || n[0] >= w || n[1] >= h) continue;
-
-      // 非目标格要求可通过，目标格可以容忍被敌人占据
-      if (!samePos(n, target) && !isPassable(game, n, blockPos)) continue;
-      if (samePos(n, target) && !isPassable(game, n, null) && !samePos(target, blockPos)) continue;
-
-      seen[k] = true;
-      prev[k] = p;
-      dist[k] = dist[key(p)] + 1;
-
-      if (samePos(n, target)) {
-        return { dist: dist[k], step: firstStep(start, n, prev) };
+      const nx = p[0] + DIRS[i].dx;
+      const ny = p[1] + DIRS[i].dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      const nIdx = nx * h + ny;
+      if (seen[nIdx]) continue;
+      const isTarget = (nx === tx && ny === ty);
+      // 内联 isPassable(已边界检查，无需 tileAt 越界兜底)：
+      //   可站 = 瓦片为 "." 或 "o" 且非 blockPos。
+      //   目标格容忍被敌占据：仅当目标本身就是 blockPos 时放行不可站的目标。
+      const t = map[nx][ny];
+      const walkable = (t === "." || t === "o");
+      const onBlock = (nx === blockX && ny === blockY);
+      if (!isTarget) {
+        if (!walkable || onBlock) continue;
+      } else {
+        if (!walkable && !onBlock) continue;
       }
-      queue.push(n);
+
+      seen[nIdx] = 1;
+      prevArr[nIdx] = pIdx;
+      distArr[nIdx] = distArr[pIdx] + 1;
+
+      if (isTarget) {
+        // 内联回溯第一步（等价 firstStep）：从目标往回走到 start 的直接邻居
+        let cur = nIdx;
+        while (prevArr[cur] !== -1 && prevArr[cur] !== startIdx) {
+          cur = prevArr[cur];
+        }
+        const step = (cur === startIdx) ? null : [(cur / h) | 0, cur % h];
+        return { dist: distArr[nIdx], step: step };
+      }
+      queue.push([nx, ny]);
     }
   }
   return null;
@@ -1899,13 +1924,24 @@ function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, s
   var myPos = me.tank.position;
   var hm = state.bushHeatmap;
 
-  // 只对高置信度条目(>=65)响应：walk(80+)/teleport(100)新鲜入草触发，
-  // 扩散(40)/看门狗维持(52)不触发，避免整片草丛永久"危险"(mat_AH4im3mff5)
-  var DODGE_THRESHOLD = 65;
+  // 门槛按来源+新鲜度分级：
+  //   新鲜入草型(walk/teleport/fire/teleport-infer)且 lastFrame 在 3 帧内——亲眼刚看见敌进草，
+  //     置信度高且威胁迫近，门槛 50；
+  //   其余(扩散/星旁预播种/看门狗维持的陈旧 52 条目)——门槛 65，避免整片草丛永久"危险"
+  //     (mat_AH4im3mff5；以及看门狗维持的 walk 条目若一律降门槛会持续躲草丢抢星节奏)。
+  // m1(mat_I5c0H2zXCdE6b8q8O)：敌从可见的[12,2]走进草丛[12,1](途径1播种 source='walk' 80分，刚入)，
+  // 沿 row1 朝我开炮，我已站在该射线上。新鲜 walk 门槛 50 → 触发横移离开 row1。
+  var nowFrame = (game && game.frames) || 0;
+  function _bushDodgeThreshold(entry) {
+    var fresh = entry.lastFrame !== undefined && (nowFrame - entry.lastFrame) <= 3;
+    var seen = entry.source === 'walk' || entry.source === 'teleport' ||
+               entry.source === 'fire' || entry.source === 'teleport-infer';
+    return (fresh && seen) ? 50 : 65;
+  }
   var threatened = false;
   var dangerDirs = {};
   for (var k in hm) {
-    if (!hm.hasOwnProperty(k) || hm[k].score < DODGE_THRESHOLD) continue;
+    if (!hm.hasOwnProperty(k) || hm[k].score < _bushDodgeThreshold(hm[k])) continue;
     var parts = k.split(',');
     var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
     var shotDir = clearShotDirection(bushPos, myPos, game);
@@ -1924,7 +1960,7 @@ function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, s
     if (stepIntoBulletPath(enemyBullets || [], p, game)) continue;
     var stillDanger = false;
     for (var kk in hm) {
-      if (!hm.hasOwnProperty(kk) || hm[kk].score < DODGE_THRESHOLD) continue;
+      if (!hm.hasOwnProperty(kk) || hm[kk].score < _bushDodgeThreshold(hm[kk])) continue;
       var pp = kk.split(',');
       var bp = [parseInt(pp[0]), parseInt(pp[1])];
       if (clearShotDirection(bp, p, game) && manhattan(bp, p) <= 8) {
@@ -3997,6 +4033,17 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
 
   // 阶段2：age 5-10，星附近草丛预射
   if (age > 4 && game.star) {
+    // 自卫门控：隐身敌从最后位置出发、age 帧足够走到我身边时，它可能已贴脸（mat_IPCTB3G1tD58lkHdK：
+    // 敌最后[11,7] age=8 实际已到[6,7]距我1格，我却朝星旁草丛投机预射打空、锁炮15帧→同列却开不了火被秒）。
+    // 此刻炮是唯一自卫手段，低置信预射打空=自杀，留炮防贴脸。
+    // 仅对"无脱离手段"技能(shield/freeze/stun/poison/overload)生效；teleport/boost 是脱离型打法，
+    // 锁炮也能跑，预射净值为正(bench：硬加门控 teleport -3pp，shield +1.3pp)——故按技能类型静态分流。
+    var mySkill = (me && me.skill && me.skill.type) || null;
+    var escapeArchetype = (mySkill === 'teleport' || mySkill === 'boost');
+    if (!escapeArchetype) {
+      var distLastEnemy = manhattan(myPos, state.lastEnemyPos);
+      if (distLastEnemy - age <= 2) return null;
+    }
     var star = game.star;
     var bestBush = null, bestDist = 999, bestBushDir = null;
     var w = game.map.length, h = game.map[0].length;
@@ -4698,8 +4745,8 @@ function isStarGuardTrap(enemyPos, enemy, starPos) {
  * 具体打分：走过去后的 clearShotDirection = 当前行进方向 -> +4（原地就能开炮）；
  *           走过去后需要转 1 次 -> +0；其余 -> -4。
  */
-function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankWeight) {
-  const minD = Math.max(3, standoff - 1);
+function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankWeight, minDistFloor) {
+  const minD = minDistFloor !== undefined ? minDistFloor : Math.max(3, standoff - 1);
   // 收集所有候选轨道格（BFS 层序，记录到达每格的第一步和步数）
   const w = game.map.length, h = game.map[0].length;
   const queue = [myPos];
@@ -5246,6 +5293,33 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
       }
       for (var s = 0; s < spreads.length; s++) {
         _bushHeatAdd(hm, spreads[s], 40, frame, 'spread');
+      }
+    }
+
+    // ── 星旁草丛预播种：cloak 敌隐身后极可能去星旁草丛蹲守（mat_IPCTB3G1tD58lkHdK：
+    // 敌从[11,7]隐身直线走5格到星[6,8]旁草丛[6,7]蹲守，我走进同列[6,6]被狙）。
+    // 途径1只播种敌最后位置相邻草丛，够不到5格外的远草丛；热力扩散每4帧1格也太慢。
+    // 这里对"星周围草丛"直接播种中等热力(53,刚过阈值52)，让 stepIntoHiddenEnemyFireLine
+    // 把我从这些草丛的射击线上推开。仅 cloak 敌触发(其它技能无隐身蹲草能力，避免防过头)。
+    //
+    // 半径分级(mat_I9OkFc0VkRsCkGFeV/mat_6tT9qMNIYNP60nA04：敌隐身中远程潜入距星4格的草丛[13,7]，
+    // 沿我追星列开炮)：星±2 无条件播种；星±3..5 的草丛额外要求"敌隐身后真能走到"
+    // (距 lastEnemyPos ≤ min(age,8))——既覆盖远程潜草，又不把敌根本到不了的星旁草丛误标，避免防过头。
+    var isCloakEnemy = enemy && enemy.skill && enemy.skill.type === 'cloak';
+    if (isCloakEnemy && game.star && age >= 3) {
+      var st = game.star;
+      var reach = Math.min(age, 8);
+      var lp5 = state.lastEnemyPos;
+      for (var sx = st[0] - 5; sx <= st[0] + 5; sx++) {
+        for (var sy = st[1] - 5; sy <= st[1] + 5; sy++) {
+          var sp = [sx, sy];
+          if (!inBounds(sp, game) || tileAt(game, sp) !== 'o') continue;
+          var dStar = manhattan(sp, st);
+          if (dStar > 5) continue;
+          // 星±3..5 的远草丛：要求敌隐身后可达，否则跳过(敌到不了=无威胁)
+          if (dStar > 2 && (!lp5 || manhattan(sp, lp5) > reach)) continue;
+          if (!hm[key(sp)]) _bushHeatAdd(hm, sp, 53, frame, 'star-bush');
+        }
       }
     }
   }
@@ -6636,6 +6710,10 @@ function createAttackTree(profile) {
   if (profile.attackAggression !== 'low') {
     children.push(
       Sequence('snap-approach', [
+        // 甩狙是 boost 专属杀招：boost 才有同帧 turnGo/turnFire 的额外动作预算。
+        // 非 boost 时引擎一帧只认一个命令，go+turn+fire 会丢掉后两个，把自己白送上敌炮线
+        // (mat_6DokBQTwU69ApdHHo：非 boost 的 survivor 触发 snap-approach 只走了 go，被 stun 列秒)。
+        Guard('boosted-sa', function (bb) { return !!(bb.me.status && bb.me.status.boosted); }),
         Guard('gun-ready-sa', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible-sa', function (bb) { return !!bb.enemyTank; }),
         Guard('not-overload-sa', function (bb) { return !enemyDoubleLaneThreat(bb.enemy); }),
@@ -6657,6 +6735,9 @@ function createAttackTree(profile) {
     // 甩狙秒射：已在同线 3-6 格 + 转向≤1 → turnFire
     children.push(
       Sequence('snap-fire', [
+        // 同 snap-approach：仅 boost 时允许 turn+fire 同帧。非 boost 的"已对准只 fire"
+        // 分支与下方 fire-direct 重复，整节点 boost 化不丢能力。
+        Guard('boosted-sf', function (bb) { return !!(bb.me.status && bb.me.status.boosted); }),
         Guard('gun-ready-sf', function (bb) { return bb.gunIsReady; }),
         Guard('enemy-visible-sf', function (bb) { return !!bb.enemyTank; }),
         Guard('not-overload-sf', function (bb) { return !enemyDoubleLaneThreat(bb.enemy); }),
@@ -7554,7 +7635,12 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('no-shot', function (bb) { return !bb.shotDir; }),
         Action('do-cloak-move', function (bb) {
           var rearDir = oppositeDir(bb.enemyTank.direction);
-          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1, rearDir, 8);
+          // 学 Wraith 贴脸流（mat_IPCTB3G1tD58lkHdK）：隐身期绕到背后近身，到期秒射。
+          // 但贴到2格对 freeze(被冻秒)/boost(快速反扑)反噬(bench -3.8/-2.5pp)，
+          // 仅对 overload/shield 这类无快速反制的敌用更近地板(2)，其余保持默认(3)。
+          var es = (bb.enemy && bb.enemy.skill && bb.enemy.skill.type) || null;
+          var floor = (es === 'overload' || es === 'shield') ? 2 : undefined;
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1, rearDir, 8, floor);
           if (step) bbMoveToward(bb, step);
         })
       ])
@@ -8333,6 +8419,27 @@ function createStarGrabNode() {
 function createMovementTree(profile, mySkillType) {
   mySkillType = mySkillType || 'teleport';
   var children = [];
+
+  // ---- 行/列锁定解冻（最高优先，杜绝原地空转等CD） ----
+  // m5(mat_938IDiIJ1ZIEQUmqV)：我(overload)退到右墙角[17,5]，敌可见同列[17,9]、星夹中间[17,8]，
+  // 炮在CD。追星=进敌列、右是墙退不开，下游 moveToward 在目标危险且无脱离时 me.turn("right")
+  // (已面右=空操作)消费tick → 连冻7帧直到overload CD好才解冻。breakStuckStep 能确定性转向最近
+  // 安全格([16,5])横向脱列。窄门控：仅 stuck>=3 + 敌可见同行/列 + 我不在草丛(不打断蹲草伏击)。
+  children.push(
+    Sequence('line-lock-unstick', [
+      Guard('line-locked-stuck', function (bb) {
+        if ((bb.memory.stuckFrames || 0) < 3) return false;
+        if (!bb.enemyPos) return false;
+        if (iAmHidden(bb.me, bb.game)) return false;
+        return bb.myPos[0] === bb.enemyPos[0] || bb.myPos[1] === bb.enemyPos[1];
+      }),
+      Action('do-line-lock-unstick', function (bb) {
+        clearShortIntent(bb.memory);
+        breakStuckStep(bb.me, bb.game, bb.enemyPos, bb.enemyTank,
+          bb.enemyBullets, bb.memory.lastMyPos2, bb.enemy);
+      })
+    ])
+  );
 
   // ---- 传送落点偏移：传送后首帧立即移到相邻草丛（仅传送技能） ----
   if (mySkillType === 'teleport') children.push(

@@ -12,6 +12,27 @@ function createMovementTree(profile, mySkillType) {
   mySkillType = mySkillType || 'teleport';
   var children = [];
 
+  // ---- 行/列锁定解冻（最高优先，杜绝原地空转等CD） ----
+  // m5(mat_938IDiIJ1ZIEQUmqV)：我(overload)退到右墙角[17,5]，敌可见同列[17,9]、星夹中间[17,8]，
+  // 炮在CD。追星=进敌列、右是墙退不开，下游 moveToward 在目标危险且无脱离时 me.turn("right")
+  // (已面右=空操作)消费tick → 连冻7帧直到overload CD好才解冻。breakStuckStep 能确定性转向最近
+  // 安全格([16,5])横向脱列。窄门控：仅 stuck>=3 + 敌可见同行/列 + 我不在草丛(不打断蹲草伏击)。
+  children.push(
+    Sequence('line-lock-unstick', [
+      Guard('line-locked-stuck', function (bb) {
+        if ((bb.memory.stuckFrames || 0) < 3) return false;
+        if (!bb.enemyPos) return false;
+        if (iAmHidden(bb.me, bb.game)) return false;
+        return bb.myPos[0] === bb.enemyPos[0] || bb.myPos[1] === bb.enemyPos[1];
+      }),
+      Action('do-line-lock-unstick', function (bb) {
+        clearShortIntent(bb.memory);
+        breakStuckStep(bb.me, bb.game, bb.enemyPos, bb.enemyTank,
+          bb.enemyBullets, bb.memory.lastMyPos2, bb.enemy);
+      })
+    ])
+  );
+
   // ---- 传送落点偏移：传送后首帧立即移到相邻草丛（仅传送技能） ----
   if (mySkillType === 'teleport') children.push(
     Sequence('ambush-shift', [

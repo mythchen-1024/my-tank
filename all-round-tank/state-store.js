@@ -323,16 +323,25 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
     // ── 星旁草丛预播种：cloak 敌隐身后极可能去星旁草丛蹲守（mat_IPCTB3G1tD58lkHdK：
     // 敌从[11,7]隐身直线走5格到星[6,8]旁草丛[6,7]蹲守，我走进同列[6,6]被狙）。
     // 途径1只播种敌最后位置相邻草丛，够不到5格外的远草丛；热力扩散每4帧1格也太慢。
-    // 这里对"星周围2格内的草丛"直接播种中等热力(53,刚过阈值52)，让 stepIntoHiddenEnemyFireLine
+    // 这里对"星周围草丛"直接播种中等热力(53,刚过阈值52)，让 stepIntoHiddenEnemyFireLine
     // 把我从这些草丛的射击线上推开。仅 cloak 敌触发(其它技能无隐身蹲草能力，避免防过头)。
+    //
+    // 半径分级(mat_I9OkFc0VkRsCkGFeV/mat_6tT9qMNIYNP60nA04：敌隐身中远程潜入距星4格的草丛[13,7]，
+    // 沿我追星列开炮)：星±2 无条件播种；星±3..5 的草丛额外要求"敌隐身后真能走到"
+    // (距 lastEnemyPos ≤ min(age,8))——既覆盖远程潜草，又不把敌根本到不了的星旁草丛误标，避免防过头。
     var isCloakEnemy = enemy && enemy.skill && enemy.skill.type === 'cloak';
     if (isCloakEnemy && game.star && age >= 3) {
       var st = game.star;
-      for (var sx = st[0] - 2; sx <= st[0] + 2; sx++) {
-        for (var sy = st[1] - 2; sy <= st[1] + 2; sy++) {
+      var reach = Math.min(age, 8);
+      var lp5 = state.lastEnemyPos;
+      for (var sx = st[0] - 5; sx <= st[0] + 5; sx++) {
+        for (var sy = st[1] - 5; sy <= st[1] + 5; sy++) {
           var sp = [sx, sy];
           if (!inBounds(sp, game) || tileAt(game, sp) !== 'o') continue;
-          if (manhattan(sp, st) > 2) continue;
+          var dStar = manhattan(sp, st);
+          if (dStar > 5) continue;
+          // 星±3..5 的远草丛：要求敌隐身后可达，否则跳过(敌到不了=无威胁)
+          if (dStar > 2 && (!lp5 || manhattan(sp, lp5) > reach)) continue;
           if (!hm[key(sp)]) _bushHeatAdd(hm, sp, 53, frame, 'star-bush');
         }
       }

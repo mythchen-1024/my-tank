@@ -457,13 +457,24 @@ function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, s
   var myPos = me.tank.position;
   var hm = state.bushHeatmap;
 
-  // 只对高置信度条目(>=65)响应：walk(80+)/teleport(100)新鲜入草触发，
-  // 扩散(40)/看门狗维持(52)不触发，避免整片草丛永久"危险"(mat_AH4im3mff5)
-  var DODGE_THRESHOLD = 65;
+  // 门槛按来源+新鲜度分级：
+  //   新鲜入草型(walk/teleport/fire/teleport-infer)且 lastFrame 在 3 帧内——亲眼刚看见敌进草，
+  //     置信度高且威胁迫近，门槛 50；
+  //   其余(扩散/星旁预播种/看门狗维持的陈旧 52 条目)——门槛 65，避免整片草丛永久"危险"
+  //     (mat_AH4im3mff5；以及看门狗维持的 walk 条目若一律降门槛会持续躲草丢抢星节奏)。
+  // m1(mat_I5c0H2zXCdE6b8q8O)：敌从可见的[12,2]走进草丛[12,1](途径1播种 source='walk' 80分，刚入)，
+  // 沿 row1 朝我开炮，我已站在该射线上。新鲜 walk 门槛 50 → 触发横移离开 row1。
+  var nowFrame = (game && game.frames) || 0;
+  function _bushDodgeThreshold(entry) {
+    var fresh = entry.lastFrame !== undefined && (nowFrame - entry.lastFrame) <= 3;
+    var seen = entry.source === 'walk' || entry.source === 'teleport' ||
+               entry.source === 'fire' || entry.source === 'teleport-infer';
+    return (fresh && seen) ? 50 : 65;
+  }
   var threatened = false;
   var dangerDirs = {};
   for (var k in hm) {
-    if (!hm.hasOwnProperty(k) || hm[k].score < DODGE_THRESHOLD) continue;
+    if (!hm.hasOwnProperty(k) || hm[k].score < _bushDodgeThreshold(hm[k])) continue;
     var parts = k.split(',');
     var bushPos = [parseInt(parts[0]), parseInt(parts[1])];
     var shotDir = clearShotDirection(bushPos, myPos, game);
@@ -482,7 +493,7 @@ function findBushCamperFireLineDodge(me, enemy, enemyTank, enemyBullets, game, s
     if (stepIntoBulletPath(enemyBullets || [], p, game)) continue;
     var stillDanger = false;
     for (var kk in hm) {
-      if (!hm.hasOwnProperty(kk) || hm[kk].score < DODGE_THRESHOLD) continue;
+      if (!hm.hasOwnProperty(kk) || hm[kk].score < _bushDodgeThreshold(hm[kk])) continue;
       var pp = kk.split(',');
       var bp = [parseInt(pp[0]), parseInt(pp[1])];
       if (clearShotDirection(bp, p, game) && manhattan(bp, p) <= 8) {
