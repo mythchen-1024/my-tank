@@ -251,7 +251,10 @@ function createAttackTree(profile) {
         Guard('not-stuck-spinning', function (bb) {
           return (bb.memory.stuckFrames || 0) < 8;
         }),
-        Guard('has-guard-line', function (bb) { return !!senseGuardLineShot(bb); }),
+        Guard('has-guard-line', function (bb) {
+          var shot = senseGuardLineShot(bb);
+          return !!(shot && shot.fire);
+        }),
         // 让位后撤的门控：只在敌"真握双弹"(已过载/cd<=1)且近距时才放弃守线。
         // 不能用 distToEnemy>=standoff 当硬闸——overload 流 standoff 恒=5，会把
         // "敌双弹已用掉、冷却中、我同行先手"的干净开火窗口也一刀切否决(mat_GhEi 墙角
