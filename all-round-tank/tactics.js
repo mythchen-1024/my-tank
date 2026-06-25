@@ -2799,7 +2799,6 @@ function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
   var myPos = me.tank.position;
   var star = game.star;
   var enemyPos = enemyTank ? enemyTank.position : (memory && memory.lastEnemyPos || null);
-  if (!enemyPos) return null;
 
   var best = null, bestScore = -9999;
   var w = game.map.length, h = game.map[0].length;
@@ -2814,21 +2813,23 @@ function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
       var dStar = manhattan(p, star);
       if (dStar < 2 || dStar > 6) continue;
       var shotToStar = clearShotDirection(p, star, game);
-      var shotToEnemy = clearShotDirection(p, enemyPos, game);
+      var shotToEnemy = enemyPos ? clearShotDirection(p, enemyPos, game) : null;
       if (!shotToStar && !shotToEnemy) continue;
 
       var score = 0;
       if (shotToStar) score += 80;
       if (shotToEnemy) score += 40;
-      var ex = enemyPos[0], ey = enemyPos[1];
-      var xBetween = (star[0] > ex) ? (x >= ex && x <= star[0]) :
-                     (star[0] < ex) ? (x <= ex && x >= star[0]) : (x === star[0]);
-      var yBetween = (star[1] > ey) ? (y >= ey && y <= star[1]) :
-                     (star[1] < ey) ? (y <= ey && y >= star[1]) : (y === star[1]);
-      if (xBetween || yBetween) score += 30;
+      if (enemyPos) {
+        var ex = enemyPos[0], ey = enemyPos[1];
+        var xBetween = (star[0] > ex) ? (x >= ex && x <= star[0]) :
+                       (star[0] < ex) ? (x <= ex && x >= star[0]) : (x === star[0]);
+        var yBetween = (star[1] > ey) ? (y >= ey && y <= star[1]) :
+                       (star[1] < ey) ? (y <= ey && y >= star[1]) : (y === star[1]);
+        if (xBetween || yBetween) score += 30;
+        var dEnemy = manhattan(p, enemyPos);
+        if (dEnemy >= 4) score += 10;
+      }
       score += (6 - dMe) * 10;
-      var dEnemy = manhattan(p, enemyPos);
-      if (dEnemy >= 4) score += 10;
       for (var di = 0; di < DIRS.length; di++) {
         var adj = [x + DIRS[di].dx, y + DIRS[di].dy];
         if (tileAt(game, adj) === 'o') score += 5;
