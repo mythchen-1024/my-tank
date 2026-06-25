@@ -2064,9 +2064,15 @@ function findLineDuelDodge(me, enemy, enemyTank, enemyBullets, game, enemyPos) {
 
   // 以守为攻：敌人此刻并未瞄准我（炮口不朝我，无实弹在途），且我对射不慢于它(myDuel<=enemyDuel) ->
   // 不必侧移逃避，交给开火/守线分支先手压制（敌没瞄我时侧移只是浪费先手，见 mat_AZpe 被压到墙角）。
+  // 贴脸例外(dist<=2 且敌能开火)：此时让位致命——敌一个 turn+fire(<=2帧+子弹1帧)就秒我,
+  // 我留下对射得先转向几乎必慢半拍;而敌当前无在途弹,我本帧侧移出炮线必然先于敌的炮生成(走开零风险)。
+  // 不豁免则坦克吃星贴脸后"敌还没转过来"那帧被判安全不动,白白浪费唯一逃生帧被秒
+  // (mat_CZtWfhKeXdFA4c3N9:吃星到[3,8],敌[3,7]朝right尚未瞄我→让位不动→敌f26 turn down开炮秒杀,
+  //  而本帧零转向侧移到[2,8]离开x=3炮列即活)。中距离(>2)仍维持让位,不碰 mat_AZpe 教训。
   const enemyAimingMe = enemyAimsAt(myPos, enemyTank, game);
   const enemyHasBullet = enemy && enemy.bullet && enemy.bullet.position;
-  if (!enemyHasShieldSkill(enemy) && !enemyAimingMe && !enemyHasBullet && myDuel <= enemyDuel) return null;
+  const veryClose = dist <= 2 && enemyCanFireSoon(enemy);
+  if (!enemyHasShieldSkill(enemy) && !enemyAimingMe && !enemyHasBullet && myDuel <= enemyDuel && !veryClose) return null;
 
   // 评估"侧移脱线"能否在敌方子弹到达前离开这条直线。
   // 侧移耗帧：当前朝向即侧向 -> 1 帧(直接 go 离格)；否则需先转向 -> 2 帧(转+走)。
