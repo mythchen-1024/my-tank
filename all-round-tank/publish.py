@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-AgenTank 发布工具（多坦克档案）
+AgenTank 发布工具（多坦克档案，支持批量发布）
 用法:
-  python publish.py                          # 排名坦克: 构建并发布 myth-tank-submit.js 到 main
+  python publish.py                          # 排名坦克: 构建并发布到档案中所有 key
+  python publish.py --only 护盾,加速         # 只发布到指定名称的坦克
   python publish.py --tank survivor          # 生存坦克: 发布 survivor-tank.js 到 raid(出击)分支
   python publish.py --tank survivor -b multiplayer  # 同一份代码发布到多人分支
   python publish.py --no-build               # 跳过构建，直接发布现有文件
@@ -11,11 +12,13 @@ AgenTank 发布工具（多坦克档案）
   python publish.py --branch raid            # 覆盖档案默认分支
   python publish.py --no-minify              # 关闭代码压缩，原样发布
   python publish.py --dry-run                # 只打印请求体，不实际发布
-  python publish.py --status                 # 查看坦克当前状态
+  python publish.py --status                 # 查看所有坦克当前状态
   python publish.py -s --tank survivor       # 查看生存坦克状态
   python publish.py --matches                # 查看最近战斗记录
 
-坦克档案(--tank)在 TANK_PROFILES 定义，绑定 key/默认文件/默认分支/构建命令/署名。
+坦克档案(--tank)在 TANK_PROFILES 定义，绑定 keys(多个)/默认文件/默认分支/构建命令/署名。
+keys 为列表，每项 {"name": "显示名", "key": "agtk_xxx"}。
+--only 可逗号分隔选择部分坦克名称发布；不指定则全量发布。
 命令行显式 --file/--branch 优先级高于档案默认值。
 """
 
@@ -31,7 +34,7 @@ from datetime import datetime
 
 BASE_URL = "https://agentank.ai"
 
-# 坦克档案：每档案绑定 key / 默认文件 / 默认分支 / 构建命令 / 署名。
+# 坦克档案：每档案绑定 keys(列表) / 默认文件 / 默认分支 / 构建命令 / 署名。
 # build_cmd 为 None 表示单文件无需构建。
 # myth-survivor agtk_cce872653e5d5b90f76db3ac370a2d2809b6 冰冻
 # myth-tank001 agtk_4b1cdd58062b79c270f0983872acaeddac07 传送
@@ -39,9 +42,18 @@ BASE_URL = "https://agentank.ai"
 # myth-tank007 agtk_97f38c3f2cd8666b86ba86d407a7c758bc24 护盾
 # myth-tank008 agtk_97cd318efe1ebf6a28908e6199da68ccf9ce 超载
 # myth-tank009 agtk_7dfcb309cbcf0b41efe34117d388401b2819 眩晕
+# myth-tank010 agtk_796f437f245ac76962630640aa0b08fc400c 隐身
 TANK_PROFILES = {
-    "bt": {  # 默认：行为树坦克 myth-survivor
-        "key": "agtk_97f38c3f2cd8666b86ba86d407a7c758bc24",
+    "bt": {
+        "keys": [
+            {"name": "myth-survivor", "key": "agtk_cce872653e5d5b90f76db3ac370a2d2809b6"},
+            {"name": "myth-tank001", "key": "agtk_4b1cdd58062b79c270f0983872acaeddac07"},
+            {"name": "myth-tank006", "key": "agtk_e8dd544d3f9a4727a0d82285e24b2dbad8c4"},
+            {"name": "myth-tank007", "key": "agtk_97f38c3f2cd8666b86ba86d407a7c758bc24"},
+            {"name": "myth-tank008", "key": "agtk_97cd318efe1ebf6a28908e6199da68ccf9ce"},
+            {"name": "myth-tank009", "key": "agtk_7dfcb309cbcf0b41efe34117d388401b2819"},
+            {"name": "myth-tank010", "key": "agtk_796f437f245ac76962630640aa0b08fc400c"},
+        ],
         "file": "bt-tank-submit.js",
         "branch": "main",
         "build_cmd": ["node", "build.js"],
@@ -51,12 +63,22 @@ TANK_PROFILES = {
 DEFAULT_TANK = "bt"
 
 
-def get_tank_key(profile):
-    key = profile.get("key")
-    if not key:
-        print("错误: 该坦克档案未配置 key。请在 TANK_PROFILES 中填写 key。")
+def get_tank_keys(profile, only=None):
+    """获取档案中的 key 列表，支持 --only 过滤。"""
+    keys = profile.get("keys", [])
+    if not keys:
+        print("错误: 该坦克档案未配置 keys。请在 TANK_PROFILES 中填写 keys 列表。")
         sys.exit(1)
-    return key
+    if only:
+        names = [n.strip() for n in only.split(",")]
+        filtered = [k for k in keys if k["name"] in names]
+        not_found = set(names) - {k["name"] for k in filtered}
+        if not_found:
+            all_names = [k["name"] for k in keys]
+            print(f"错误: 未找到坦克名: {', '.join(not_found)}  可用: {', '.join(all_names)}")
+            sys.exit(1)
+        return filtered
+    return keys
 
 
 def load_dotenv():
@@ -70,13 +92,16 @@ def load_dotenv():
                     os.environ.setdefault(k.strip(), v.strip())
 
 
-def api_request(method, path, body=None, tank_key=None):
+class PublishError(Exception):
+    pass
+
+
+def api_request(method, path, body=None, tank_key=None, exit_on_error=True):
     url = BASE_URL + path
     data = json.dumps(body).encode("utf-8") if body else None
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {tank_key}",
-        # urllib 默认 UA (Python-urllib/x.x) 会被 Cloudflare 拦截(error 1010), 伪装成浏览器
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
     }
@@ -86,59 +111,68 @@ def api_request(method, path, body=None, tank_key=None):
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         body_text = e.read().decode("utf-8", errors="replace")
-        print(f"HTTP {e.code} {e.reason}")
+        msg = f"HTTP {e.code} {e.reason}"
+        print(msg)
         try:
             err = json.loads(body_text)
             print(json.dumps(err, ensure_ascii=False, indent=2))
         except Exception:
             print(body_text[:500])
-        sys.exit(1)
+        if exit_on_error:
+            sys.exit(1)
+        raise PublishError(msg)
     except urllib.error.URLError as e:
-        print(f"网络错误: {e.reason}")
-        sys.exit(1)
+        msg = f"网络错误: {e.reason}"
+        print(msg)
+        if exit_on_error:
+            sys.exit(1)
+        raise PublishError(msg)
 
 
-def cmd_status(tank_key):
-    print("正在获取坦克状态...")
-    data = api_request("GET", "/api/agent/tank", tank_key=tank_key)
-    tank = data.get("tank", {})
-    standing = data.get("standing", {})
-    sim_cooldown = data.get("simulateCooldown")
+def cmd_status(tank_keys):
+    for entry in tank_keys:
+        print(f"\n{'='*40}")
+        print(f"正在获取坦克状态 [{entry['name']}]...")
+        data = api_request("GET", "/api/agent/tank", tank_key=entry["key"])
+        tank = data.get("tank", {})
+        standing = data.get("standing", {})
+        sim_cooldown = data.get("simulateCooldown")
 
-    print(f"\n坦克: {tank.get('name')} (ID: {tank.get('id')})")
-    print(f"所有者: {tank.get('ownerDisplayName')}")
-    print(f"技能: {tank.get('skillType', '未知')}")
-    print(f"排名分数: {tank.get('rankScore')}  等级: {tank.get('rankTier')} {tank.get('rankDivision')}")
-    print(f"排名分: {tank.get('rankPoints')}  胜/负: {tank.get('effectiveWins')}/{tank.get('effectiveLosses')}")
-    if standing:
-        print(f"全球排名: #{standing.get('rank')} / {standing.get('totalPublic')}")
-    if sim_cooldown:
-        print(f"模拟冷却: {sim_cooldown}")
+        print(f"坦克: {tank.get('name')} (ID: {tank.get('id')})")
+        print(f"所有者: {tank.get('ownerDisplayName')}")
+        print(f"技能: {tank.get('skillType', '未知')}")
+        print(f"排名分数: {tank.get('rankScore')}  等级: {tank.get('rankTier')} {tank.get('rankDivision')}")
+        print(f"排名分: {tank.get('rankPoints')}  胜/负: {tank.get('effectiveWins')}/{tank.get('effectiveLosses')}")
+        if standing:
+            print(f"全球排名: #{standing.get('rank')} / {standing.get('totalPublic')}")
+        if sim_cooldown:
+            print(f"模拟冷却: {sim_cooldown}")
 
-    branches = data.get("branches", {})
-    if branches:
-        print("\n代码分支:")
-        for branch, info in branches.items():
-            ver = info.get("version", "?")
-            ts = info.get("publishedAt", "")[:10] if info.get("publishedAt") else ""
-            print(f"  {branch}: v{ver}  {ts}")
+        branches = data.get("branches", {})
+        if branches:
+            print("代码分支:")
+            for branch, info in branches.items():
+                ver = info.get("version", "?")
+                ts = info.get("publishedAt", "")[:10] if info.get("publishedAt") else ""
+                print(f"  {branch}: v{ver}  {ts}")
 
 
-def cmd_matches(tank_key, limit=5):
-    print(f"正在获取最近 {limit} 场战斗...")
-    data = api_request("GET", f"/api/agent/tank/matches?limit={limit}&offset=0", tank_key=tank_key)
-    matches = data.get("matches", [])
-    if not matches:
-        print("暂无战斗记录")
-        return
-    print()
-    for m in matches:
-        result = "胜" if m.get("won") else "负"
-        opponent = m.get("opponentName", "?")
-        map_id = m.get("mapId", "?")
-        ts = m.get("createdAt", "")[:10]
-        url_id = m.get("matchUrlId", "")
-        print(f"  [{result}] vs {opponent}  地图:{map_id}  {ts}  /history/{url_id}")
+def cmd_matches(tank_keys, limit=5):
+    for entry in tank_keys:
+        print(f"\n{'='*40}")
+        print(f"正在获取 [{entry['name']}] 最近 {limit} 场战斗...")
+        data = api_request("GET", f"/api/agent/tank/matches?limit={limit}&offset=0", tank_key=entry["key"])
+        matches = data.get("matches", [])
+        if not matches:
+            print("暂无战斗记录")
+            continue
+        for m in matches:
+            result = "胜" if m.get("won") else "负"
+            opponent = m.get("opponentName", "?")
+            map_id = m.get("mapId", "?")
+            ts = m.get("createdAt", "")[:10]
+            url_id = m.get("matchUrlId", "")
+            print(f"  [{result}] vs {opponent}  地图:{map_id}  {ts}  /history/{url_id}")
 
 
 def minify_js(code):
@@ -233,7 +267,7 @@ def cmd_build(build_cmd):
     print(result.stdout.strip())
 
 
-def cmd_publish(tank_key, file_path, notes, branch, dry_run, minify, submitted_by):
+def cmd_publish(tank_keys, file_path, notes, branch, dry_run, minify, submitted_by):
     if not os.path.exists(file_path):
         print(f"错误: 文件不存在: {file_path}")
         sys.exit(1)
@@ -259,26 +293,37 @@ def cmd_publish(tank_key, file_path, notes, branch, dry_run, minify, submitted_b
         body["notes"] = notes
 
     if dry_run:
-        print("\n[dry-run] 请求体预览:")
+        print(f"\n[dry-run] 将发布到 {len(tank_keys)} 个坦克: {', '.join(e['name'] for e in tank_keys)}")
         preview = dict(body)
         preview["code"] = code[:200] + "..." if len(code) > 200 else code
         print(json.dumps(preview, ensure_ascii=False, indent=2))
         return
 
-    print(f"正在发布到分支 [{branch}]...")
-    result = api_request("POST", "/api/agent/tank/code", body=body, tank_key=tank_key)
+    print(f"\n准备发布到 {len(tank_keys)} 个坦克, 分支 [{branch}]...")
+    success, failed = [], []
+    for entry in tank_keys:
+        name = entry["name"]
+        print(f"\n  [{name}] 发布中...")
+        try:
+            result = api_request("POST", "/api/agent/tank/code", body=body, tank_key=entry["key"], exit_on_error=False)
+            tank = result.get("tank", {})
+            version = tank.get("codeVersion") or result.get("version", "?")
+            print(f"  [{name}] 成功! v{version}  排名:{tank.get('rankScore')}  胜/负:{tank.get('effectiveWins')}/{tank.get('effectiveLosses')}")
+            success.append(name)
+        except PublishError:
+            print(f"  [{name}] 发布失败, 继续下一个...")
+            failed.append(name)
 
-    tank = result.get("tank", {})
-    version = tank.get("codeVersion") or result.get("version", "?")
-    print(f"\n发布成功! 版本: v{version}")
-    if tank:
-        print(f"排名分数: {tank.get('rankScore')}  胜/负: {tank.get('effectiveWins')}/{tank.get('effectiveLosses')}")
-    if notes:
-        print(f"说明: {notes}")
+    print(f"\n{'='*40}")
+    print(f"发布完成: 成功 {len(success)}/{len(tank_keys)}")
+    if success:
+        print(f"  成功: {', '.join(success)}")
+    if failed:
+        print(f"  失败: {', '.join(failed)}")
 
-    # 备份已发布的文件(保存实际提交的代码, 压缩后亦如实备份)
+    # 备份已发布的文件
     ts = datetime.now().strftime("%Y%m%d%H%M%S")
-    bak_name = f"{os.path.splitext(file_path)[0]}.v{version}.{ts}.bak.js"
+    bak_name = f"{os.path.splitext(file_path)[0]}.{ts}.bak.js"
     try:
         with open(bak_name, "w", encoding="utf-8") as f:
             f.write(code)
@@ -290,9 +335,11 @@ def cmd_publish(tank_key, file_path, notes, branch, dry_run, minify, submitted_b
 def main():
     load_dotenv()
 
-    parser = argparse.ArgumentParser(description="AgenTank 发布工具（多坦克档案）")
+    parser = argparse.ArgumentParser(description="AgenTank 发布工具（多坦克档案，支持批量发布）")
     parser.add_argument("--tank", "-t", default=DEFAULT_TANK, choices=list(TANK_PROFILES.keys()),
                         help=f"坦克档案 (默认: {DEFAULT_TANK})")
+    parser.add_argument("--only", "-o", default=None,
+                        help="只发布到指定坦克(逗号分隔名称, 如: 护盾,加速)")
     parser.add_argument("--file", "-f", default=None, help="要发布的 JS 文件 (默认取自坦克档案)")
     parser.add_argument("--notes", "-n", default="", help="版本说明")
     parser.add_argument("--branch", "-b", default=None, choices=["main", "raid", "multiplayer"],
@@ -308,25 +355,24 @@ def main():
     args = parser.parse_args()
 
     profile = TANK_PROFILES[args.tank]
-    tank_key = get_tank_key(profile)
+    tank_keys = get_tank_keys(profile, only=args.only)
 
-    # 命令行显式值优先；否则取档案默认。
     file_path = args.file if args.file is not None else profile["file"]
     branch    = args.branch if args.branch is not None else profile["branch"]
     submitted_by = profile.get("submitted_by", "Claude")
     build_cmd = profile.get("build_cmd")
 
-    print(f"[坦克档案: {args.tank}]  分支: {branch}  文件: {file_path}")
+    names_str = ", ".join(e["name"] for e in tank_keys)
+    print(f"[坦克档案: {args.tank}]  目标: {names_str}  分支: {branch}  文件: {file_path}")
 
     if args.status:
-        cmd_status(tank_key)
+        cmd_status(tank_keys)
     elif args.matches:
-        cmd_matches(tank_key, args.limit)
+        cmd_matches(tank_keys, args.limit)
     else:
-        # 仅当档案配置了 build_cmd、用户未显式指定 --file、且非 dry-run 时才自动构建。
         if args.build and build_cmd and args.file is None and not args.dry_run:
             cmd_build(build_cmd)
-        cmd_publish(tank_key, file_path, args.notes, branch, args.dry_run, args.minify, submitted_by)
+        cmd_publish(tank_keys, file_path, args.notes, branch, args.dry_run, args.minify, submitted_by)
 
 
 if __name__ == "__main__":
