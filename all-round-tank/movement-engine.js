@@ -280,8 +280,8 @@ function isStarGuardTrap(enemyPos, enemy, starPos) {
  * 具体打分：走过去后的 clearShotDirection = 当前行进方向 -> +4（原地就能开炮）；
  *           走过去后需要转 1 次 -> +0；其余 -> -4。
  */
-function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankWeight) {
-  const minD = Math.max(3, standoff - 1);
+function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankWeight, minDistFloor) {
+  const minD = minDistFloor !== undefined ? minDistFloor : Math.max(3, standoff - 1);
   // 收集所有候选轨道格（BFS 层序，记录到达每格的第一步和步数）
   const w = game.map.length, h = game.map[0].length;
   const queue = [myPos];

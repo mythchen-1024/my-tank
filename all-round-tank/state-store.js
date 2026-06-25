@@ -319,6 +319,24 @@ function trackEnemyBush(state, enemyTank, enemy, game) {
         _bushHeatAdd(hm, spreads[s], 40, frame, 'spread');
       }
     }
+
+    // ── 星旁草丛预播种：cloak 敌隐身后极可能去星旁草丛蹲守（mat_IPCTB3G1tD58lkHdK：
+    // 敌从[11,7]隐身直线走5格到星[6,8]旁草丛[6,7]蹲守，我走进同列[6,6]被狙）。
+    // 途径1只播种敌最后位置相邻草丛，够不到5格外的远草丛；热力扩散每4帧1格也太慢。
+    // 这里对"星周围2格内的草丛"直接播种中等热力(53,刚过阈值52)，让 stepIntoHiddenEnemyFireLine
+    // 把我从这些草丛的射击线上推开。仅 cloak 敌触发(其它技能无隐身蹲草能力，避免防过头)。
+    var isCloakEnemy = enemy && enemy.skill && enemy.skill.type === 'cloak';
+    if (isCloakEnemy && game.star && age >= 3) {
+      var st = game.star;
+      for (var sx = st[0] - 2; sx <= st[0] + 2; sx++) {
+        for (var sy = st[1] - 2; sy <= st[1] + 2; sy++) {
+          var sp = [sx, sy];
+          if (!inBounds(sp, game) || tileAt(game, sp) !== 'o') continue;
+          if (manhattan(sp, st) > 2) continue;
+          if (!hm[key(sp)]) _bushHeatAdd(hm, sp, 53, frame, 'star-bush');
+        }
+      }
+    }
   }
 
   // ── 途径 1：走进草丛 ──

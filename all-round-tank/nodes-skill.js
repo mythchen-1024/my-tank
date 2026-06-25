@@ -603,7 +603,12 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Guard('no-shot', function (bb) { return !bb.shotDir; }),
         Action('do-cloak-move', function (bb) {
           var rearDir = oppositeDir(bb.enemyTank.direction);
-          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1, rearDir, 8);
+          // 学 Wraith 贴脸流（mat_IPCTB3G1tD58lkHdK）：隐身期绕到背后近身，到期秒射。
+          // 但贴到2格对 freeze(被冻秒)/boost(快速反扑)反噬(bench -3.8/-2.5pp)，
+          // 仅对 overload/shield 这类无快速反制的敌用更近地板(2)，其余保持默认(3)。
+          var es = (bb.enemy && bb.enemy.skill && bb.enemy.skill.type) || null;
+          var floor = (es === 'overload' || es === 'shield') ? 2 : undefined;
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1, rearDir, 8, floor);
           if (step) bbMoveToward(bb, step);
         })
       ])

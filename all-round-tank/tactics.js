@@ -2555,6 +2555,17 @@ function findCloakPreFireShot(me, enemy, enemyTank, enemyBullets, game, state) {
 
   // 阶段2：age 5-10，星附近草丛预射
   if (age > 4 && game.star) {
+    // 自卫门控：隐身敌从最后位置出发、age 帧足够走到我身边时，它可能已贴脸（mat_IPCTB3G1tD58lkHdK：
+    // 敌最后[11,7] age=8 实际已到[6,7]距我1格，我却朝星旁草丛投机预射打空、锁炮15帧→同列却开不了火被秒）。
+    // 此刻炮是唯一自卫手段，低置信预射打空=自杀，留炮防贴脸。
+    // 仅对"无脱离手段"技能(shield/freeze/stun/poison/overload)生效；teleport/boost 是脱离型打法，
+    // 锁炮也能跑，预射净值为正(bench：硬加门控 teleport -3pp，shield +1.3pp)——故按技能类型静态分流。
+    var mySkill = (me && me.skill && me.skill.type) || null;
+    var escapeArchetype = (mySkill === 'teleport' || mySkill === 'boost');
+    if (!escapeArchetype) {
+      var distLastEnemy = manhattan(myPos, state.lastEnemyPos);
+      if (distLastEnemy - age <= 2) return null;
+    }
     var star = game.star;
     var bestBush = null, bestDist = 999, bestBushDir = null;
     var w = game.map.length, h = game.map[0].length;
