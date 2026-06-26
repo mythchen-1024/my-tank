@@ -2833,10 +2833,14 @@ function findFreezeAmbushBush(myPos, star, game, enemyPos) {
 }
 
 function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
-  if (!game.star) return null;
   var myPos = me.tank.position;
-  var star = game.star;
   var enemyPos = enemyTank ? enemyTank.position : (memory && memory.lastEnemyPos || null);
+  // 无星：没有明确伏击锚点,退化到"敌大概要走的草"。窄门控——仅敌可见且有朝向时,
+  // 沿敌朝向延长线(它当前要去的方向)选前方草伏击;敌不可见则不投机(路径不可测),返 null。
+  if (!game.star) {
+    return findCloakBushNoStar(myPos, enemyTank, game);
+  }
+  var star = game.star;
 
   var best = null, bestScore = -9999;
   var w = game.map.length, h = game.map[0].length;
@@ -2847,12 +2851,19 @@ function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
       var p = [x, y];
       if (samePos(p, myPos)) continue;
       var dMe = manhattan(p, myPos);
-      if (dMe > 7) continue;
+      // 全程隐身可达门控：隐身仅 6 帧,开隐身当帧不移动(cast 占帧)→实际仅 ~5 帧可走,
+      // 且转向占帧。直线路径(同行/同列)最多 ~5 格;需拐弯(L形)再扣 1 转向帧→最多 ~4 格。
+      // 超出则隐身期走不到,到期还暴露在开阔地=隐身白开(mat_KxUDSb f9:开阔地开隐身6帧没进草)。
+      var sameLine = (p[0] === myPos[0] || p[1] === myPos[1]);
+      if (dMe > (sameLine ? 5 : 4)) continue;
       var dStar = manhattan(p, star);
-      if (dStar < 2 || dStar > 6) continue;
+      if (dStar > 6) continue;
       var shotToStar = clearShotDirection(p, star, game);
       var shotToEnemy = enemyPos ? clearShotDirection(p, enemyPos, game) : null;
-      if (!shotToStar && !shotToEnemy) continue;
+      // 伏击潜力门控：有直射线(对星/敌)最优;贴星 2 格内即使当前无直射线也接受——
+      // 敌来吃星必经我隔壁,一枪命中(mat_KxUDSb f9:星[12,6]旁贴星草[12,7]本是顶级伏击位,
+      // 却被旧 dStar<2 + 强制直射线双重排除→返 null 降级到裸接星)。其余无射线无贴星=无价值,跳过。
+      if (!shotToStar && !shotToEnemy && dStar > 2) continue;
 
       // 排除死角：可逃方向 < 2 的格（贴墙角），一旦子弹封住唯一逃逸列就被钉死撞墙
       // (mat_KzS5aD1AwYcGYrLuB: 选中左墙角[1,7]只剩上下逃,子弹沿row7杀来时只转不走撞死)。
@@ -2867,6 +2878,8 @@ function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
       var score = 0;
       if (shotToStar) score += 80;
       if (shotToEnemy) score += 40;
+      // 贴星伏击位奖励：距星越近,敌吃星时越难逃我射程(dStar=1 隔壁格几乎必杀)
+      if (dStar <= 2) score += (3 - dStar) * 25;
       if (enemyPos) {
         var ex = enemyPos[0], ey = enemyPos[1];
         var xBetween = (star[0] > ex) ? (x >= ex && x <= star[0]) :
@@ -2882,6 +2895,57 @@ function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
         var adj = [x + DIRS[di].dx, y + DIRS[di].dy];
         if (tileAt(game, adj) === 'o') score += 5;
       }
+      if (score > bestScore) { bestScore = score; best = p; }
+    }
+  }
+  return best;
+}
+
+// 无星伏击草：仅敌可见且有朝向时启用。沿敌当前朝向延长线(它"大概要走"的方向)选前方草,
+// 等敌经过时一枪伏击。门控严:无敌/无朝向 → null(无星本就该原地藏好,不为投机浪费稀缺隐身)。
+function findCloakBushNoStar(myPos, enemyTank, game) {
+  if (!enemyTank || !enemyTank.position || !enemyTank.direction) return null;
+  var enemyPos = enemyTank.position;
+  var dIdx = dirIndex(enemyTank.direction);
+  if (dIdx < 0) return null;
+  var fd = DIRS[dIdx];
+  var pathCells = [];
+  for (var s = 1; s <= 5; s++) {
+    var pc = [enemyPos[0] + fd.dx * s, enemyPos[1] + fd.dy * s];
+    if (tileAt(game, pc) === 'x') break;
+    pathCells.push(pc);
+  }
+  if (pathCells.length === 0) return null;
+
+  var best = null, bestScore = -9999;
+  var w = game.map.length, h = game.map[0].length;
+  for (var x = 0; x < w; x++) {
+    for (var y = 0; y < h; y++) {
+      if (tileAt(game, [x, y]) !== 'o') continue;
+      var p = [x, y];
+      if (samePos(p, myPos)) continue;
+      var dMe = manhattan(p, myPos);
+      var sameLine = (p[0] === myPos[0] || p[1] === myPos[1]);
+      if (dMe > (sameLine ? 5 : 4)) continue;
+      var dPath = 999;
+      for (var k = 0; k < pathCells.length; k++) {
+        var dp = manhattan(p, pathCells[k]);
+        if (dp < dPath) dPath = dp;
+      }
+      if (dPath > 2) continue;
+      var canHitPath = false;
+      for (var k2 = 0; k2 < pathCells.length; k2++) {
+        if (clearShotDirection(p, pathCells[k2], game)) { canHitPath = true; break; }
+      }
+      if (!canHitPath) continue;
+      var escapeDirs = 0;
+      for (var ei = 0; ei < DIRS.length; ei++) {
+        var t2 = tileAt(game, [x + DIRS[ei].dx, y + DIRS[ei].dy]);
+        if (t2 === '.' || t2 === 'o') escapeDirs++;
+      }
+      if (escapeDirs < 2) continue;
+      var score = (3 - dPath) * 30 + (6 - dMe) * 10;
+      if (manhattan(p, enemyPos) >= 3) score += 10;
       if (score > bestScore) { bestScore = score; best = p; }
     }
   }

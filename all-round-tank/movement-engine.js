@@ -32,6 +32,17 @@ function isSafeStep(next, myPos, enemyPos, game, enemy, standoff, allowStarDeadE
   // 甩狙威胁：敌1帧转向即可射到 next 且子弹3帧内到达
   var et = (enemy && enemy.tank) || null;
   if (enemyPos && et && enemySnapFireThreat(next, enemy, et, game)) return false;
+  // 预瞄死区(d=4)：可见敌已正对 next、枪就绪 -> 我一踏上同线当帧被射，子弹2帧到达，
+  // 脱离要 turn+go=2帧且因敌已瞄准慢一拍 -> 必死(mat_0ApZZ: 传送敌蹲星行[16,13]预瞄左,
+  // 我追星踏[12,13] d=4 被秒)。stepEntersKillZone 只覆盖 d<=3,enemySnapFireThreat 只管 turns=1,
+  // 此处补 turns=0(已正对)的 d=4 盲区。仅拦"踏上敌预瞄火线"这一步,备选路径会从侧面绕近星。
+  if (enemyPos && et && et.direction && enemyCanFireSoon(enemy) && !allowStarDeadEnd) {
+    var preDir = clearShotDirection(enemyPos, next, game);
+    if (preDir && preDir === et.direction) {
+      var preDist = manhattan(next, enemyPos);
+      if (preDist >= 2 && preDist <= 4) return false;
+    }
+  }
   // 隐身敌射线检查：敌不可见时避免走入其最后已知位置的射击线
   if (!enemyPos && memory && stepIntoHiddenEnemyFireLine(next, myPos, game, memory, allowStarDeadEnd)) return false;
   return true;

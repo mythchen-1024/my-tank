@@ -532,7 +532,6 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
     // 隐身蹲草：有星时隐身走向星附近草丛卡位，等敌人追星时伏击
     children.push(
       Sequence('cloak-bush-ambush', [
-        Guard('star-exists-cba', function (bb) { return !!bb.star; }),
         Guard('cloak-ready-cba', function (bb) { return canCloak(bb.me); }),
         Guard('not-already-in-bush', function (bb) {
           return !iAmHidden(bb.me, bb.game);
@@ -548,7 +547,11 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           var bushPos = senseCloakBushPosition(bb);
           bbSpeak(bb, '潜伏!');
           bbUseSkill(bb, 'cloak');
-          bb.memory.cloakBushTarget = { pos: bushPos.slice(), star: bb.star.slice(), frame: bb.frame };
+          bb.memory.cloakBushTarget = {
+            pos: bushPos.slice(),
+            star: bb.star ? bb.star.slice() : null,
+            frame: bb.frame
+          };
         })
       ])
     );
@@ -598,6 +601,14 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
       Sequence('cloak-move-to-lane', [
         Guard('is-cloaked', function (bb) {
           return !!(bb.me.status && bb.me.status.cloaked);
+        }),
+        Guard('not-cloak-bushing', function (bb) {
+          // 隐身奔草途中不抢控制权：cloak-bush-ambush 已设伏击草目标且尚未到达时,
+          // 让位给 cloak-bush-hold(movement层)全程奔草,否则会被拽去贴脸导致隐身期不进草
+          // (mat_KxUDSb: 开隐身后 cloak-move-to-lane 立刻接管贴脸,坦克永远奔敌不奔草)。
+          var t = bb.memory.cloakBushTarget;
+          if (t && bb.frame - t.frame <= 8 && !samePos(bb.myPos, t.pos)) return false;
+          return true;
         }),
         Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
         Guard('no-shot', function (bb) { return !bb.shotDir; }),
@@ -914,6 +925,16 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (!bb.enemyTank) return false;
           var enemyStarDist = manhattan(bb.enemyPos, bb.star);
           return enemyStarDist <= bb.distToStar + 2 + mp.skillStarContestDelta && bb.distToStar <= 6;
+        }),
+        Guard('not-hidden-losing-star', function (bb) {
+          // 已藏草蹲守时,若这颗星敌人更近(真抢不到)→别开隐身出草白费+暴露,留在草里
+          // 蹲守等敌来抢星时伏击更优(mat_KxUDSb f72:草[14,7]距星5,敌距星4更近,出草追星
+          // f89 仍被敌先收,隐身白开还丢伏击位)。窄门控:仅"已藏草+敌更近"才让位,不丢可抢星权。
+          if (!iAmHidden(bb.me, bb.game)) return true;
+          if (!bb.enemyTank) return true;
+          var eStarDist = manhattan(bb.enemyPos, bb.star);
+          if (eStarDist < bb.distToStar) return false;
+          return true;
         }),
         Guard('no-self-danger', function (bb) {
           if (anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game)) return false;

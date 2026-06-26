@@ -224,7 +224,13 @@ function createMovementTree(profile, mySkillType) {
         var t = bb.memory.cloakBushTarget;
         if (!t) return false;
         if (bb.frame - t.frame > 25) { bb.memory.cloakBushTarget = null; return false; }
-        if (!bb.star || !samePos(bb.star, t.star)) { bb.memory.cloakBushTarget = null; return false; }
+        // 有星伏击：星消失/移动则蹲守失去意义。无星伏击(t.star=null)：靠 25 帧超时兜底,
+        // 但中途若新星生成则放弃无星蹲守(改走有星逻辑)。
+        if (t.star) {
+          if (!bb.star || !samePos(bb.star, t.star)) { bb.memory.cloakBushTarget = null; return false; }
+        } else {
+          if (bb.star) { bb.memory.cloakBushTarget = null; return false; }
+        }
         return true;
       }),
       Guard('in-bush-or-cloaked', function (bb) {
@@ -240,7 +246,7 @@ function createMovementTree(profile, mySkillType) {
         var t = bb.memory.cloakBushTarget;
         if (!samePos(bb.myPos, t.pos) && manhattan(bb.myPos, t.pos) > 0) {
           if (iAmHidden(bb.me, bb.game) && manhattan(bb.myPos, t.pos) <= 2 &&
-              (clearShotDirection(bb.myPos, t.star, bb.game) ||
+              ((t.star && clearShotDirection(bb.myPos, t.star, bb.game)) ||
                (bb.enemyPos && clearShotDirection(bb.myPos, bb.enemyPos, bb.game)))) {
             t.pos = bb.myPos.slice();
           } else {
@@ -266,7 +272,7 @@ function createMovementTree(profile, mySkillType) {
             return;
           }
         }
-        var faceDir = clearShotDirection(bb.myPos, t.star, bb.game);
+        var faceDir = t.star ? clearShotDirection(bb.myPos, t.star, bb.game) : null;
         if (!faceDir && bb.memory.lastEnemyPos) {
           faceDir = clearShotDirection(bb.myPos, bb.memory.lastEnemyPos, bb.game);
         }
