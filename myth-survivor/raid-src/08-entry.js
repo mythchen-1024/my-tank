@@ -52,23 +52,26 @@ function chooseScoredDecision(me, enemy, game, threats, state, mySkill) {
 
   var cands = [];
 
-  // [4] 进攻技能击杀（技能无关分派）：返回评分候选或 null。
-  var skillAtk = mySkill ? skillOffense(me, foe, game, threats, mySkill, hasBudget) : null;
+  // [4] 进攻技能击杀（技能无关分派 + 多目标）：对任一可击杀敌取最高分候选。
+  var skillAtk = mySkill ? skillOffenseBest(me, enemy, game, threats, mySkill, hasBudget) : null;
   if (skillAtk) cands.push(skillAtk);
 
-  // [4.5] 对炮存活闸门：与目标同线近距、对方能开火且我不占先手 → 先脱线，别站着换命。
+  // [4.5] 对炮存活闸门：与主目标同线近距、对方能开火且我不占先手 → 先脱线，别站着换命。
   var duelDodge = (foePos) ? findLineDuelDodge(me, foe, threats, game) : null;
   if (duelDodge) cands.push(withScore(duelDodge, 880, duelDodge.tag));
 
-  // [5] 同轴狂射（raid 核心，高于抢星）：任一敌同线无遮挡、炮管有预算 → 对准开火。
-  //     敌不躲弹 → 射程拉满（不偏好近距）。无遮挡且 budget 才打。
-  if (foePos && hasBudget && canShoot(pos, foePos, game.map) && !duelDodge) {
-    var fireAct = actionToDir(pos, dir, directionTo(pos, foePos), "fire");
-    cands.push(withScore(fireAct, 850 + lineRangeBonus(pos, foePos), "狂射"));
-  }
-  // 同轴但未对准/无预算：仍预瞄转向（不射子弹，保持先手姿态）。
-  if (foePos && canShoot(pos, foePos, game.map) && dir !== directionTo(pos, foePos)) {
-    cands.push(withScore({ type: "turn", side: turnDirection(dir, directionTo(pos, foePos)) }, 700, "瞄准"));
+  // [5] 同轴狂射（raid 核心，高于抢星）：扫描全部敌人，谁在我轴上无遮挡就打谁。
+  //     敌不躲弹 → 射程拉满（不偏好近距）。已对准+budget+不脱线→开火；未对准→预瞄转向。
+  var shootList = enemyCandidates(enemy, game);
+  for (var si = 0; si < shootList.length; si++) {
+    var sfp = shootList[si].tank.position;
+    if (!canShoot(pos, sfp, game.map)) continue;
+    var sDir = directionTo(pos, sfp);
+    if (dir === sDir) {
+      if (hasBudget && !duelDodge) cands.push(withScore({ type: "fire" }, 850 + lineRangeBonus(pos, sfp), "狂射"));
+    } else {
+      cands.push(withScore({ type: "turn", side: turnDirection(dir, sDir) }, 700, "瞄准"));
+    }
   }
 
   // [6] 守枪线：无即时射击目标时，走到控星道/走廊咽喉的格位蹲守。

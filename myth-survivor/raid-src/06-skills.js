@@ -4,6 +4,19 @@
 // 施放阈值走 getMatchup(mySkill, 该敌skill)。每个动作单命令（boost 甩狙除外）。
 // ============================================================
 
+// 多目标进攻技能：对每个可见敌算 skillOffense，取最高分候选。
+// 敌不躲弹 → 任一敌可击杀就放技能，不固执打主目标。
+function skillOffenseBest(me, enemy, game, threats, mySkill, hasBudget) {
+  var list = enemyCandidates(enemy, game);
+  if (!list.length) return null;
+  var best = null;
+  for (var i = 0; i < list.length; i++) {
+    var c = skillOffense(me, list[i], game, threats, mySkill, hasBudget);
+    if (c && (!best || c.score > best.score)) best = c;
+  }
+  return best;
+}
+
 function skillOffense(me, foe, game, threats, mySkill, hasBudget) {
   if (!foe || !foe.tank || !foe.tank.position) return null;
   if (!skillReady(me)) {

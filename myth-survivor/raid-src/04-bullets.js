@@ -65,6 +65,8 @@ function findBulletDodge(me, bullets, game, foe) {
     // 但仍低于死角 -150：朝向是死角时才转身避开。消除原地转身横摆。
     var score = (facing ? 150 : 0) + exits * 12 - (exits <= 1 ? 150 : 0) + edgeDistance(cell, game.map) * 2;
     if (foe && foe.tank && canShoot(cell, foe.tank.position, game.map)) score += 30;
+    // 多人：别躲进别的坦克炮口。落点被任一敌瞄准/可射 → 减分（不硬禁，留兜底）。
+    score -= enemyFireLineRisk(cell, game);
     if (score > bestScore) { bestScore = score; best = d; }
   }
   if (best == null) return null;
@@ -177,4 +179,22 @@ function bulletAheadOf(b, pos, dir) {
   if (dir === "left") return bp[1] === pos[1] && bp[0] < pos[0];
   if (dir === "right") return bp[1] === pos[1] && bp[0] > pos[0];
   return false;
+}
+
+// 多人躲弹辅助：落点 cell 被场上敌人炮线覆盖的风险分。
+// 已对准 cell 的敌(近距)风险最高；仅能射到 cell 的次之。本地 1v1 无 enemies → 返回 0。
+function enemyFireLineRisk(cell, game) {
+  var es = game.enemies || [];
+  var risk = 0;
+  for (var i = 0; i < es.length; i++) {
+    var e = es[i];
+    if (!e || !e.tank || !e.tank.position || e.tank.crashed) continue;
+    var fp = e.tank.position;
+    if (!canShoot(fp, cell, game.map)) continue;
+    var d = manhattan(fp, cell);
+    if (d > 8) continue;
+    if (pointsAt(e.tank.direction, fp, cell)) risk += 120 - d * 8; // 已瞄准：越近越凶
+    else risk += 40 - d * 3;                                       // 仅同线可转身射
+  }
+  return risk > 0 ? risk : 0;
 }
