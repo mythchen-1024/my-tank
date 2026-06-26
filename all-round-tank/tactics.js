@@ -2854,6 +2854,16 @@ function findCloakBushPosition(me, enemy, enemyTank, game, memory) {
       var shotToEnemy = enemyPos ? clearShotDirection(p, enemyPos, game) : null;
       if (!shotToStar && !shotToEnemy) continue;
 
+      // 排除死角：可逃方向 < 2 的格（贴墙角），一旦子弹封住唯一逃逸列就被钉死撞墙
+      // (mat_KzS5aD1AwYcGYrLuB: 选中左墙角[1,7]只剩上下逃,子弹沿row7杀来时只转不走撞死)。
+      var escapeDirs = 0;
+      for (var ei = 0; ei < DIRS.length; ei++) {
+        var ep2 = [x + DIRS[ei].dx, y + DIRS[ei].dy];
+        var t2 = tileAt(game, ep2);
+        if (t2 === '.' || t2 === 'o') escapeDirs++;
+      }
+      if (escapeDirs < 2) continue;
+
       var score = 0;
       if (shotToStar) score += 80;
       if (shotToEnemy) score += 40;

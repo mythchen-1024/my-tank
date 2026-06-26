@@ -245,6 +245,14 @@ function createMovementTree(profile, mySkillType) {
             t.pos = bb.myPos.slice();
           } else {
             var step = nextStepToward(bb.myPos, t.pos, bb.game, bb.enemyPos);
+            // 目标格安全校验：still-safe-cbh 只保证"当前格"全弹道(8格)安全，
+            // 但 bbMoveToward 内部只查 2 格扫掠，4 格外来袭弹不会被拦 → 会主动迈进弹道送死
+            // (mat_KzS5aD1AwYcGYrLuB: 从安全[1,8]走进[1,7],子弹沿row7从4格外杀来,撞死)。
+            // 这里用 anyBulletThreatens(8格)显式校验下一步格；危险则放弃蹲守、原地(安全)等下帧重规划。
+            if (step && anyBulletThreatens(bb.enemyBullets, step, bb.game)) {
+              bb.memory.cloakBushTarget = null;
+              return;
+            }
             if (step) bbMoveToward(bb, step);
             return;
           }

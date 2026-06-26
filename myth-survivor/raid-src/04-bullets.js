@@ -60,7 +60,10 @@ function findBulletDodge(me, bullets, game, foe) {
       if (stepIntoBulletPath(nextB, cell, game)) continue;
     }
     var exits = openNeighborCount(cell, game.map);
-    var score = (facing ? 100 : 0) + exits * 12 - (exits <= 1 ? 150 : 0) + edgeDistance(cell, game.map) * 2;
+    // facing +150: 已朝向的安全格这帧能直接 go 走出去；转向那帧不移动=白挨一发。
+    // 提到 150 让「朝活路直接走」稳压侧向小优势(exits/edge/canShoot 合计≤~98)，
+    // 但仍低于死角 -150：朝向是死角时才转身避开。消除原地转身横摆。
+    var score = (facing ? 150 : 0) + exits * 12 - (exits <= 1 ? 150 : 0) + edgeDistance(cell, game.map) * 2;
     if (foe && foe.tank && canShoot(cell, foe.tank.position, game.map)) score += 30;
     if (score > bestScore) { bestScore = score; best = d; }
   }
