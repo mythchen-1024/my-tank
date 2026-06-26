@@ -291,7 +291,7 @@ function isStarGuardTrap(enemyPos, enemy, starPos) {
  * 具体打分：走过去后的 clearShotDirection = 当前行进方向 -> +4（原地就能开炮）；
  *           走过去后需要转 1 次 -> +0；其余 -> -4。
  */
-function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankWeight, minDistFloor) {
+function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankWeight, minDistFloor, overloadAware) {
   const minD = minDistFloor !== undefined ? minDistFloor : Math.max(3, standoff - 1);
   // 收集所有候选轨道格（BFS 层序，记录到达每格的第一步和步数）
   const w = game.map.length, h = game.map[0].length;
@@ -306,9 +306,13 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankW
     const pd = dist[key(p)];
     if (pd > minDist + 1) break; // 只找最近的一批
     const d = manhattan(p, enemyPos);
-    if (!samePos(p, myPos) && d >= minD && d <= 9 && clearShotDirection(p, enemyPos, game)) {
-      if (pd <= minDist) { minDist = pd; candidates.push(p); }
+    // 直射线格(原逻辑)；overloadAware 时错位副弹线格也算有效炮位(走过去后敌落我 +1 副弹道)
+    var isLane = false;
+    if (!samePos(p, myPos) && d >= minD && d <= 9) {
+      if (clearShotDirection(p, enemyPos, game)) isLane = true;
+      else if (overloadAware && overloadOffsetShotDir(p, enemyPos, game)) isLane = true;
     }
+    if (isLane && pd <= minDist) { minDist = pd; candidates.push(p); }
     for (let i = 0; i < DIRS.length; i++) {
       const n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
       const nk = key(n);
@@ -330,7 +334,13 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankW
     const c = candidates[i];
     const ck = key(c);
     const step = samePos(c, myPos) ? c : (firstStep_[ck] || c);
-    const lineDir = clearShotDirection(c, enemyPos, game);
+    // 直射方向优先；无直射但有错位副弹方向(overloadAware)时用副弹方向评估"已对准"
+    var lineDir = clearShotDirection(c, enemyPos, game);
+    var offsetOnly = false;
+    if (!lineDir && overloadAware) {
+      lineDir = overloadOffsetShotDir(c, enemyPos, game);
+      offsetOnly = !!lineDir;
+    }
     // 走到 c 的行进方向（第一步方向）
     const moveDir = directionBetween(myPos, step);
     // 若走到 c 后 lineDir 就是我到达时的朝向（即行进中已对准）-> 无需再转向
@@ -346,7 +356,9 @@ function nextStepToFiringLane(myPos, enemyPos, game, standoff, preferDir, flankW
         else if (dot < 0 && flankWeight) frontPenalty = -flankWeight;
       }
     }
-    const score = alreadyAimed + behindBonus + frontPenalty + distanceFromEdges(c, game);
+    // 错位炮位略让位于直射炮位(直射主弹必中，错位只副弹中)，但仍是有效占位
+    var offsetPenalty = offsetOnly ? -1 : 0;
+    const score = alreadyAimed + behindBonus + frontPenalty + offsetPenalty + distanceFromEdges(c, game);
     if (score > bestScore) { bestScore = score; best = step; }
   }
   return best;
