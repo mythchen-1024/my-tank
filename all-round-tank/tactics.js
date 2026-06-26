@@ -2783,6 +2783,15 @@ function findStarBushAmbush(me, enemy, enemyTank, enemyBullets, game, state) {
       var maxDist = enemyHasTp ? 5 : 8;
       if (distToStar < 2 || distToStar > maxDist) continue;
       if (!isTeleportSafe(c, enemyTank, enemyBullets, game, 0, enemy)) continue;
+      // 隐身蹲草敌防护：敌不可见时 enemyTank=null，isTeleportSafe 上面所有 enemyPos 守卫全跳过，
+      // 退化成只查地形+子弹，完全无视蹲草敌真身格与火线。补 boostPathSafe 同款防护(仅敌不可见时)：
+      //   ① 落点恰为最近隐身敌真身格 → 引擎用敌真身判定被占 → invalid-target 空交进CD(mat_IfSN f83 传[2,7])
+      //   ② 落点踩进蹲草敌火线(lastEnemyPos/bushHeatmap) → 落地正对敌枪口被秒(mat_1kKp f92 传[13,9]敌蹲[13,10]朝上→当帧崩)
+      if (!enemyTank && state) {
+        if (state.lastEnemyPos && (frame - (state.lastEnemySeenFrame || 0)) <= 12 &&
+            samePos(c, state.lastEnemyPos)) continue;
+        if (stepIntoHiddenEnemyFireLine(c, myPos, game, state, true)) continue;
+      }
       // 必须有至少一条清晰射线（任意方向）
       var shotToStar = clearShotDirection(c, star, game);
       var hasAnyLine = !!shotToStar;
