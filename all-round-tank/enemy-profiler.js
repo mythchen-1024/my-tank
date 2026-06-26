@@ -311,11 +311,17 @@ function buildProfile(bb) {
     // 对跑路型：缩小安全距离、全力抢星（它不打我）
     profile.standoffDistance = Math.min(profile.standoffDistance, 3);
     profile.starAggression = starAggrMax(profile.starAggression, 'max');
+    // 跑分敌不和我对射，刺杀=用传送去追一个会跑的目标→丢抢星节奏。
+    // 根因 mat_Lw96: f6 无星窗口 do-assassination 把传送[3,1]→[12,7],之后陷入中场
+    // 拦截空转,敌趁机 boost 狂刷星(moves 96:45)→3:4 惜败。传送留给抢星/补星更值。
+    profile.enableAssassination = false;
   }
 
   if (traits.isStarRusher) {
     // 对抢星型：提升抢星优先级
     profile.starAggression = starAggrMax(profile.starAggression, 'max');
+    // 抢星型同理：传送是抢星竞速的胜负手,不能浪费在刺杀追打上(见 isDefensive 注释)。
+    profile.enableAssassination = false;
     // 抢星型 overload 敌不贴脸缠斗，6格保守距离+蹲草会让追星被 maintain-standoff 后撤、
     // 被 bush-hold 截胡，到星旁却抢不到（mat_Fczu 1:4 惨败根因）。放开让抢星竞速不被自缚。
     // 硬生存(躲弹/逃生)优先级最高，不受影响；standoff 4 仍在子弹3帧安全环上。

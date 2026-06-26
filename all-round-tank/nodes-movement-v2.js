@@ -103,7 +103,12 @@ function createMovementTree(profile, mySkillType) {
         if (bb.enemyTank && bb.star) {
           var myDistToStar = manhattan(bb.myPos, bb.star);
           var enemyDistToStar = manhattan(bb.enemyPos, bb.star);
-          if (enemyDistToStar <= myDistToStar && !clearShotDirection(bb.myPos, bb.enemyPos, bb.game)) {
+          // 我对星位有清晰射线 → 敌必须踏上星才能吃,正好撞我炮线,守住别走。
+          // 根因 mat_HCYBFZ: 我蹲草[13,2]面右对星[16,2]射线全通,敌从[16,5]来吃星
+          // 平局判敌快+我对敌"当前位置"无射线→错误出草送死。实际该留在草里等敌到星位拦截。
+          var coversStar = !!clearShotDirection(bb.myPos, bb.star, bb.game);
+          if (enemyDistToStar <= myDistToStar &&
+              !clearShotDirection(bb.myPos, bb.enemyPos, bb.game) && !coversStar) {
             bb.memory.ambushState = null; return false;
           }
           // 伏击位无法覆盖星+敌人且敌已逼近(≤5) → 守线价值归零，放弃
@@ -318,6 +323,17 @@ function createMovementTree(profile, mySkillType) {
           if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
           // 星不在炮线但敌人近星（≤8步可达）：出草传星会暴露自己
           if (bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8) return true;
+          // cloak 专属：无传送→远星永远够不到。但仅在"已持续蹲守 ≥16 帧仍零收益"时才释放——
+          // 短期蹲守有伏击耐心价值(敌可能正走来),不能见远星就冲(随机图多数局星只是短暂远,
+          // 无条件释放会让 cloak 过早冲进双弹送死,bench 偏负)。只打破无限死蹲,不动短期伏击。
+          // 根因 mat_Inl1: 全场星都在>8格外,cloak f11~127 钉死[4,8]一炮没放,敌白嫖4星→0:4。
+          // 窄门控只动 cloak(传送/boost/stun/poison/freeze/shield 走原逻辑,零附带)。
+          if (bb.mySkillType === 'cloak' && bb.star &&
+              (bb.memory.bushCampFrames || 0) >= 16 &&
+              manhattan(bb.myPos, bb.star) > 8 &&
+              !(bb.enemyPos && manhattan(bb.enemyPos, bb.star) <= 8)) {
+            return false;
+          }
           // 非 boost 坦克：星远或传送就绪时留在草丛等
           if (bb.teleportIsReady || (bb.mySkillType !== 'boost' && manhattan(bb.myPos, bb.star) > 8)) return true;
           // boost 坦克：星在≤10 格内就出草追

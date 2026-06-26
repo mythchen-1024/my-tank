@@ -83,6 +83,28 @@ function buildBehaviorTree(profile, mySkillType) {
     objective
   );
 
+  // 隐身白嫖先手：已隐身(技能已花) + 敌可见 + 枪就绪 + 有清晰射线 + 安全 → 直接开炮。
+  // 隐身先手命中近乎必中(敌看不见我无法躲),是制胜下法,绝不能被抢星层(max-star/
+  // 终局提权)压制。根因 mat_2UH2: max-star-aggression(优先级5)盖过 cloak-ambush(6),
+  // 隐身期同行清晰射线却被 star-guard 转离炮线,白白浪费隐身先手。门控极窄(必须已
+  // cloaked,该状态只有 cloak 技能授予→对非隐身坦克零影响)。
+  var freeCloakStrike = Sequence('free-cloak-strike', [
+    Guard('is-cloaked', function (bb) {
+      return !!(bb.me.status && bb.me.status.cloaked);
+    }),
+    Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+    Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+    Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+    Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+    Guard('shot-safe', function (bb) {
+      return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+    }),
+    Action('do-free-cloak-strike', function (bb) {
+      if (bb.myDir === bb.shotDir) { bbSpeak(bb, '偷袭!'); bbFire(bb); }
+      else bbTurnToward(bb, bb.shotDir);
+    })
+  ]);
+
   // ═══════ 组装根节点 ═══════
   var rootChildren = [
     // 第一优先级：被控（冰冻/眩晕）就直接返回
@@ -96,6 +118,9 @@ function buildBehaviorTree(profile, mySkillType) {
 
     // 第四优先级：软生存（预防性躲避）
     softSurvival,
+
+    // 第四·五优先级：隐身白嫖先手（已隐身+清晰射线+安全），先于一切抢星提权
+    freeCloakStrike,
 
     // 第五优先级（动态）：终局/落后/极致模式时目标层提前
     lastChanceStar,

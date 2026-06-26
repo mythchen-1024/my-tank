@@ -562,6 +562,17 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Sequence('cloak-sneak', [
           Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
           Guard('not-on-shot-line', function (bb) { return !bb.shotDir; }),
+          Guard('not-about-to-ambush', function (bb) {
+            // 我正蹲草 + 敌即将穿过我的伏击射线 → 别开隐身奔袭,留草里等撞线。
+            // 隐身奔袭去追一个会撞我现成炮线的敌=主动放弃免费伏击+白耗技能。
+            // 根因 mat_4arB: 我蹲[5,2],敌沿row4左行将于[5,4]穿我第5列(canAmbushPreAim→down),
+            // 但 cloak-sneak(优先级6)抢在 bush-hold(11)前开隐身,把我从第5列拽到第6列追屁股,
+            // 隐身6帧一炮没放。蹲草伏击敌看不见我不会躲,命中率更高且不耗 cloak。
+            if (!iAmHidden(bb.me, bb.game)) return true;
+            if (canAmbushPreAim(bb.myPos, bb.myDir, bb.enemyTank, bb.star, bb.game)) return false;
+            if (canAmbushLeadShot(bb.myPos, bb.myDir, bb.enemyTank, bb.game)) return false;
+            return true;
+          }),
           Guard('close-range', function (bb) { return bb.distToEnemy <= mp.cloakSneakRange; }),
           Guard('cloak-ready', function (bb) { return canCloak(bb.me); }),
           Guard('gun-ready', function (bb) { return bb.gunIsReady; }),

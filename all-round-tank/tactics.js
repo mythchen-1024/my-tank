@@ -1013,6 +1013,40 @@ function starLandingDeadly(landing, me, enemyTank, enemy, game) {
   if (!enemyCanFireSoon(enemy)) return false; // 敌方近期无法开火则无威胁
 
   const enemyPos = enemyTank.position;
+
+  // 加速敌专属：敌 2格/帧 + 免费转向,能在我"转向对准星+踏星"的窗口内冲到星行/列封锁炮线。
+  // 根因 mat_21Ct: 我传[1,4](面下),星[1,3]在正上→需转2帧再踏星(共3帧);加速敌[2,2]两帧冲到
+  // [1,1](星同列),下射2格/帧,我踏星同帧被秒。starLandingDeadly 只看敌"当前"炮线→[1,4]误判安全。
+  // 仅对 boosted 敌生效(非boost等价,零附带)。
+  if (enemy && enemy.status && enemy.status.boosted && game.star) {
+    var star = game.star;
+    // 我吃到星所需帧:转向对准星 + 踏上去1帧(落点即星则0)
+    var toStar = samePos(landing, star) ? null : directionBetween(landing, star);
+    var myGrabFrames = toStar ? (turnDistance(me.tank.direction, toStar) + 1) : 0;
+    if (myGrabFrames > 0) {
+      // 扫落点所在行+列:敌能冲到该线某格、对落点有清晰射线、且在我吃星前命中 → 死亡陷阱
+      var lethal = false;
+      for (var axis = 0; axis < 2 && !lethal; axis++) {
+        var lo = axis === 0 ? 0 : 0;
+        var len = axis === 0 ? game.map.length : (game.map[landing[0]] ? game.map[landing[0]].length : 0);
+        for (var k = 0; k < len; k++) {
+          var c = axis === 0 ? [k, landing[1]] : [landing[0], k];
+          if (samePos(c, landing)) continue;
+          if (!isPassable(game, c, null)) continue;
+          var shotToLanding = clearShotDirection(c, landing, game);
+          if (!shotToLanding) continue;
+          // 加速敌到 c 的帧数(2格/帧,免费转向不计帧)
+          var pd = pathDistance(enemyPos, c, game, null);
+          if (pd < 0) continue;
+          var arrive = Math.ceil(pd / 2);
+          var hitFrame = arrive + Math.ceil(manhattan(c, landing) / BULLET_SPEED);
+          if (hitFrame <= myGrabFrames) { lethal = true; break; }
+        }
+      }
+      if (lethal) return true;
+    }
+  }
+
   const lineDir = clearShotDirection(enemyPos, landing, game);
   if (!lineDir) return false; // 敌方与落点不同线/被遮挡，打不到
 
