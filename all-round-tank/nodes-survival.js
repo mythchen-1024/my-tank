@@ -213,7 +213,13 @@ function createSoftSurvivalTree(profile) {
         return true;
       }),
       Guard('not-star-stuck-duel', function (bb) {
-        if (!bb.star) return true;
+        // 无星：原地空转(stuck>=3)就让位给 movement 层 line-lock-unstick，别继续霸占。
+        // 根因(mat_5Nlz9rSIe728055DD f60-66 无星)：line-duel-dodge 连续胜出，但 moveToward 的
+        // predictedOverloadThreatens 危险格随敌每帧转向而翻转，逃逸目标在 [2,6]/[1,7] 间来回跳，
+        // 坦克永远停在"转向对准"那帧、go 轮不到 → 钉死在炮线列被下射秒。dodge 占着优先级4，
+        // 本为此设计的 line-lock-unstick(优先级11,确定性破循环)被饿死。trackStuck 仅在未移动时累加，
+        // 正常"转1帧再走"stuck 最多到 1~2，阈值 3 只命中真空转死循环，不误伤正常侧移。
+        if (!bb.star) return (bb.memory.stuckFrames || 0) < 3;
         if ((bb.memory.stuckFrames || 0) < 6) return true;
         var myStarDist = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
         return myStarDist < 0;
