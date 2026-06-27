@@ -1110,6 +1110,9 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         Action('do-shield-star', function (bb) {
           bbSpeak(bb, '盾星!');
           bbUseSkill(bb, 'shield');
+          // 标记"盾为抢星而开"→ 下帧起 shield-star-commit 锁定径直冲星(盾是无敌窗口,
+          // 别让攻击层把无敌时间烧在原地扭炮口上)。combat/survival 盾不设此标记,不受影响。
+          bb.memory.shieldForStar = bb.frame;
         })
       ])
     );

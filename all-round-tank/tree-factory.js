@@ -137,6 +137,31 @@ function buildBehaviorTree(profile, mySkillType) {
     })
   ]);
 
+  // 盾星冲刺锁定：开盾中 + 盾是为抢星而开(shield-star-rush 标记) → 锁定径直冲星，
+  // 绝不被攻击层(shield-advance/守线预瞄/对枪)抢占去原地扭炮口。
+  // 根因 mat_5V8(f14 开盾冲星 distToStar=3, f15 走1步到 d=2, f16-18 被攻击层劫持原地
+  //   turn left/right/left——因 moveToward 见进位格被 enemyAimsAt/子弹路径标记"危险"就转向
+  //   不前进,但开盾期间我无敌、那"危险"根本打不动我; 盾窗3帧白烧没拿到星, f18盾过期,
+  //   f19开炮打墙, f23被秒)。盾是无敌窗口,开盾冲星就该一路 bbDirectGo 走到星(不吃躲避
+  //   过滤)。门控极窄:必须已 shielded(该状态只有 shield 技能授予→对非盾坦克零影响)
+  //   + shieldForStar 标记在盾窗内(<=5帧,盾4帧+1余量;盾cd25远大于窗口,陈旧标记不会误触发)。
+  var shieldStarCommit = Sequence('shield-star-commit', [
+    Guard('is-shielded', function (bb) {
+      return !!(bb.me.status && bb.me.status.shielded);
+    }),
+    Guard('shield-cast-for-star', function (bb) {
+      var f = bb.memory.shieldForStar;
+      return f != null && (bb.frame - f) <= 5;
+    }),
+    Guard('star-exists', function (bb) { return !!bb.star; }),
+    Action('do-shield-star-commit', function (bb) {
+      var info = shortestPathInfo(bb.myPos, bb.star, bb.game, bb.enemyPos);
+      var step = (info && info.step) ? info.step : bb.star;
+      bbSpeak(bb, '冲星!');
+      bbDirectGo(bb, step);  // 无敌期径直冲,不吃 enemyAimsAt/子弹路径躲避过滤
+    })
+  ]);
+
   // ═══════ 组装根节点 ═══════
   var rootChildren = [
     // 第一优先级：被控（冰冻/眩晕）就直接返回
@@ -156,6 +181,9 @@ function buildBehaviorTree(profile, mySkillType) {
 
     // 第四·六优先级：眩晕补刀锁定（敌被眩晕+帧预算够），先于抢星提权，不浪费眩晕窗口
     stunKillCommit,
+
+    // 第四·七优先级：盾星冲刺锁定（开盾抢星中），先于攻击层，不让无敌窗口烧在原地扭炮口
+    shieldStarCommit,
 
     // 第五优先级（动态）：终局/落后/极致模式时目标层提前
     lastChanceStar,
