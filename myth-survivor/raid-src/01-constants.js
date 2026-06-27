@@ -12,17 +12,22 @@ var DIRS = ["up", "right", "down", "left"];
 var MULTI_BULLET_CAP = 1;
 var BULLET_LIFETIME = 14;      // 一发弹在场的最长追踪帧数（地图最长边/2 + 余量）
 
+// 蹲草伏击记忆：敌进草丛(o)对我隐身→tank=null。按 tank.id 记最后位置/朝向，
+// 在记忆窗内把它的火线当危险区避开。窄门控（只罚踩进确认蹲草敌火线，不全图躲草）。
+var CAMPER_MEMORY_FRAMES = 10; // 隐身后仍信任其旧位置的帧数
+var CAMPER_FIRELINE_RANGE = 8; // 蹲草敌火线威胁的最大曼哈顿距离
+
 // 跨帧持久状态（新对局/新生命自动重置）。
 var RAID_STATE = {
   lastFrame: -1, firedThisLife: false, myShots: [],
-  patrol: null, gunLine: null, speakCount: 0, lastSpeak: ""
+  patrol: null, gunLine: null, speakCount: 0, lastSpeak: "", enemyMem: {}
 };
 
 // 新对局（帧号回退）或新生命（帧号大跳变）自动重置。
 function getState(game) {
   var f = game.frames || 0;
   if (f < RAID_STATE.lastFrame || f - RAID_STATE.lastFrame > 4) {
-    RAID_STATE = { lastFrame: f, firedThisLife: false, myShots: [], patrol: null, gunLine: null, speakCount: 0, lastSpeak: "" };
+    RAID_STATE = { lastFrame: f, firedThisLife: false, myShots: [], patrol: null, gunLine: null, speakCount: 0, lastSpeak: "", enemyMem: {} };
   }
   RAID_STATE.lastFrame = f;
   return RAID_STATE;

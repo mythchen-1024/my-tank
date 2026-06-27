@@ -36,7 +36,7 @@ function pushBullet(arr, b) {
 }
 
 // 躲弹：在 4 邻格里找「走过去能活」的安全格。转身帧安全严格按子弹时序。
-function findBulletDodge(me, bullets, game, foe) {
+function findBulletDodge(me, bullets, game, foe, state) {
   var pos = me.tank.position, dir = me.tank.direction;
   if (!bullets || !bullets.length) return null;
   var incoming = minBulletFramesTo(bullets, pos, game);
@@ -67,6 +67,8 @@ function findBulletDodge(me, bullets, game, foe) {
     if (foe && foe.tank && canShoot(cell, foe.tank.position, game.map)) score += 30;
     // 多人：别躲进别的坦克炮口。落点被任一敌瞄准/可射 → 减分（不硬禁，留兜底）。
     score -= enemyFireLineRisk(cell, game);
+    // 蹲草伏击：落点踩进确认蹲草敌的火线 → 减分（窄门控，仅记忆窗内）。
+    score -= hiddenCamperRisk(cell, game, state);
     if (score > bestScore) { bestScore = score; best = d; }
   }
   if (best == null) return null;
@@ -195,6 +197,52 @@ function enemyFireLineRisk(cell, game) {
     if (d > 8) continue;
     if (pointsAt(e.tank.direction, fp, cell)) risk += 120 - d * 8; // 已瞄准：越近越凶
     else risk += 40 - d * 3;                                       // 仅同线可转身射
+  }
+  return risk > 0 ? risk : 0;
+}
+
+// 每帧维护 per-enemy 记忆（key=tank.id）：记可见敌的最后位置/朝向/技能/帧。
+// 某敌这帧没刷新且最后位置在草丛 → 标记蹲草(hidden)，火线在记忆窗内仍当威胁。
+function updateEnemyMemory(me, enemy, game, state) {
+  if (!state.enemyMem) state.enemyMem = {};
+  var mem = state.enemyMem;
+  var f = game.frames || 0;
+  var seen = {};
+  var list = enemyCandidates(enemy, game);
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    var id = e.tank.id;
+    if (id == null) continue;
+    seen[id] = true;
+    mem[id] = {
+      pos: e.tank.position.slice(), dir: e.tank.direction,
+      skill: (e.skill && e.skill.type) || null, frame: f, hidden: false
+    };
+  }
+  // 未刷新的旧条目：在草丛上消失=蹲草；超窗或非草消失=丢弃。
+  for (var k in mem) {
+    if (!mem.hasOwnProperty(k) || seen[k]) continue;
+    var m = mem[k];
+    if (f - m.frame > CAMPER_MEMORY_FRAMES || !isGrass(m.pos, game.map)) { delete mem[k]; continue; }
+    m.hidden = true;
+  }
+}
+
+// 落点 cell 被「确认蹲草敌」火线覆盖的风险分。本地/线上同样有效（草丛隐身机制相同）。
+function hiddenCamperRisk(cell, game, state) {
+  if (!state || !state.enemyMem) return 0;
+  var mem = state.enemyMem;
+  var risk = 0;
+  for (var k in mem) {
+    if (!mem.hasOwnProperty(k)) continue;
+    var m = mem[k];
+    if (!m.hidden) continue;
+    var d = manhattan(m.pos, cell);
+    if (d === 0) { risk += 200; continue; }          // 别踩进它真身格
+    if (d > CAMPER_FIRELINE_RANGE) continue;
+    if (!canShoot(m.pos, cell, game.map)) continue;  // 须同线无遮挡
+    if (pointsAt(m.dir, m.pos, cell)) risk += 160 - d * 10; // 已朝向 cell：越近越凶
+    else risk += 50 - d * 4;                               // 仅同线可转身射
   }
   return risk > 0 ? risk : 0;
 }

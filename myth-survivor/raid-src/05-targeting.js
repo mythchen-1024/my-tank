@@ -42,7 +42,7 @@ function targetScore(e, myPos, myStars) {
 }
 
 // 危险惩罚：走/转后落点若贴脸 / 走入弹道 / 落入敌技能死区，重罚（接入分型）。
-function actionDanger(action, me, foe, threats, game) {
+function actionDanger(action, me, foe, threats, game, state) {
   if (action.type === "useskill" || action.type === "fire" || action.type === "flick") return 0;
   var pos = me.tank.position, dir = me.tank.direction;
   var nextPos = pos, nextDir = dir;
@@ -65,6 +65,8 @@ function actionDanger(action, me, foe, threats, game) {
     if (foe && e === foe) continue;
     penalty += skillZonePenalty(e, nextPos, game) * 0.6; // 非主敌折扣
   }
+  // 蹲草伏击：走/转后落点踩进确认蹲草敌的火线 → 罚（窄门控，仅记忆窗内）。
+  if (action.type === "go") penalty += hiddenCamperRisk(nextPos, game, state);
   return penalty;
 }
 

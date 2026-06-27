@@ -119,6 +119,10 @@ function isMound(pos, map) {
   return !!(map[pos[0]] && map[pos[0]][pos[1]] === "m");
 }
 
+function isGrass(pos, map) {
+  return !!(map[pos[0]] && map[pos[0]][pos[1]] === "o");
+}
+
 function openNeighborCount(pos, map) {
   var n = 0;
   for (var i = 0; i < DIRS.length; i++) if (isOpen(add(pos, delta(DIRS[i])), map)) n++;

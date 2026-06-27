@@ -12,6 +12,9 @@ function onIdle(me, enemy, game) {
   var mySkill = (me.skill && me.skill.type) || null;
   var threats = collectThreatBullets(me, enemy, game);
 
+  // per-enemy 记忆刷新：记可见敌位置/朝向，标记进草丛隐身的蹲草敌。
+  updateEnemyMemory(me, enemy, game, state);
+
   // [2] 首帧白嫖开火：每条命第一次决策直接 fire（敌不躲弹，白嫖一发）。
   if (!state.firedThisLife) {
     state.firedThisLife = true;
@@ -26,7 +29,7 @@ function onIdle(me, enemy, game) {
   // [3] 生存硬闸门：当前位置受威胁 → 优先躲，躲不掉再用防御技能。
   var pos = me.tank.position;
   if (posHitWithin(threats, pos, game, DODGE_LOOKAHEAD)) {
-    var dodge = findBulletDodge(me, threats, game, chooseMainTarget(me, enemy, game));
+    var dodge = findBulletDodge(me, threats, game, chooseMainTarget(me, enemy, game), state);
     if (dodge) { execAction(me, dodge); say(me, state, "躲弹"); return; }
     var defend = defensiveSkill(me, mySkill, threats, game);
     if (defend) { execAction(me, defend); say(me, state, defend.tag); return; }
@@ -107,7 +110,7 @@ function chooseScoredDecision(me, enemy, game, threats, state, mySkill) {
 
   // 危险惩罚硬过滤：每个走/转候选减去落点危险（接入 per-enemy 分型）。
   for (var j = 0; j < cands.length; j++) {
-    cands[j].score -= actionDanger(cands[j], me, foe, threats, game);
+    cands[j].score -= actionDanger(cands[j], me, foe, threats, game, state);
   }
 
   var best = cands[0];
