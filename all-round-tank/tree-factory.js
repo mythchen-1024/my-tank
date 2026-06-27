@@ -42,8 +42,9 @@ function buildBehaviorTree(profile, mySkillType) {
   // ═══════ 子树构建 ═══════
   var enemySkillType = (profile && profile.skillType) || 'stun';
   var shieldBlock    = createShieldBlockNode(mySkillType);
+  var shieldHold     = createShieldHoldNode(mySkillType);
   var deferredEscape = createDeferredSkillEscape(mySkillType);
-  var hardSurvival   = createHardSurvivalTree(shieldBlock, deferredEscape);
+  var hardSurvival   = createHardSurvivalTree(shieldBlock, deferredEscape, shieldHold);
   var starGrab       = (mySkillType === 'teleport') ? createStarGrabNode() : null;
   var softSurvival   = createSoftSurvivalTree(profile);
   var skillAttack    = createSkillAttackNodes(mySkillType, enemySkillType);

@@ -162,6 +162,48 @@ function createShieldBlockNode(mySkillType) {
 }
 
 /**
+ * 护盾保位挡弹节点（仅 shield，且仅 vs overload）。
+ *
+ * 设计动机（用户方案①）：vs overload 的双弹，副弹在 +1 偏移车道，同一帧只有主弹能命中我格。
+ * 横移躲弹虽能脱离弹道（findBulletDodge 已排除被命中落点），但会让出当前对敌的清晰射线位
+ * = 放敌人自由走位。盾流天然不怕双弹（站着开盾稳挡主弹，副弹隔壁车道打不到），
+ * 所以应优先"原地开盾保住射线位"而非横移让位，挡完主弹下帧由 shield-fire 反杀压制。
+ *
+ * 门控极窄（避免烧掉 12% 可用率的稀缺盾）：
+ *   - 仅 vs overload（普通单弹横移躲掉即可，不值得烧盾）
+ *   - 必须当前已占清晰射线位（bb.shotDir）——保位才有意义
+ *   - 必须"横移会丢射线位"：若横移落点仍保有对敌射线，让横移走更省盾
+ *   - 盾就绪 + 有来弹威胁
+ * 优先级：插在 counter-shoot 之后、bullet-dodge 之前（反击 > 保位挡弹 > 横移让位）。
+ */
+function createShieldHoldNode(mySkillType) {
+  if (mySkillType !== 'shield') return null;
+  return Sequence('shield-hold-position', [
+    Guard('enemy-is-overload', function (bb) {
+      return !!(bb.enemy && bb.enemy.skill && bb.enemy.skill.type === 'overload');
+    }),
+    Guard('has-bullet-threat', function (bb) {
+      return anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+    }),
+    Guard('holding-fire-position', function (bb) {
+      // 当前已占对敌清晰射线位（保位才有价值）
+      return !!bb.shotDir && !!bb.enemyTank;
+    }),
+    Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
+    Guard('dodge-loses-position', function (bb) {
+      // 横移落点若仍保有对敌清晰射线 → 让横移走（省盾）；只有横移会丢射线位才开盾保位
+      var dodge = senseBulletDodge(bb);
+      if (!dodge) return true; // 横移无解 → 必须开盾保命+保位
+      return !clearShotDirection(dodge, bb.enemyPos, bb.game);
+    }),
+    Action('do-shield-hold', function (bb) {
+      bbSpeak(bb, '保位!');
+      bbUseSkill(bb, 'shield');
+    })
+  ]);
+}
+
+/**
  * 延迟技能逃生节点（仅 cloak / boost）。
  * 物理逃跑（two-step/desperate）全失败后的最后手段。
  *
@@ -682,17 +724,20 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
           return enemyAimsAt(bb.myPos, bb.enemyTank, bb.game);
         }),
         Guard('close-range', function (bb) { return bb.distToEnemy <= mp.shieldCounterRange; }),
-        // 盾碎后反击可行性：盾挡第一发后我需要 turnDist 帧转向+开火，
-        // 如果敌人能在这之前补第二发打到我，开盾=白死
+        // 盾碎后反击可行性（shield-two-hit 2026-06-27：盾挡 2 发才碎）：
+        //   盾击站位窗口很短(myCounterFrames=转向+开火≤3帧)。窗口内敌受开火锁(≈3帧)限制最多补
+        //   1 发,被盾第 1 层吸收;要打穿需第 2 发,隔装弹(≈3帧)到达必 > 窗口。故 2 发盾下盾击恒安全。
+        //   旧 1 发盾时:敌补 1 发即碎盾、第 2 发就能杀,所以 enemyNextHit<=myCounter 就放弃。
+        //   现按 2 层建模:仅当敌能在我反击前打满 2 发(打穿双层)才放弃(实际几乎不可能)。
         Guard('can-counter-after-shield', function (bb) {
           var turnFrames = turnDistance(bb.myDir, bb.shotDir);
           var myCounterFrames = turnFrames + 1; // 转向+开火，子弹还要飞
           // 敌人下一发到达我的帧数：距离/弹速 (距离1时 = 1帧就到)
           var enemyNextHitFrames = Math.ceil(bb.distToEnemy / BULLET_SPEED);
-          // 如果敌人能立刻再射(非过载单弹冷却约15帧不能连射)
           if (enemyCanFireSoon(bb.enemy)) {
-            // 敌人补枪到达 <= 我反击出手，盾白开
-            if (enemyNextHitFrames <= myCounterFrames) return false;
+            // 第 2 发需隔开火锁(≈3帧)才能再射 → 打穿双层盾的那一发到达帧
+            var enemyBreakThroughFrames = enemyNextHitFrames + 3;
+            if (enemyBreakThroughFrames <= myCounterFrames) return false;
           }
           return true;
         }),
@@ -729,6 +774,43 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Action('do-shield-advance', function (bb) {
           var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
           if (step) bbMoveToward(bb, step);
+        })
+      ])
+    );
+
+    // 护盾主动冲拼（用户方案②）：未开盾 + 当前无射线 + 差1步到射线位 + 裸走进位会被秒
+    //   → 主动开盾顶着冲这关键一步。下帧由 shield-advance 逼近、shield-fire 开火。
+    //
+    // 帧预算：开盾占当帧（不能同时移动），盾期 4 帧实际只够"走1步+转向+开火"，
+    // 所以仅"1步即到射线位"时先开盾再冲赶得及；差≥2步盾会先失效（那种远距
+    // 留给"先裸走逼近、敌弹来时再开盾"——已由 shield-block/shield-hold 覆盖）。
+    //
+    // 口径统一：one-step 与 deadly 都基于 nextStepToFiringLane(...,2) 的第一步，
+    // 与下帧 shield-advance 完全同口径（minDistFloor=3，找 dist>=3 的射线位），
+    // 避免"算的进位格 ≠ 实际走的格"。step 本身有射线 = 走1步就到射线位。
+    //
+    // 省盾哲学（同①）：裸走进位本就安全（敌没瞄那格 / 敌不能即射）就不烧稀缺盾，
+    // 让 movement 层裸走逼近；只有"这一步进位会被秒"时盾才有真实续命价值。
+    children.push(
+      Sequence('shield-rush', [
+        Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+        Guard('not-shielded', function (bb) {
+          return !(bb.me.status && bb.me.status.shielded);
+        }),
+        Guard('no-shot-line', function (bb) { return !bb.shotDir; }),
+        Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+        Guard('shield-ready', function (bb) { return canShieldSkill(bb.me); }),
+        Guard('rush-step-deadly', function (bb) {
+          // 与 shield-advance 同口径取第一步；走1步即到射线位(step有射线)才算赶得及，
+          // 且该进位格被敌瞄准+敌能即射(裸走被秒)→开盾顶着冲；否则不烧盾让 movement 裸走
+          var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 2);
+          if (!step) return false;
+          if (!clearShotDirection(step, bb.enemyPos, bb.game)) return false; // 差>=2步,盾先失效
+          return enemyAimsAt(step, bb.enemyTank, bb.game) && enemyCanFireSoon(bb.enemy);
+        }),
+        Action('do-shield-rush', function (bb) {
+          bbSpeak(bb, '冲!');
+          bbUseSkill(bb, 'shield');
         })
       ])
     );
@@ -987,6 +1069,23 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (!clearShotDirection(bb.enemyPos, bb.myPos, bb.game)) return true;
           return bb.distToEnemy > 5;
         }),
+        // overload 守星陷阱：盾期赶不到的星不该烧盾冲。
+        // 根因 mat_zzzzzz(f17 crashed)：星[15,2]紧贴 overload 敌[15,5]同列(双弹覆盖带)，
+        //   f10 我[10,2]离星 distToStar=5，shield-star-rush 因"敌离星(d=3)比我(d=5)近"开盾冲星。
+        //   但盾仅4帧、星5步根本赶不到；盾下 shield-advance 推进到 d=3 双弹带，f14 盾过期，f13
+        //   敌过载，f15-16 双弹覆盖我列 x=12 → f17 被秒。盾白花在赶不到的贴敌星上。
+        // 两个子条件前提不同:
+        //   ① distToStar>4(盾4帧赶不到)——盾时长不变,保留。
+        //   ② 星在双弹带——【shield-two-hit 2026-06-27 适配】2 发盾能同时吸收 overload 一次齐射
+        //      (主弹+副弹同帧=2 发) → 星在双弹带不再必死,前提是盾窗能覆盖到拿星(distToStar<=3,
+        //      否则盾在最后一步前过期、裸进双弹带被秒)。旧(1发盾):双弹带一律拦(副弹秒你拿不到星)。
+        //      现:distToStar<=3 的双弹带星照常开盾冲(2发盾扛齐射、抢到星);distToStar=4 仍拦(盾覆盖不到)。
+        Guard('no-overload-star-trap', function (bb) {
+          if (!enemyIsOverloadType(bb.enemy)) return true;
+          if (bb.distToStar > 4) return false;
+          if (bb.enemyPos && inDoubleLaneBand(bb.enemyPos, bb.star, 4) && bb.distToStar > 3) return false;
+          return true;
+        }),
         // 存在竞争或威胁就开盾（不要求敌人必须瞄我）
         Guard('star-contested-or-dangerous', function (bb) {
           // 有子弹正飞来 → 开盾挡
@@ -994,9 +1093,15 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (!bb.enemyTank) return false;
           // 敌人瞄着我
           if (enemyAimsAt(bb.myPos, bb.enemyTank, bb.game) && bb.distToEnemy <= 6) return true;
-          // 敌人也在追星（距星差不多或比我近）
+          // 敌人也在追星（距星差不多或比我近）→ 仅当盾窗能覆盖拿星瞬间才开
+          // 根因 mat_AlSqd/mat_Ak0(f9 开盾)：distToStar=6、无在途弹、敌没瞄我，仅凭"敌也在抢星"
+          //   就开盾。但盾仅 4 帧(cast 占当帧+3 步移动≈管 3 格)，dist=6 时盾 f13 过期、离星还 2~3
+          //   格，盾纯浪费；真致命弹 f20~22 来时盾早没了→挨 1 炮死。符合"盾留给躲不掉的弹"。
+          //   故纯距离竞争分支加盾窗门控：只有 distToStar<=3(盾能覆盖拿星)才因竞争开盾；远距
+          //   纯推测留盾不烧。在途弹/敌瞄我两条具体威胁分支不动(dist6 照常挡真弹)。
+          //   阈值 3 = 盾 4 帧 - cast 占当帧 = 剩 3 步移动可达星。
           var enemyStarDist = manhattan(bb.enemyPos, bb.star);
-          if (enemyStarDist <= bb.distToStar + 2) return true;
+          if (enemyStarDist <= bb.distToStar + 2 && bb.distToStar <= 3) return true;
           // 追星路径经过敌人射线
           var starPath = shortestPathInfo(bb.myPos, bb.star, bb.game, bb.enemyPos);
           if (starPath && starPath.step && clearShotDirection(bb.enemyPos, starPath.step, bb.game)) return true;

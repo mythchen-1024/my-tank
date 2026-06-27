@@ -1561,7 +1561,9 @@ function findBulletDodge(me, enemy, game, enemyPos) {
     // 落点必须脱离所有子弹弹道
     if (anyBulletThreatens(bullets, p, game)) continue;
     // 落点不能正好撞进敌人能立刻开火的炮口
-    if (enemyAimsAt(p, enemy && enemy.tank, game)) continue;
+    // 仅当敌枪真能立刻开火才算炮口：敌弹在途(非overload)打不出补射→走进其瞄准线当帧安全，
+    // 不该误判为炮口而拒掉这个躲法(否则盾流会把能走位躲的弹白烧在盾上, mat_8QI5Lx7c f5)
+    if (enemyAimsAt(p, enemy && enemy.tank, game) && enemyCanFireSoon(enemy)) continue;
     // 不能顺着来袭子弹方向走（同向只会被追上，且这一步本就还在弹道行/列上）
     if (threatDirs[d.name]) continue;
 

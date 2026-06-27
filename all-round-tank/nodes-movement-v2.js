@@ -319,6 +319,17 @@ function createMovementTree(profile, mySkillType) {
         }),
         Guard('no-star-or-star-bait', function (bb) {
           if (!bb.star) return true;
+          // 脚边星·敌远必吃（破死蹲）：星在 ≤2 步可达 + 敌离星 ≥8 格(短期不会来抢→伏击必落空)
+          //   → 不蹲守，让位 star-chase 直接吃掉锁分。根因 mat_535(0:0 runTime负)：shield 坦克
+          //   无传送，星[1,7]就贴我脚边1步(我[2,7]同行射线上)，敌全程在[13-17,13]远端从不靠近，
+          //   "星在我射线上→无限蹲等伏击"却等不到敌来吃，整局5步0抢星被判负。伏击前提是敌会来抢
+          //   这颗星走进我射线；敌远不来则蹲守纯亏，吃掉它既得分又否定敌人机会。门控窄(仅星贴脸+
+          //   敌远)，不动"星在我射线+敌近会来抢"的正常伏击。
+          var myStarD = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          if (myStarD >= 0 && myStarD <= 2 &&
+              bb.enemyPos && manhattan(bb.enemyPos, bb.star) >= 8) {
+            return false;
+          }
           // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
           if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
           // 星不在炮线但敌人近星（≤8步可达）：出草传星会暴露自己
@@ -397,6 +408,58 @@ function createMovementTree(profile, mySkillType) {
       ])
     );
   }
+
+  // ---- 隐身贴脸偷袭规避（窄门控·先于一切抢星移动）----
+  // 根因 mat_无敌大黑狗(f23) + mat_华强b(f45) 两局同死法：cloak 敌中距(d=2~3)隐身后，隐身期间
+  // 摸到我【正下方/正侧同列 d=1】，朝我垂直一炮当帧秒。我要么死站(cloak-defense 三分支被隐身
+  // 火线/standoff 全拒→fall through 不动)、要么沿原线 star-chase 直走撞上(star-chase 优先级高于
+  // cloak-defense)。共因：cloak 敌从 d<=4 隐身→2~3帧即可摸到 d=1 垂直秒，此窗口我若不主动挪窝
+  // 破贴脸轨迹必死。
+  //
+  // 门控极窄(符合 memory"cloak 窄门控空间防御转正"——避让不丢星权)：
+  //   仅 cloak 流 + 当前隐身(enemyTank=null) + 最后可见 ≤5 帧内 + 最后可见距离 d<=4。
+  //   敌远(d>4)隐身→摸到 d=1 要 ≥4 帧，我有反应余量，不触发(不丢星权)；窗口仅 5 帧，过后
+  //   star-chase 照常恢复。绝不死站：diagonalEvadeStep 之字脱离为先，失败则任意远离 lastEnemyPos
+  //   的可走格兜底(站着挨贴脸秒比任何挪窝都差)。
+  children.push(
+    Sequence('cloak-close-evade', [
+      Guard('cloak-invisible-recent-close', function (bb) {
+        if (!enemyIsCloakType(bb.enemy)) return false;
+        if (bb.enemyTank) return false;                       // 敌可见→交常规对抗
+        if (!bb.memory.lastEnemyPos) return false;
+        if (bb.frame - bb.memory.lastEnemySeenFrame > 5) return false;
+        if (manhattan(bb.myPos, bb.memory.lastEnemyPos) > 4) return false;  // 仅贴脸偷袭前兆
+        return true;
+      }),
+      Action('do-cloak-close-evade', function (bb) {
+        var dangerPos = bb.memory.lastEnemyPos;
+        bbSpeak(bb, '隐身贴脸!');
+        // 1) 之字脱离(破任何同行/同列偷袭直线)，过子弹安全检查
+        var zig = diagonalEvadeStep(bb.myPos, dangerPos, bb.game, bb.memory);
+        if (zig && !anyBulletThreatens(bb.enemyBullets, zig, bb.game) &&
+            !stepIntoBulletPath(bb.enemyBullets, zig, bb.game)) {
+          bbMoveToward(bb, zig);
+          return;
+        }
+        // 2) 兜底：任意可走 + 远离 lastEnemyPos + 不撞子弹 的格(绝不死站)
+        var best = null, bestScore = -9999;
+        for (var i = 0; i < DIRS.length; i++) {
+          var p = [bb.myPos[0] + DIRS[i].dx, bb.myPos[1] + DIRS[i].dy];
+          if (!isPassable(bb.game, p, null)) continue;
+          if (anyBulletThreatens(bb.enemyBullets, p, bb.game)) continue;
+          if (stepIntoBulletPath(bb.enemyBullets, p, bb.game)) continue;
+          // 远离危险 + 脱离同行/同列(破贴脸垂直射线) + 离边远
+          var offLine = (p[0] !== dangerPos[0] ? 1 : 0) + (p[1] !== dangerPos[1] ? 1 : 0);
+          var score = manhattan(p, dangerPos) * 2 + offLine * 4 + distanceFromEdges(p, bb.game) * 0.5;
+          if (score > bestScore) { bestScore = score; best = p; }
+        }
+        if (best) { bbMoveToward(bb, best); return; }
+        // 3) 全被封：转向 lastEnemyPos 方向准备对射(总比背对挨打强)
+        var faceDir = directionBetween(bb.myPos, dangerPos);
+        if (faceDir && bb.myDir !== faceDir) bbTurnToward(bb, faceDir);
+      })
+    ])
+  );
 
   // ---- 吃星后撤退意图：刚吃完星的短窗口内主动远离危险 ----
   children.push(
@@ -516,6 +579,24 @@ function createMovementTree(profile, mySkillType) {
           var shieldDist = manhattan(starPath.step, bb.enemyPos);
           if (shieldDist >= 2) return true;
         }
+        // 原地等空档（用户策略②/mat_Eli9wJG f44）：前向星步暂被"会飞走的弹"挡，但我当前格
+        // 安全 + 弹推进1帧后离开该步格(临时弹墙,非持续封锁) → 停一帧等弹过、下帧突破，
+        // 而非掉头后退再回头(每周期错过空档,[10,8]↔[10,7]永久振荡)。
+        // 门控严格防死等：step 不安全的唯一原因是弹威胁(非墙/敌真炮口) + 我当前格无弹 +
+        // 弹1帧内离开 step + 非双弹(覆盖带复杂不投机)。
+        if (anyBulletThreatens(bb.enemyBullets, starPath.step, bb.game) &&
+            isPassable(bb.game, starPath.step, bb.enemyPos) &&
+            !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game) &&
+            !enemyDoubleLaneThreat(bb.enemy) &&
+            !(bb.enemyTank && enemyAimsAt(starPath.step, bb.enemyTank, bb.game) &&
+              enemyCanFireSoon(bb.enemy))) {
+          var bulletsNext = advanceBullets(bb.enemyBullets, BULLET_SPEED);
+          if (!anyBulletThreatens(bulletsNext, starPath.step, bb.game) &&
+              !stepIntoBulletPath(bulletsNext, starPath.step, bb.game)) {
+            bb._cache._starPath = { step: bb.myPos.slice(), dist: starPath.dist, hold: true };
+            return true;
+          }
+        }
         // 子弹窗口豁免：敌人子弹在途(不能再射) + 我方已卡住 → d>=2 暂时安全，放行冲星
         // 但中途步(非抢星最后一步)排除步入敌炮口正对方向(mat_6OkNLt5u: d=2同行被弹回即射杀)
         // 最后一步(dist≤1=直接吃星)豁免此限制：抢到就跑，1帧暴露可接受
@@ -602,6 +683,13 @@ function createMovementTree(profile, mySkillType) {
       }),
       Action('do-star-chase', function (bb) {
         var starPath = bb._cache._starPath;
+        // 原地等空档：不移动，朝星方向转向待命(弹过后下帧直接推进，省掉后退+回头2帧)
+        if (starPath.hold) {
+          bbSpeak(bb, '等空档');
+          var faceDir = directionBetween(bb.myPos, bb.star);
+          if (faceDir && bb.myDir !== faceDir) bbTurnToward(bb, faceDir);
+          return;
+        }
         // 贴脸星短意图
         if (starPath.dist <= 2 && !bb.memory.shortIntent) {
           primeShortIntent(bb.memory, 'star', bb.star, bb.frame, 2);

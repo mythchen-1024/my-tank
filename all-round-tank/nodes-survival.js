@@ -10,7 +10,7 @@
 
 // ---- 硬生存子树（永远最高优先级，不受 profile 影响） ----
 
-function createHardSurvivalTree(shieldNode, deferredSkillNode) {
+function createHardSurvivalTree(shieldNode, deferredSkillNode, shieldHoldNode) {
   var children = [
 
     // 1. 对射先射后走：来袭子弹 + 能反击 + 开火后仍来得及躲
@@ -22,6 +22,10 @@ function createHardSurvivalTree(shieldNode, deferredSkillNode) {
         bbFire(bb);
       })
     ]),
+
+    // 1.5 护盾保位挡弹（仅 shield vs overload）：占射线位时原地开盾挡主弹，不横移让位
+    //     插在 counter-shoot 之后、bullet-dodge 之前——反击 > 保位挡弹 > 横移让位
+    shieldHoldNode,
 
     // 2. 常规子弹躲避：预判弹道，移动到相邻安全格
     Sequence('bullet-dodge', [
@@ -110,7 +114,12 @@ function createHardSurvivalTree(shieldNode, deferredSkillNode) {
     ])
   );
 
-  return Selector('hard-survival', children);
+  // 过滤 null（shieldHoldNode 在非 shield 技能时为 null）
+  var filtered = [];
+  for (var i = 0; i < children.length; i++) {
+    if (children[i]) filtered.push(children[i]);
+  }
+  return Selector('hard-survival', filtered);
 }
 
 // ---- 软生存子树（profile 控制包含哪些节点） ----
