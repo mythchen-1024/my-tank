@@ -363,6 +363,7 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Action('do-stun-snipe', function (bb) {
           bbSpeak(bb, bb.distToEnemy <= 4 ? '晕杀!' : '晕射!');
           bbUseSkill(bb, 'stun');
+          bb.memory.stunCastFrame = bb.frame;
         })
       ])
     );
@@ -388,6 +389,7 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
         Action('do-stun-setup', function (bb) {
           bbSpeak(bb, '眩晕!');
           bbUseSkill(bb, 'stun');
+          bb.memory.stunCastFrame = bb.frame;
         })
       ])
     );
@@ -404,8 +406,15 @@ function createSkillAttackNodes(mySkillType, enemySkillType) {
             if (bb.gunIsReady && bb.myDir === bb.shotDir) { bbSpeak(bb, '晕杀!'); bbFire(bb); }
             else if (bb.myDir !== bb.shotDir) bbTurnToward(bb, bb.shotDir);
           } else {
-            var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
-            if (step) bbMoveToward(bb, step);
+            // 帧预算门控：剩余眩晕帧内走到射线位+转向+开火算得过来才追。
+            // 算不过来就不走进贴脸——眩晕一过自己成活靶(mat_BlS0:追5步到贴脸,眩晕耗尽被双弹秒)。
+            var cast = bb.memory.stunCastFrame;
+            var remain = (cast != null) ? (cast + 6 - bb.frame) : 6;
+            if (stunKillReachable(bb.myPos, bb.enemyPos, bb.game, remain)) {
+              var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+              if (step) bbMoveToward(bb, step);
+            }
+            // 杀不掉:不动(让位给后续抢星/保持距离层),绝不贴脸送死
           }
         })
       ])
@@ -1117,6 +1126,7 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
         Action('do-stun-star', function (bb) {
           bbSpeak(bb, '晕星!');
           bbUseSkill(bb, 'stun');
+          bb.memory.stunCastFrame = bb.frame;
         })
       ])
     );

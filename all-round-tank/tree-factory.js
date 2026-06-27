@@ -105,6 +105,37 @@ function buildBehaviorTree(profile, mySkillType) {
     })
   ]);
 
+  // 眩晕补刀锁定：敌被眩晕(只可能是我方stun命中→自动仅对stun坦克生效,对其他坦克零影响)
+  // 且帧预算内能走到射线位开火时,锁定补刀,绝不被抢星层(max-star/终局提权)抢占。
+  // 根因 mat_Jyuf: 眩晕命中后 stun-followup(优先级6) 被 star-guard(max-star-aggression,优先级5)
+  // 抢占,坦克停在离射线1步处守星不动,6帧眩晕窗口白白浪费=最后没有反击。门控极窄:
+  // 必须敌已stunned(该状态只有我方stun授予)+帧预算算得过来(杀不掉就不抢,让位抢星)。
+  var stunKillCommit = Sequence('stun-kill-commit', [
+    Guard('enemy-stunned', function (bb) {
+      return !!(bb.enemy && bb.enemy.status && bb.enemy.status.stunned);
+    }),
+    Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+    Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+    Guard('kill-reachable', function (bb) {
+      // 帧预算:剩余眩晕帧内能走到射线位+转向+开火才锁定补刀(否则让位抢星,不空耗)
+      var cast = bb.memory.stunCastFrame;
+      var remain = (cast != null) ? (cast + 6 - bb.frame) : 6;
+      return stunKillReachable(bb.myPos, bb.enemyPos, bb.game, remain);
+    }),
+    Guard('shot-safe', function (bb) {
+      return !anyBulletThreatens(bb.enemyBullets, bb.myPos, bb.game);
+    }),
+    Action('do-stun-kill-commit', function (bb) {
+      if (bb.shotDir) {
+        if (bb.myDir === bb.shotDir) { bbSpeak(bb, '晕杀!'); bbFire(bb); }
+        else bbTurnToward(bb, bb.shotDir);
+      } else {
+        var step = nextStepToFiringLane(bb.myPos, bb.enemyPos, bb.game, 1);
+        if (step) bbMoveToward(bb, step);
+      }
+    })
+  ]);
+
   // ═══════ 组装根节点 ═══════
   var rootChildren = [
     // 第一优先级：被控（冰冻/眩晕）就直接返回
@@ -121,6 +152,9 @@ function buildBehaviorTree(profile, mySkillType) {
 
     // 第四·五优先级：隐身白嫖先手（已隐身+清晰射线+安全），先于一切抢星提权
     freeCloakStrike,
+
+    // 第四·六优先级：眩晕补刀锁定（敌被眩晕+帧预算够），先于抢星提权，不浪费眩晕窗口
+    stunKillCommit,
 
     // 第五优先级（动态）：终局/落后/极致模式时目标层提前
     lastChanceStar,

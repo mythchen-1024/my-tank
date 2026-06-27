@@ -1439,6 +1439,49 @@ function hasNearbyFiringLane(myPos, enemyPos, game, maxSteps) {
 
 
 /**
+ * 到最近"对敌有清晰射线"格的步数（BFS，hasNearbyFiringLane 的步数版）。
+ * 当前格即有射线返回 0；maxSteps 内找不到返回 -1。
+ * 用于 stun 反击的帧预算：步数 + 转向 + 开火 是否 <= 剩余眩晕帧。
+ */
+function stepsToFiringLane(myPos, enemyPos, game, maxSteps) {
+  if (!myPos || !enemyPos) return -1;
+  if (clearShotDirection(myPos, enemyPos, game)) return 0;
+  var visited = {};
+  var queue = [myPos];
+  visited[myPos[0] + ',' + myPos[1]] = 0;
+  for (var qi = 0; qi < queue.length; qi++) {
+    var p = queue[qi];
+    var d = visited[p[0] + ',' + p[1]];
+    if (d >= maxSteps) continue;
+    for (var i = 0; i < DIRS.length; i++) {
+      var n = [p[0] + DIRS[i].dx, p[1] + DIRS[i].dy];
+      var nk = n[0] + ',' + n[1];
+      if (visited[nk] !== undefined) continue;
+      if (!isPassable(game, n, enemyPos)) continue;
+      visited[nk] = d + 1;
+      if (clearShotDirection(n, enemyPos, game)) return d + 1;
+      queue.push(n);
+    }
+  }
+  return -1;
+}
+
+
+/**
+ * 眩晕击杀是否"算得过来"：剩余眩晕帧内能否走到射线位并开火。
+ *   - 已有清晰射线：1 帧开火(或转向后开火)必中眩晕中的敌人 → true
+ *   - 无射线：到最近射线位步数 + 转向1帧 + 开火1帧 <= 剩余眩晕帧 → true
+ * 杀不掉时返回 false，调用方据此放弃追杀(避免走进贴脸,眩晕一过自己成活靶 mat_BlS0)。
+ */
+function stunKillReachable(myPos, enemyPos, game, remainingStunFrames) {
+  if (remainingStunFrames <= 0) return false;
+  if (clearShotDirection(myPos, enemyPos, game)) return true;
+  var steps = stepsToFiringLane(myPos, enemyPos, game, Math.max(1, remainingStunFrames));
+  return steps >= 0 && steps + 2 <= remainingStunFrames;
+}
+
+
+/**
  * 判断 boost go() 前方2格是否安全可通行
  */
 function boostPathSafe(myPos, myDir, game, enemyPos, enemyBullets, enemyTank, enemy, memory) {
