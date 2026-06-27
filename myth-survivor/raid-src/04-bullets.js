@@ -2,9 +2,9 @@
 // 04-bullets.js — 子弹威胁收集 / 躲弹 / 多发账本
 // ============================================================
 
-// 多子弹威胁：合并 game.visibleBullets + enemy.bullet + 各 enemies[].bullet，
-// 去重 + 排除己方弹后，按危险半径过滤。
-function collectThreatBullets(me, enemy, game) {
+// 多子弹威胁：合并 game.visibleBullets + enemy.bullet + 各 enemies[].bullet + 子弹记忆，
+// 去重 + 排除己方弹后，按危险半径过滤。state 传入则把移出视野锥的旧弹按外推位置补回。
+function collectThreatBullets(me, enemy, game, state) {
   var myPos = me.tank.position;
   var raw = [];
   var vis = game.visibleBullets || [];
@@ -13,12 +13,50 @@ function collectThreatBullets(me, enemy, game) {
   var es = game.enemies || [];
   for (var j = 0; j < es.length; j++) if (es[j]) pushBullet(raw, es[j].bullet);
 
+  // 子弹记忆：把见过、按速外推的敌弹补进来（即使本帧移出视野锥），去重交给 pushBullet。
+  if (state) {
+    updateBulletMemory(raw, state, game);
+    for (var m = 0; m < state.bulletMem.length; m++) pushBullet(raw, state.bulletMem[m]);
+  }
+
   var out = [];
   for (var k = 0; k < raw.length; k++) {
     if (isMyBullet(raw[k], me)) continue;
     if (manhattan(raw[k].position, myPos) <= DANGER_RADIUS + BULLET_SPEED) out.push(raw[k]);
   }
   return out;
+}
+
+// 子弹记忆更新：旧条目按速度外推一帧；本帧可见弹刷新对应轨迹(同向同定轴)的位置/帧号；超窗或出界丢弃。
+// raw 为本帧实见敌弹(已含 visibleBullets 等，未排己方)。轨迹键=方向+定轴坐标(子弹直线飞，定轴不变)。
+function updateBulletMemory(raw, state, game) {
+  var f = game.frames || 0;
+  var W = game.map ? game.map.length : 0, H = (game.map && game.map[0]) ? game.map[0].length : 0;
+  var next = [];
+  // 1) 旧记忆外推一帧。
+  for (var i = 0; i < state.bulletMem.length; i++) {
+    var b = state.bulletMem[i];
+    if (f - b.frame >= BULLET_MEMORY_FRAMES) continue;
+    var d = delta(b.direction);
+    var np = [b.position[0] + d[0] * BULLET_SPEED, b.position[1] + d[1] * BULLET_SPEED];
+    if (np[0] < 0 || np[1] < 0 || (W && np[0] >= W) || (H && np[1] >= H)) continue; // 飞出地图
+    if (game.map && game.map[np[0]] && game.map[np[0]][np[1]] === "x") continue;     // 撞墙(子弹只被x挡,土堆可穿)
+    next.push({ position: np, direction: b.direction, frame: b.frame, axis: b.axis });
+  }
+  // 2) 本帧实见弹刷新/新增（覆盖外推预测，位置更准）。
+  for (var j = 0; j < raw.length; j++) {
+    var rb = raw[j];
+    if (!rb || !rb.position || !rb.direction) continue;
+    var axis = (rb.direction === "left" || rb.direction === "right") ? rb.position[1] : rb.position[0];
+    var hit = false;
+    for (var n = 0; n < next.length; n++) {
+      if (next[n].direction === rb.direction && next[n].axis === axis) {
+        next[n].position = rb.position.slice(); next[n].frame = f; hit = true; break;
+      }
+    }
+    if (!hit) next.push({ position: rb.position.slice(), direction: rb.direction, frame: f, axis: axis });
+  }
+  state.bulletMem = next;
 }
 
 function isMyBullet(b, me) {
@@ -51,6 +89,9 @@ function findBulletDodge(me, bullets, game, foe, state) {
     var cell = add(pos, delta(d));
     if (!isOpen(cell, game.map)) continue;
     if (stepIntoBulletPath(bullets, cell, game)) continue;
+    // 落点同轴前瞻：迎面冲向来弹（同行/列反向）时落点仍在弹道上，DODGE_LOOKAHEAD 帧内会被扫到→拒绝。
+    // threatDirs 只屏蔽子弹行进方向、不挡迎面，facing 分支又只查当前格，故必须按落点判命中逼选垂直逃路。
+    if (posHitWithin(bullets, cell, game, DODGE_LOOKAHEAD)) continue;
     var facing = (dir === d);
     if (facing) {
       if (incoming >= 0 && incoming < 1) continue;

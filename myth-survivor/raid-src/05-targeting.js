@@ -55,8 +55,15 @@ function actionDanger(action, me, foe, threats, game, state) {
   if (action.type === "turn") nextDir = turnAfter(dir, action.side);
 
   var penalty = 0;
-  if (action.type === "go" && stepIntoBulletPath(threats, nextPos, game)) penalty += 2000;
-  if (posHitWithin(threats, nextPos, game, 1)) penalty += 800;
+  if (action.type === "go") {
+    if (stepIntoBulletPath(threats, nextPos, game)) penalty += 2000;
+    // 朝「即将命中落点」的子弹走一步：落点在 DODGE_LOOKAHEAD 帧内被实弹命中 → 重罚压过抢星(峰值~1170)。
+    // 修窄道开局秒杀：还没踩进弹道时 posHitWithin(1) 不报警→走一步正好进弹道→下帧无侧逃路被秒。
+    // 前瞻拉到 3 帧与躲弹闸门/idle-farm 安全门一致，让「占位/抢星」永不踩进 3 帧内会到的弹。
+    if (posHitWithin(threats, nextPos, game, DODGE_LOOKAHEAD)) penalty += 1300;
+  } else if (posHitWithin(threats, nextPos, game, 1)) {
+    penalty += 800; // 转身原地不移动：当前格这帧仍被命中却站着转 → 罚（落到走位逃离）。
+  }
 
   // 主敌贴脸 / 被瞄
   if (foe && foe.tank) {

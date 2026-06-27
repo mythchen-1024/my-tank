@@ -10,7 +10,7 @@ function onIdle(me, enemy, game) {
   if (me.status && me.status.frozen) return;
 
   var mySkill = (me.skill && me.skill.type) || null;
-  var threats = collectThreatBullets(me, enemy, game);
+  var threats = collectThreatBullets(me, enemy, game, state);
 
   // per-enemy 记忆刷新：记可见敌位置/朝向，标记进草丛隐身的蹲草敌。
   updateEnemyMemory(me, enemy, game, state);
