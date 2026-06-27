@@ -73,7 +73,10 @@ function chooseScoredDecision(me, enemy, game, threats, state, mySkill) {
     if (dir === sDir) {
       if (hasBudget && !duelDodge) cands.push(withScore({ type: "fire" }, 850 + lineRangeBonus(pos, sfp), "狂射"));
     } else {
-      cands.push(withScore({ type: "turn", side: turnDirection(dir, sDir) }, 700, "瞄准"));
+      // 多敌平分防抽搐：减转身代价(转身少优先)与距离(近敌优先)，让瞄准稳定锁一个目标，
+      // 不再每帧因另一敌微动而左右翻转。tiebreak 幅度小，不改变「优先打同线敌」的大局。
+      var aimScore = 700 - turnCountTo(dir, sDir) * 8 - Math.min(20, manhattan(pos, sfp));
+      cands.push(withScore({ type: "turn", side: turnDirection(dir, sDir) }, aimScore, "瞄准"));
     }
   }
 

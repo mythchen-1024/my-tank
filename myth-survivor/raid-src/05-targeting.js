@@ -43,7 +43,12 @@ function targetScore(e, myPos, myStars) {
 
 // 危险惩罚：走/转后落点若贴脸 / 走入弹道 / 落入敌技能死区，重罚（接入分型）。
 function actionDanger(action, me, foe, threats, game, state) {
-  if (action.type === "useskill" || action.type === "fire" || action.type === "flick") return 0;
+  if (action.type === "useskill" || action.type === "fire" || action.type === "flick") {
+    // 攻击/技能本身不移动。但当前格这帧就会被实弹命中还站着输出 = 送死(子弹2格/帧追不回)，
+    // 重罚逼评分改选能脱离弹道的走位。多敌多方向来弹封死躲弹层时，这是不站着挨打的兜底。
+    if (posHitWithin(threats, me.tank.position, game, 1)) return 1400;
+    return 0;
+  }
   var pos = me.tank.position, dir = me.tank.direction;
   var nextPos = pos, nextDir = dir;
   if (action.type === "go") nextPos = add(pos, delta(dir));
