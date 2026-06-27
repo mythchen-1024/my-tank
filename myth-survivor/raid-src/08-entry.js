@@ -65,13 +65,14 @@ function chooseScoredDecision(me, enemy, game, threats, state, mySkill) {
 
   // [5] 同轴狂射（raid 核心，高于抢星）：扫描全部敌人，谁在我轴上无遮挡就打谁。
   //     敌不躲弹 → 射程拉满（不偏好近距）。已对准+budget+不脱线→开火；未对准→预瞄转向。
+  var canFireNow = false; // 本帧是否有「已对准+可开火」的击杀机会（用于无杀窗口抢星）
   var shootList = enemyCandidates(enemy, game);
   for (var si = 0; si < shootList.length; si++) {
     var sfp = shootList[si].tank.position;
     if (!canShoot(pos, sfp, game.map)) continue;
     var sDir = directionTo(pos, sfp);
     if (dir === sDir) {
-      if (hasBudget && !duelDodge) cands.push(withScore({ type: "fire" }, 850 + lineRangeBonus(pos, sfp), "狂射"));
+      if (hasBudget && !duelDodge) { cands.push(withScore({ type: "fire" }, 850 + lineRangeBonus(pos, sfp), "狂射")); canFireNow = true; }
     } else {
       // 多敌平分防抽搐：减转身代价(转身少优先)与距离(近敌优先)，让瞄准稳定锁一个目标，
       // 不再每帧因另一敌微动而左右翻转。tiebreak 幅度小，不改变「优先打同线敌」的大局。
@@ -92,8 +93,14 @@ function chooseScoredDecision(me, enemy, game, threats, state, mySkill) {
   var starStep = game.star && nextStep(pos, game.star, game.map);
   if (starStep) {
     var farmBonus = (alive <= 2 && game.star) ? 120 : 0; // 末位时抬高抢星
+    // 无杀窗口加成：本帧无「已对准可开火」的敌(只能转身瞄准空转，对手会躲)，
+    // 且星在近处、抢星落点未来几帧不被实弹命中 → 抬高抢星压过瞄准(682)，
+    // 落实「占位优先于投机射击」。仍低于狂射(850)。落点安全门控避免为星走进火线送死。
+    var idleFarm = (!canFireNow
+      && manhattan(pos, game.star) <= IDLE_FARM_RANGE
+      && !posHitWithin(threats, starStep, game, DODGE_LOOKAHEAD)) ? IDLE_FARM_BONUS : 0;
     cands.push(withScore(actionToDir(pos, dir, directionTo(pos, starStep), "go"),
-      560 + farmBonus + starUrgency(pos, starStep, game.star) + starLineScore(starStep, game.star, game.map, late), "抢星"));
+      560 + farmBonus + idleFarm + starUrgency(pos, starStep, game.star) + starLineScore(starStep, game.star, game.map, late), "抢星"));
   }
 
   // [9] 破墙开路：前方/邻格土堆射穿（有预算才射）。
