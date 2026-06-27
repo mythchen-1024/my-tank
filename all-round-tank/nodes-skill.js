@@ -1107,6 +1107,23 @@ function createSkillObjectiveNodes(mySkillType, enemySkillType) {
           if (starPath && starPath.step && clearShotDirection(bb.enemyPos, starPath.step, bb.game)) return true;
           return false;
         }),
+        // 盾窗能否覆盖到拿星(含转向开销)：盾 4 帧 = cast 占当帧 + 3 步移动。到星真实帧数 =
+        //   BFS 格距 + 首步转向(朝向不符要先转1帧)。> 3 则盾覆盖不到拿星——拿到星时盾正好过期,
+        //   若星在敌火线车道(抢星=站进车道)就被秒。此时 Guard 失败→落移动层裸走接近(敌真来弹时
+        //   shield-block 挡),等够近(framesToReach<=3)+盾ready再开盾冲,确保盾覆盖拿星瞬间。
+        // 根因(含B后 vs overload 盾过期死 29%, seed23/35)：星在敌同行车道(离敌2-3格),distToStar=3
+        //   过了旧门控,但首步要转向→实际4帧>盾3步,冲到星时盾过期、裸站车道被 overload 双弹秒。
+        //   旧 distToStar<=3(曼哈顿)漏算转向开销。改用 BFS dist+转向的真实帧数。
+        Guard('shield-covers-grab', function (bb) {
+          var info = shortestPathInfo(bb.myPos, bb.star, bb.game, bb.enemyPos);
+          if (!info || info.dist == null) return true;  // 算不出不拦(保守放行)
+          var turns = 0;
+          if (info.step) {
+            var d = directionBetween(bb.myPos, info.step);
+            if (d && d !== bb.myDir) turns = 1;
+          }
+          return (info.dist + turns) <= 3;  // 盾覆盖=3步移动帧;覆盖不到则不烧盾,等够近再开
+        }),
         Action('do-shield-star', function (bb) {
           bbSpeak(bb, '盾星!');
           bbUseSkill(bb, 'shield');

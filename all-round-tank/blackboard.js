@@ -409,6 +409,10 @@ function bbUseSkill(bb, skillName, arg1, arg2) {
   if (!bb.me || !bb.me[skillName]) return;
   if (arg1 !== undefined && arg2 !== undefined) bb.me[skillName](arg1, arg2);
   else bb.me[skillName]();
+  // 统一记开盾帧(覆盖全部开盾点:counter/mirror/rush/star)。盾仅 4 帧且 me.status
+  // 只给 shielded 布尔不含剩余帧,故剩余只能靠此推算:shieldRemain = castFrame+4-frame。
+  // 供盾过期时间核算(C 类:别走到射线位刚好盾过期被秒;算好盾窗能否覆盖到对拼/拿星瞬间)。
+  if (skillName === 'shield' && bb.memory) bb.memory.shieldCastFrame = bb.frame;
 }
 
 function bbDirectGo(bb, target) {

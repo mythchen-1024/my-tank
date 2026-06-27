@@ -163,6 +163,33 @@ function buildBehaviorTree(profile, mySkillType) {
   ]);
 
   // ═══════ 组装根节点 ═══════
+
+  // 贴脸对拼锁定：贴脸(dist<=2) + 有清晰射线 + 枪就绪 + 敌无盾 → 转向开火对拼，
+  //   绝不被软生存(防瞄规避)抢去原地盲转/逃跑。
+  // 根因(本批 vs overload 17.5% 复盘 seed11/5/13)：接敌走到贴脸位(如[11,8]对敌[11,7]同列相邻,
+  //   shotDir=up、枪好、敌无盾=必胜对拼局),却被 soft-survival(优先级4,防瞄规避)抢占——因敌瞄我
+  //   +overload能即射就触发规避,但贴脸无处可逃 → 退化成 moveToward 的 me.turn('right')盲转(core-utils
+  //   625行),在 soft-survival↔movement 间反复横跳3-5帧不开火,被 overload 双弹秒。directShot(优先级7)
+  //   在 soft-survival 之后,根本轮不到。用户诉求"接敌勇敢对拼,不躲不退不原地扭"正解此。
+  // 门控极窄：贴脸 dist<=2(此距离躲也躲不掉,对拼是最优;远距不抢,留给正常规避/走位)
+  //   + 有射线(能打才对拼) + 枪好 + 敌无盾(敌开盾时打不动,不对拼) + canShoot。
+  // 优先级 3.5：在 hardSurvival(2,真来弹先躲)之后、softSurvival(4,防瞄规避)之前——
+  //   有真来弹仍先躲(hardSurvival),只在"无法躲的贴脸+有射线"时锁定对拼,不被规避层抢去盲转。
+  var pointBlankDuel = Sequence('point-blank-duel', [
+    Guard('enemy-visible', function (bb) { return !!bb.enemyTank; }),
+    Guard('point-blank', function (bb) { return bb.distToEnemy <= 2; }),
+    Guard('has-clear-shot', function (bb) { return !!bb.shotDir; }),
+    Guard('gun-ready', function (bb) { return bb.gunIsReady; }),
+    Guard('enemy-not-shielded', function (bb) {
+      return !(bb.enemy && bb.enemy.status && bb.enemy.status.shielded);
+    }),
+    Guard('can-shoot', function (bb) { return canShoot(bb.me, bb.enemy); }),
+    Action('do-point-blank-duel', function (bb) {
+      if (bb.myDir === bb.shotDir) { bbSpeak(bb, '对拼!'); bbFire(bb); }
+      else bbTurnToward(bb, bb.shotDir);  // 最短转向对准,下帧开火;不盲转不逃
+    })
+  ]);
+
   var rootChildren = [
     // 第一优先级：被控（冰冻/眩晕）就直接返回
     ccCheck,
@@ -172,6 +199,10 @@ function buildBehaviorTree(profile, mySkillType) {
 
     // 第三优先级：传送补吃星（仅传送技能，只有来弹才打断）
     starGrab,
+
+    // 第三·五优先级：贴脸对拼锁定（贴脸+有射线+敌无盾），先于软生存，
+    //   不被防瞄规避抢去原地盲转/逃跑（直击 vs overload 接敌打转被秒）
+    pointBlankDuel,
 
     // 第四优先级：软生存（预防性躲避）
     softSurvival,
