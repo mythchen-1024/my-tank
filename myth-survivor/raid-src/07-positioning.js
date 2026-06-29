@@ -112,3 +112,15 @@ function patrolForward(pos, dir, map) {
   if (isOpen(add(pos, delta(dir)), map)) return { type: "go", tag: "巡逻" };
   return { type: "turn", side: "right", tag: "巡逻" };
 }
+
+// 守位定向：已到守位、无即时射击目标时，把炮口朝「敌来向」转，让预开炮(leadFireNow)待命。
+// 优先朝最近可见敌(预瞄它横穿/逼近)，无敌则朝星道(敌抢星必经线)。黏滞：已对准则保持不转(防抽搐)。
+function holdAimStep(me, game, foePos) {
+  var pos = me.tank.position, dir = me.tank.direction;
+  var aimAt = foePos || game.star;
+  if (!aimAt) return null;
+  if (samePos(pos, aimAt)) return null;
+  var want = directionTo(pos, aimAt);
+  if (dir === want) return null;          // 已对准来向，保持(等敌进线触发预开炮，不空转)
+  return { type: "turn", side: turnDirection(dir, want), tag: "守向" };
+}

@@ -49,10 +49,8 @@ function actionDanger(action, me, foe, threats, game, state) {
     if (posHitWithin(threats, me.tank.position, game, 1)) return 1400;
     return 0;
   }
-  var pos = me.tank.position, dir = me.tank.direction;
-  var nextPos = pos, nextDir = dir;
-  if (action.type === "go") nextPos = add(pos, delta(dir));
-  if (action.type === "turn") nextDir = turnAfter(dir, action.side);
+  var pos = me.tank.position;
+  var nextPos = (action.type === "go") ? add(pos, delta(me.tank.direction)) : pos;
 
   var penalty = 0;
   if (action.type === "go") {
@@ -65,33 +63,39 @@ function actionDanger(action, me, foe, threats, game, state) {
     penalty += 800; // 转身原地不移动：当前格这帧仍被命中却站着转 → 罚（落到走位逃离）。
   }
 
-  // 主敌贴脸 / 被瞄
-  if (foe && foe.tank) {
-    penalty += enemyDanger(foe, nextPos, game);
-  }
-  // 全体敌人的技能死区（双弹覆盖带 / 冰冻同线死区 / standoff 梯度）
-  var es = game.enemies || [];
-  for (var i = 0; i < es.length; i++) {
-    var e = es[i];
-    if (!e || !e.tank || !e.tank.position || e.tank.crashed) continue;
-    if (foe && e === foe) continue;
-    penalty += skillZonePenalty(e, nextPos, game) * 0.6; // 非主敌折扣
+  // 全体敌人炮线避让（多敌核心）：任一敌已装弹(无在途弹)且能射到落点 → 按距离/是否已瞄准罚，
+  // 不主动走进它炮口。主敌额外叠贴脸+技能死区；非主敌技能死区打 6 折(实弹炮口同样致命，仅预测性技能降权)。
+  var foeTank = (foe && foe.tank) ? foe.tank : null;
+  var list = enemyCandidates(foe, game);
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    var isFoe = foeTank && e.tank === foeTank;
+    penalty += fireLineDanger(e, nextPos, game);
+    penalty += skillZonePenalty(e, nextPos, game) * (isFoe ? 1 : 0.6);
+    if (isFoe && manhattan(nextPos, e.tank.position) <= 1) penalty += 1500; // 贴脸（仅主敌，撞死）
   }
   // 蹲草伏击：走/转后落点踩进确认蹲草敌的火线 → 罚（窄门控，仅记忆窗内）。
   if (action.type === "go") penalty += hiddenCamperRisk(nextPos, game, state);
   return penalty;
 }
 
-// 主敌的贴脸/被瞄/技能死区惩罚。
-function enemyDanger(foe, nextPos, game) {
-  var fp = foe.tank.position;
-  var d = manhattan(nextPos, fp);
-  var p = 0;
-  if (d <= 1) p += 1500;
-  else if (d <= 4 && canShoot(fp, nextPos, game.map) && pointsAt(foe.tank.direction, fp, nextPos)) p += 1200;
-  else if (d <= 6 && canShoot(fp, nextPos, game.map) && pointsAt(foe.tank.direction, fp, nextPos)) p += 180;
-  p += skillZonePenalty(foe, nextPos, game);
-  return p;
+// 敌已装弹(无在途弹)的炮线威胁：能射到落点才算。已瞄准近距重罚(压过抢星峰值~1170)、
+// 仅同线可转身射轻罚。敌有在途弹→补射要等(子弹2格/帧)，本帧走出炮线就活→降级避免过度让位。
+function fireLineDanger(e, cell, game) {
+  if (!e || !e.tank || !e.tank.position || e.tank.crashed) return 0;
+  var fp = e.tank.position;
+  if (samePos(fp, cell)) return 0;
+  if (!canShoot(fp, cell, game.map)) return 0;
+  var d = manhattan(fp, cell);
+  if (d > 8) return 0;
+  var loaded = !(e.bullet && e.bullet.position); // 无在途弹=随时能开火
+  var aimed = pointsAt(e.tank.direction, fp, cell);
+  if (loaded) {
+    if (aimed) return d <= 4 ? 1300 : (d <= 6 ? 200 : 60); // 已瞄准:近距压过抢星
+    return d <= 4 ? 220 : 60;                              // 仅同线可转身再射
+  }
+  // 有在途弹:补射隔 BULLET 飞行时间,本帧走出去即活,只轻罚已瞄准近距(防贴脸二次)
+  return (aimed && d <= 2) ? 200 : 0;
 }
 
 // 按 per-enemy 分型给落点惩罚：双弹覆盖带 / 冰冻同线死区 / standoff 梯度。

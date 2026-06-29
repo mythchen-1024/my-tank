@@ -81,11 +81,21 @@ function chooseScoredDecision(me, enemy, game, threats, state, mySkill) {
     }
   }
 
+  // [5.5] 守线预开炮(lead shot)：敌横穿我炮线时按提前量打移动靶。已对准方向才触发(转向预瞄交给守线步)。
+  //       命中判据是强门控(敌须走进子弹时空交点)，不乱开火。分 858 略高于狂射，因移动靶时机唯一、错过即失。
+  var lead = leadFireNow(me, enemy, game, hasBudget);
+  if (lead && !duelDodge) cands.push(lead);
+
   // [6] 守枪线：无即时射击目标时，走到控星道/走廊咽喉的格位蹲守。
   var holdStep = gunLineStep(me, game, state, foePos);
   if (holdStep) {
     cands.push(withScore(actionToDir(pos, dir, directionTo(pos, holdStep), "go"),
       300 + starLineScore(holdStep, game.star, game.map, late), "守线"));
+  } else {
+    // [6.5] 守位定向：已到守位 → 把炮口朝敌来向待命，让预开炮(leadFireNow)能在敌进线时触发。
+    //       分 290 接力守线(300)、压过巡逻(100)、低于抢星(560)。已对准则函数返回 null(黏滞不空转)。
+    var aim = holdAimStep(me, game, foePos);
+    if (aim) cands.push(withScore(aim, 290, "守向"));
   }
 
   // [7] 抢星：BFS 下一步（排在狂射后）。

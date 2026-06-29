@@ -114,6 +114,36 @@ function activeSkillFollowup(me, foe, game, hasBudget) {
   return null;
 }
 
+// 守线预开炮：对每个可见敌，按其当前朝向匀速外推未来帧位置，找「开火后第 j 帧子弹时空交点
+// 恰好落在敌身上」的提前量。命中=敌沿我炮线前方距离 s∈{2j-1,2j} 且路径无遮挡 + 我已对准该方向。
+// 敌不躲弹 → 命中率极高。匹配判据本身是强门控，不会乱开火。返回 fire 候选或 null。
+function leadFireNow(me, enemy, game, hasBudget) {
+  if (!hasBudget) return null;
+  var pos = me.tank.position, dir = me.tank.direction;
+  var fdelta = delta(dir);
+  var list = enemyCandidates(enemy, game);
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    var ep = e.tank.position;
+    var edir = e.tank.direction;
+    if (!edir) continue;
+    var ed = delta(edir);
+    // 外推敌未来 j 帧位置，检查是否落在我炮线(沿 dir 的射线)上、且 s∈{2j-1,2j}。
+    for (var j = 1; j <= LEAD_MAX_FRAMES; j++) {
+      var fx = pos[0] + fdelta[0] * (2 * j), fy = pos[1] + fdelta[1] * (2 * j); // 第 j 帧子弹末位(标量2j)
+      var ex = ep[0] + ed[0] * j, ey = ep[1] + ed[1] * j;                       // 第 j 帧敌位
+      // 敌须落在我炮线方向的前方（同轴且 pointsAt）
+      if (!pointsAt(dir, pos, [ex, ey])) continue;
+      var s = Math.abs(ex - pos[0]) + Math.abs(ey - pos[1]); // 沿炮线前方距离
+      if (s !== 2 * j && s !== 2 * j - 1) continue;          // 时空交点匹配(子弹第j帧覆盖2j-1与2j)
+      if (!isOpen([ex, ey], game.map)) continue;             // 敌预测格须可达(没撞墙)
+      if (!clearBetween(pos, [ex, ey], game)) continue;      // 我到交点路径无遮挡
+      return { type: "fire", fire: true, score: 858, tag: "预瞄", lead: j };
+    }
+  }
+  return null;
+}
+
 // 防御技能（仅躲不掉实弹时）：shield 挡 / cloak·boost 逃。debuff 技能不做防御。
 function defensiveSkill(me, mySkill, threats, game) {
   if (!skillReady(me)) return null;
