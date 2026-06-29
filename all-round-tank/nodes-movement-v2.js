@@ -12,6 +12,10 @@ function createMovementTree(profile, mySkillType) {
   mySkillType = mySkillType || 'teleport';
   var children = [];
 
+  // 蹲草伏击超时：连续蹲守超过此帧数仍没等到敌进炮线（零兑现）→ 破死蹲去抢可达星。
+  // 24 帧 ≈ 敌从半场走到我炮线的耐心上限；再久仍不来，伏击结构性落空，拿星锁分远好过干蹲超时。
+  var CAMP_AMBUSH_TIMEOUT = 24;
+
   // ---- 行/列锁定解冻（最高优先，杜绝原地空转等CD） ----
   // m5(mat_938IDiIJ1ZIEQUmqV)：我(overload)退到右墙角[17,5]，敌可见同列[17,9]、星夹中间[17,8]，
   // 炮在CD。追星=进敌列、右是墙退不开，下游 moveToward 在目标危险且无脱离时 me.turn("right")
@@ -329,6 +333,23 @@ function createMovementTree(profile, mySkillType) {
           if (myStarD >= 0 && myStarD <= 2 &&
               bb.enemyPos && manhattan(bb.enemyPos, bb.star) >= 8) {
             return false;
+          }
+          // 蹲草超时·破死蹲（无传送机动时）：已连续蹲守 ≥CAMP_AMBUSH_TIMEOUT 帧仍零收益
+          //   （伏击没等到敌进我炮线）+ 有可达星（走路 pathDistance ≤6）被晾着 + 我没传送可补星
+          //   → 破蹲去抢星，绝不干蹲到超时判负。
+          //   根因 seed1 (shield vs overload)：星[9,7]在我列炮线上 → 命中"星在炮线→无限蹲等伏击"
+          //   判高价值，但 overload 敌全程贴星[8,7]守着不跨进我列，伏击前提（敌走进我炮线抢星）
+          //   结构性落空；我在孤立草格[9,3]干蹲280帧、同列4格外可达星一颗没抢，0:0 超时判负
+          //   （bushCampFrames 离草即清零，连续蹲守才累加→是干净的"伏击没兑现"计时）。
+          //   通用性：无传送坦克（shield/stun/poison/freeze，或传送CD中）等够久敌仍不进炮线，
+          //   就该出草吃可达星（拿星=锁分，远好过干蹲超时）。
+          //   **必须排除传送就绪**：传送流远星永远够得到（teleportIsReady 时下方第349行本就判
+          //   "留草等"——它会传送补星而非干蹲），破它的蹲守=逼它放弃传送补星优势去走路抢，
+          //   实测 teleport vs overload 直接 -19pp。只打破"无机动手段、久等不兑现"的真死蹲。
+          if (!bb.teleportIsReady &&
+              (bb.memory.bushCampFrames || 0) >= CAMP_AMBUSH_TIMEOUT) {
+            var reachD = pathDistance(bb.myPos, bb.star, bb.game, bb.enemyPos);
+            if (reachD >= 0 && reachD <= 6) return false;
           }
           // 星在我炮线上：敌人追星必经我射程，继续蹲守等伏击
           if (clearShotDirection(bb.myPos, bb.star, bb.game)) return true;
